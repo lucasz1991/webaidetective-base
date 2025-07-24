@@ -22,7 +22,10 @@ const username = process.argv[2] || 'lcsxzs_zrs';
   // Set screen size to mobile.
   await page.setViewport({width: 1375, height: 712});
   //
-  await page.goto(`https://dev.regulierungs-check.de`);
+  await page.goto(`https://dev.regulierungs-check.de`, {
+    waitUntil: 'networkidle2',
+    timeout: 30000
+  });
 
 
 
