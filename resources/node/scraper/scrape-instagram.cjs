@@ -1,6 +1,7 @@
-const puppeteer = require('puppeteer-extra');
+//const puppeteer = require('puppeteer-extra');
+const puppeteer = require('puppeteer'); // statt puppeteer-core
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-puppeteer.use(StealthPlugin());
+//puppeteer.use(StealthPlugin());
 
 const username = process.argv[2] || 'msdxrya'; 
 
@@ -9,7 +10,7 @@ const username = process.argv[2] || 'msdxrya';
     headless: true,
     args: [
       '--no-sandbox',
-      '--proxy-server=socks5h://shopspaze.com:32769'
+      '--proxy-server=socks5://shopspaze.com:32769'
     ]
   });
 
