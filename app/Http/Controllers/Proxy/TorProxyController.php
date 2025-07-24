@@ -17,7 +17,7 @@ class TorProxyController extends Controller
 
         try {
             $response = Http::withOptions([
-                'proxy' => 'socks5h://shopspaze.com:32769',
+                'proxy' => 'socks5://shopspaze.com:32769',
                 'verify' => false,
                 'timeout' => 15,
             ])->get($url);
