@@ -15,7 +15,7 @@ const username = process.argv[2] || 'lcsxzs_zrs';
       '--single-process',
       '--no-zygote',
       '--headless=new',
-      '--proxy-server=socks5://shopspaze.com:32769'
+      '--proxy-server=socks5://127.0.0.1:9050'
     ],
   });
 
