@@ -25,10 +25,7 @@ const username = process.argv[2] || 'lcsxzs_zrs';
   // Set screen size to mobile.
   await page.setViewport({width: 1375, height: 712});
   //
-  await page.goto(`http://www.instagram.com/${username}/`, {
-    waitUntil: 'networkidle2',
-    timeout: 30000
-  });
+  await page.goto(`http://www.instagram.com/${username}/`);
 
 
 
