@@ -9,7 +9,7 @@ const username = process.argv[2] || 'msdxrya';
     headless: true,
     args: [
       '--no-sandbox',
-      '--proxy-server=socks5://127.0.0.1:9050'
+      '--proxy-server=socks5h://shopspaze.com:32769'
     ]
   });
 
