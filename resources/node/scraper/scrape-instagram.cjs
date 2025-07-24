@@ -1,6 +1,6 @@
 const puppeteer = require('puppeteer');
 
-const username = process.argv[2] || 'msdxrya'; 
+const username = process.argv[2] || 'lcsxzs_zrs'; // Default username if none is provided
 
 (async () => {
   const browser = await puppeteer.launch({
