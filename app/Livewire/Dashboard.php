@@ -22,7 +22,7 @@ class Dashboard extends Component
 
     public function fetchInstagramWithNode($username = 'msdxrya')
     {
-        $escapedUser = escapeshellarg($username);
+        $escapedUser = $username;
         $nodeScript = base_path('resources/node/scraper/scrape-instagram.cjs');
         $nodeBin = '/usr/bin/node';
 

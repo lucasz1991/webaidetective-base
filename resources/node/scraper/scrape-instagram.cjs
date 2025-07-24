@@ -7,7 +7,8 @@ const username = process.argv[2] || 'msdxrya';
     headless: true,
     args: [
       '--no-sandbox',
-      '--disable-setuid-sandbox'
+      '--disable-setuid-sandbox',
+      '--proxy-server=socks5://shopspaze.com:32769'  
     ],
   });
 
@@ -15,7 +16,7 @@ const username = process.argv[2] || 'msdxrya';
 
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
 
-  await page.goto(`https://www.instagram.com/lxcxs_zrs/`, {
+  await page.goto(`https://www.instagram.com/${username}/`, {
     waitUntil: 'networkidle2',
     timeout: 30000
   });
