@@ -7,7 +7,7 @@ const username = process.argv[2] || 'msdxrya';
 (async () => {
   const browser = await puppeteer.launch({
     headless: true,
-    executablePath: '/node_modules/@puppeteer/browsers/lib/cjs/browser-data/chromium.js',
+    executablePath: '/node_modules/@puppeteer/browsers/lib/cjs/browser-data/chromium',
     args: [
       '--no-sandbox'
     ],
