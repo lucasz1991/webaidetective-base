@@ -8,6 +8,10 @@ const username = process.argv[2] || 'lcsxzs_zrs';
   const browser = await puppeteer.launch({
     headless: true,
     args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--headless=new',
       '--proxy-server=socks5://localhost:32769'
     ],
   });
