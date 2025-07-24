@@ -24,7 +24,7 @@ class Dashboard extends Component
     {
         $escapedUser = escapeshellarg($username);
         $nodeScript = base_path('resources/node/scraper/scrape-instagram.cjs');
-        $nodeBin = '/opt/plesk/node/23/bin/node';
+        $nodeBin = '/usr/local/n/versions/node/22.0.0/bin/node';
 
         // Stelle sicher, dass der Pfad zum Node-Skript korrekt ist
         if (!file_exists($nodeScript)) {
@@ -33,8 +33,7 @@ class Dashboard extends Component
         }
         try {
             // Führe das Node-Skript aus und übergebe den Benutzernamen
-            
-            $output = shell_exec("\"$nodeBin\" \"$nodeScript\" $escapedUser");
+            $output = shell_exec("node $nodeScript $escapedUser 2>&1");
         } catch (\Exception $e) {
             $this->instagramHtml = 'Fehler beim Ausführen des Skripts: ' . $e->getMessage();
             return;
