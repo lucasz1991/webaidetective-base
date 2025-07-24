@@ -6,11 +6,7 @@ const username = process.argv[2] || 'msdxrya';
 
 (async () => {
   const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--proxy-server=socks5://shopspaze.com:32769'
-    ]
+    headless: true
   });
 
   const page = await browser.newPage();
