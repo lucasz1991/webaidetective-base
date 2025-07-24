@@ -1,8 +1,6 @@
 <x-layouts.auth-layout>
     <x-slot name="title">
-    
-    CBW Schulnetz
-      
+        CBW Schulnetz
     </x-slot>
     <x-slot name="description">
         

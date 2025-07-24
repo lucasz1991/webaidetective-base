@@ -12,9 +12,17 @@
                             <h1 class="max-w-2xl mb-4 font-bold tracking-tight leading-none text-2xl xl:text-3xl">
                                 Willkommen {{ $userData->name }},
                             </h1>
-                            <p class="max-w-2xl mb-6 text-gray-500 md:text-lg lg:text-xl">
-                                Hier können Sie Ihre Klausurergebnisse einsehen, Fehlermeldungen zu Ihren Prüfungen melden sowie Anträge rund um Ihre Prüfungen und Ergebnisse stellen und den Bearbeitungsstand verfolgen. Nutzen Sie dieses Dashboard, um stets den Überblick über Ihre Prüfungsangelegenheiten zu behalten.
-                            </p>
+                            <div>
+                                <button wire:click="fetchInstagramProfile('dein_username')"
+                                        class="bg-blue-600 text-white px-4 py-2 rounded">Instagram analysieren</button>
+
+                                @if($instagramHtml)
+                                    <div class="mt-4">
+                                        <h2 class="font-bold text-lg">Instagram HTML:</h2>
+                                        <pre class="text-sm bg-gray-100 p-4 max-h-96 overflow-auto">{{ $instagramHtml }}</pre>
+                                    </div>
+                                @endif
+                            </div>
                         </div>
                     
                         

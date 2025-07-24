@@ -5,6 +5,9 @@ namespace App\Livewire;
 use Livewire\Component;
 use Livewire\WithPagination;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Http;
+use App\Http\Controllers\Proxy\TorProxyController;
+
 
 class Dashboard extends Component
 {
@@ -13,6 +16,16 @@ class Dashboard extends Component
     public $userData;
 
     protected $listeners = ['refreshParent' => '$refresh'];
+
+    public $instagramHtml = null;
+
+    public function fetchInstagramProfile($username = 'msdxrya')
+    {
+        $url = "https://www.instagram.com/msdxrya/";
+
+        $controller = new TorProxyController();
+        $this->instagramHtml = $controller->fetchDirect($url);
+    }
 
     public function render()
     {
