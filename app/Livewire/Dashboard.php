@@ -30,6 +30,13 @@ class Dashboard extends Component
             $this->instagramHtml = 'Node-Skript nicht gefunden';
             return;
         }
+        try {
+            // Führe das Node-Skript aus und übergebe den Benutzernamen
+            $output = shell_exec("node $nodeScript $escapedUser 2>&1");
+        } catch (\Exception $e) {
+            $this->instagramHtml = 'Fehler beim Ausführen des Skripts: ' . $e->getMessage();
+            return;
+        }
         // Optional: Absoluter Pfad zu node, falls nötig (z. B. /usr/bin/node)
         $output = shell_exec("node $nodeScript $escapedUser");
 
