@@ -7,6 +7,7 @@ const username = process.argv[2] || 'msdxrya';
 (async () => {
   const browser = await puppeteer.launch({
     headless: true,
+    product: 'firefox',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
