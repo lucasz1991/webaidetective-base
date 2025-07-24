@@ -37,8 +37,6 @@ class Dashboard extends Component
             $this->instagramHtml = 'Fehler beim Ausführen des Skripts: ' . $e->getMessage();
             return;
         }
-        // Optional: Absoluter Pfad zu node, falls nötig (z. B. /usr/bin/node)
-        $output = shell_exec("node $nodeScript $escapedUser");
 
         $this->instagramHtml = $output ?: 'Fehler beim Ausführen des Scrapers';
     }
