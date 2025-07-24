@@ -19,13 +19,17 @@ class Dashboard extends Component
 
     public $instagramHtml = null;
 
-    public function fetchInstagramProfile($username = 'msdxrya')
+    public function fetchInstagramWithNode($username = 'msdxrya')
     {
-        $url = "https://www.instagram.com/$username/";
+        $escapedUser = escapeshellarg($username);
+        $nodeScript = base_path('resources/node/scraper/scrape-instagram.js');
 
-        $controller = new TorProxyController();
-        $this->instagramHtml = $controller->fetchDirect($url);
+        // Optional: Absoluter Pfad zu node, falls nötig (z. B. /usr/bin/node)
+        $output = shell_exec("node $nodeScript $escapedUser");
+
+        $this->instagramHtml = $output ?: 'Fehler beim Ausführen des Scrapers';
     }
+
 
     public function render()
     {

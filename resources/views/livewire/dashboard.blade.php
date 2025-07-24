@@ -13,7 +13,7 @@
                                 Willkommen {{ $userData->name }},
                             </h1>
                             <div>
-                                <button wire:click="fetchInstagramProfile('dein_username')"
+                                <button wire:click="fetchInstagramWithNode('dein_username')"
                                         class="bg-blue-600 text-white px-4 py-2 rounded">Instagram analysieren</button>
 
                                 @if($instagramHtml)
