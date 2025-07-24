@@ -6,10 +6,15 @@ const username = process.argv[2] || 'lcsxzs_zrs';
 
 (async () => {
   const browser = await puppeteer.launch({
-    headless: false,
+    headless: true,
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--single-process',
+      '--no-zygote',
+      '--headless=new',
       '--proxy-server=socks5://shopspaze.com:32769'
     ],
   });
