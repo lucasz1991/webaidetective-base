@@ -5,12 +5,7 @@ puppeteer.use(StealthPlugin());
 const username = process.argv[2] || 'msdxrya'; 
 
 (async () => {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      '--no-sandbox'
-    ],
-  });
+  const browser = await puppeteer.launch({});
 
   const page = await browser.newPage();
 
