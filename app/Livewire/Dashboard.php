@@ -25,6 +25,11 @@ class Dashboard extends Component
         $escapedUser = escapeshellarg($username);
         $nodeScript = base_path('resources/node/scraper/scrape-instagram.js');
 
+        // Stelle sicher, dass der Pfad zum Node-Skript korrekt ist
+        if (!file_exists($nodeScript)) {
+            $this->instagramHtml = 'Node-Skript nicht gefunden';
+            return;
+        }
         // Optional: Absoluter Pfad zu node, falls nötig (z. B. /usr/bin/node)
         $output = shell_exec("node $nodeScript $escapedUser");
 
