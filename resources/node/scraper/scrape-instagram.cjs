@@ -1,7 +1,4 @@
-//const puppeteer = require('puppeteer-extra');
-const puppeteer = require('puppeteer'); // statt puppeteer-core
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-//puppeteer.use(StealthPlugin());
+const puppeteer = require('puppeteer');
 
 const username = process.argv[2] || 'msdxrya'; 
 
