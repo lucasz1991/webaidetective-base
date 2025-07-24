@@ -33,6 +33,7 @@ class Dashboard extends Component
         }
         try {
             // Führe das Node-Skript aus und übergebe den Benutzernamen
+            
             $output = shell_exec("\"$nodeBin\" \"$nodeScript\" $escapedUser");
         } catch (\Exception $e) {
             $this->instagramHtml = 'Fehler beim Ausführen des Skripts: ' . $e->getMessage();
