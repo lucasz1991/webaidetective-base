@@ -8,7 +8,22 @@
                 </div>
                 <div class="px-4 py-12 text-on-surface bg-white shadow-lg rounded-lg " >
                     <div x-cloak x-show="selectedTab === 'basic'" id="tabpanelGroups" role="tabpanel" aria-label="basic">
-                        <div class="mr-auto font-semibold text-2xl ">
+                        <div class="mr-auto font-semibold text-2xl "
+                        x-data="{
+                                instagramHtml: @entangle('instagramHtml').defer,
+                                copyToClipboard() {
+                                    if (!this.instagramHtml) {
+                                        alert('Kein Instagram HTML vorhanden.');
+                                        return;
+                                    }
+                                    navigator.clipboard.writeText(this.instagramHtml)
+                                        .then(() => alert('Instagram HTML wurde in die Zwischenablage kopiert!'))
+                                        .catch(err => {
+                                            console.error('Fehler beim Kopieren: ', err);
+                                            alert('Kopieren fehlgeschlagen.');
+                                        });
+                                }
+                            }">
                             <h1 class="max-w-2xl mb-4 font-bold tracking-tight leading-none text-2xl xl:text-3xl">
                                 Willkommen {{ $userData->name }},
                             </h1>
@@ -20,6 +35,10 @@
                                         <h2 class="font-bold text-lg">Instagram HTML:</h2>
                                         <pre class="text-sm bg-gray-100 p-4 max-h-96 overflow-auto">{{ $instagramHtml }}</pre>
                                     </div>
+                                    <div>
+                                        <button x-on:click="copyToClipboard" class="bg-blue-600 text-white px-4 py-2 rounded">Copy</button>
+                                    </div>
+
                                 @endif
                             </div>
                         </div>
@@ -37,5 +56,6 @@
                     </div>
                 </div>
             </div>
-    </div>      
+    </div>    
+    
 </div>

@@ -43,6 +43,14 @@ class Dashboard extends Component
     }
 
 
+    public function copyInstagramHtml()
+    {
+        if ($this->instagramHtml) {
+            // Kopiere den HTML-Inhalt in die Zwischenablage
+            $this->dispatchBrowserEvent('copyToClipboard', ['text' => $this->instagramHtml]);
+        }
+    }
+    
     public function render()
     {
         $this->userData = Auth::user();
