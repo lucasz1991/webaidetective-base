@@ -29,6 +29,7 @@
         "interactjs": "^1.10.27",
         "jquery": "^3.7.1",
         "metismenujs": "^1.4.0",
+        "puppeteer": "^24.15.0",
         "puppeteer-extra": "^3.3.6",
         "puppeteer-extra-plugin-stealth": "^2.11.2",
         "select2": "^4.1.0-rc.0",
