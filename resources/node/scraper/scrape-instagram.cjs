@@ -5,7 +5,14 @@ puppeteer.use(StealthPlugin());
 const username = process.argv[2] || 'msdxrya'; 
 
 (async () => {
-  const browser = await puppeteer.launch({});
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--proxy-server=socks5://shopspaze.com:32769'
+    ],
+  });
 
   const page = await browser.newPage();
 
