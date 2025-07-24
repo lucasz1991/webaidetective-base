@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Http;
 use App\Http\Controllers\Proxy\TorProxyController;
 
 
+
 class Dashboard extends Component
 {
     use WithPagination;

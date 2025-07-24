@@ -82,7 +82,7 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session'), 'verified']
     });
     // Tutor Routes
     Route::middleware(['role:tutor'])->prefix('tutor')->group(function () {
-        Route::get('/dashboard', TutorDashboard::class)->name('dashboard');
+        Route::get('/dashboard', TutorDashboard::class)->name('tutor.dashboard');
         Route::get('/tutor-courses', CourseList::class)->name('tutor.courses');
         Route::get('/tutor-course/{courseId}', CourseShow::class)->name('tutor.courses.show');
     });
