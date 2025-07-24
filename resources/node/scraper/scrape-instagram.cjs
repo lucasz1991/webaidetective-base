@@ -7,8 +7,7 @@ const username = process.argv[2] || 'msdxrya';
     headless: true,
     args: [
       '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--proxy-server=socks5://shopspaze.com:32769'
+      '--disable-setuid-sandbox'
     ],
   });
 
