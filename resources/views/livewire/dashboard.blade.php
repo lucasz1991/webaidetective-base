@@ -10,7 +10,7 @@
                     <div x-cloak x-show="selectedTab === 'basic'" id="tabpanelGroups" role="tabpanel" aria-label="basic">
                         <div class="mr-auto font-semibold text-2xl "
                         x-data="{
-                                instagramHtml: @entangle('instagramHtml').defer,
+                                instagramHtml: @entangle('instagramHtml'),
                                 copyToClipboard() {
                                     if (!this.instagramHtml) {
                                         alert('Kein Instagram HTML vorhanden.');
