@@ -7,7 +7,6 @@ const username = process.argv[2] || 'msdxrya';
 (async () => {
   const browser = await puppeteer.launch({
     headless: true,
-    executablePath: '/var/www/vhosts/shopspaze.com/webaidetective-base/node_modules/@puppeteer/browsers/lib/cjs/browser-data/chromium',
     args: [
       '--no-sandbox'
     ],
