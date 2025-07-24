@@ -21,7 +21,7 @@ class Dashboard extends Component
 
     public function fetchInstagramProfile($username = 'msdxrya')
     {
-        $url = "https://dev.regulierungs-check.de/";
+        $url = "https://www.instagram.com/$username/";
 
         $controller = new TorProxyController();
         $this->instagramHtml = $controller->fetchDirect($url);
