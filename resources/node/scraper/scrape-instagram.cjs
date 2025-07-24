@@ -1,13 +1,10 @@
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-puppeteer.use(StealthPlugin());
+const puppeteer = require('puppeteer');
 
 const username = process.argv[2] || 'msdxrya'; 
 
 (async () => {
   const browser = await puppeteer.launch({
     headless: true,
-    product: 'firefox',
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
