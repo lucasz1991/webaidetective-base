@@ -24,7 +24,7 @@ class Dashboard extends Component
     {
         $escapedUser = escapeshellarg($username);
         $nodeScript = base_path('resources/node/scraper/scrape-instagram.cjs');
-        $nodeBin = '/usr/local/n/versions/node/22.0.0/bin/node';
+        $nodeBin = '/usr/bin/node';
 
         // Stelle sicher, dass der Pfad zum Node-Skript korrekt ist
         if (!file_exists($nodeScript)) {
