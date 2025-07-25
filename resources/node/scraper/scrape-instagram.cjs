@@ -2,7 +2,7 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
 
-const username = process.argv[2] || 'lcsxzs_zrs';
+const username = process.argv[2] || 'default_username'; // Default username if none is provided
 
 (async () => {
   const browser = await puppeteer.launch({
@@ -12,7 +12,7 @@ const username = process.argv[2] || 'lcsxzs_zrs';
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--headless=new',
-      '--proxy-server=socks5://localhost:32769'
+      '--proxy-server=socks5://127.0.0.1:9050'
     ],
   });
 
@@ -22,7 +22,7 @@ const username = process.argv[2] || 'lcsxzs_zrs';
   // Set screen size to mobile.
   await page.setViewport({width: 1375, height: 712});
   //
-  await page.goto(`https://dev.regulierungs-check.de`, {
+  await page.goto(`https://www.instagram.com/${username}/`, {
     waitUntil: 'networkidle2',
     timeout: 30000
   });
@@ -36,7 +36,7 @@ const username = process.argv[2] || 'lcsxzs_zrs';
 
   // Zielpfad vorbereiten
   const basePath = path.join(__dirname, '../../../storage/app/screenshots', username);
-  const screenshotPath = path.join(basePath, 'profile.png');
+ const screenshotPath = path.join(basePath, 'profile-screenshot-' + Date.now() + '.png');
 
   // Ordner erstellen, falls nicht vorhanden
   fs.mkdirSync(basePath, { recursive: true });

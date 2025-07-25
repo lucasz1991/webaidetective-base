@@ -28,7 +28,7 @@
                                 Willkommen {{ $userData->name }},
                             </h1>
                             <div>
-                                <button wire:click="fetchInstagramWithNode('msdxrya')" class="bg-blue-600 text-white px-4 py-2 rounded">Instagram analysieren</button>
+                                <button wire:click="fetchInstagramWithNode('lxcxs_zrs')" class="bg-blue-600 text-white px-4 py-2 rounded">Instagram analysieren</button>
 
                                 @if($instagramHtml)
                                     <div class="mt-4">
