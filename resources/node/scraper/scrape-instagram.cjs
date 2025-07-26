@@ -23,8 +23,7 @@ const username = process.argv[2] || 'default_username'; // Default username if n
   await page.setViewport({width: 1375, height: 712});
   //
   await page.goto(`https://www.instagram.com/${username}/`, {
-    waitUntil: 'networkidle2',
-    timeout: 30000
+    timeout: 5000
   });
 
 
