@@ -12,7 +12,7 @@ const username = process.argv[2] || 'default_username'; // Default username if n
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--headless=new',
-      '--proxy-server=socks5://127.0.0.1:9050'
+      '--proxy-server=http://127.0.0.1:9050'
     ],
   });
 
