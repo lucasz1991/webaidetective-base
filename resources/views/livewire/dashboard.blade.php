@@ -29,7 +29,12 @@
                             </h1>
                             <div>
                                 <button wire:click="fetchInstagramWithNode('lxcxs_zrs')" class="bg-blue-600 text-white px-4 py-2 rounded">Instagram analysieren</button>
-
+                                @if($instagramScreenshot)
+                                    <div class="mt-4">
+                                        <h2 class="font-bold text-lg">Instagram Screenshot:</h2>
+                                        <img src="{{ asset($instagramScreenshot) }}" alt="Instagram Screenshot" class="max-w-full h-auto rounded shadow">
+                                    </div>
+                                @endif
                                 @if($instagramHtml)
                                     <div class="mt-4">
                                         <h2 class="font-bold text-lg">Instagram HTML:</h2>

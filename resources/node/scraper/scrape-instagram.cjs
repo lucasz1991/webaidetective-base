@@ -11,8 +11,7 @@ const username = process.argv[2] || 'default_username'; // Default username if n
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--headless=new',
-      '--proxy-server=https://127.0.0.1:8118'
+      '--headless=new'
     ],
   });
 
@@ -23,7 +22,7 @@ const username = process.argv[2] || 'default_username'; // Default username if n
   await page.setViewport({width: 1375, height: 712});
   //
   await page.goto(`https://www.instagram.com/${username}/`, {
-    timeout: 30000
+    timeout: 3000
   });
 
 
@@ -34,7 +33,7 @@ const username = process.argv[2] || 'default_username'; // Default username if n
 
 
   // Zielpfad vorbereiten
-  const basePath = path.join(__dirname, '../../../storage/app/screenshots', username);
+  const basePath = path.join(__dirname, '../../../storage/app/public/screenshots/instagram', username);
  const screenshotPath = path.join(basePath, 'profile-screenshot-' + Date.now() + '.png');
 
   // Ordner erstellen, falls nicht vorhanden
