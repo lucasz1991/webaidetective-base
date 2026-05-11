@@ -12,6 +12,8 @@ class UserNavigationMenu extends Component
 
     public $unreadMessagesCount;
 
+    public $previousUnreadMessagesCount = null;
+
     public $message;
 
     protected $listeners = [
@@ -31,6 +33,7 @@ class UserNavigationMenu extends Component
         if (! auth()->check()) {
             $this->receivedMessages = collect();
             $this->unreadMessagesCount = 0;
+            $this->previousUnreadMessagesCount = null;
 
             return;
         }
@@ -44,9 +47,17 @@ class UserNavigationMenu extends Component
             ->limit(3)
             ->get();
 
-        $this->unreadMessagesCount = $user
+        $newUnreadMessagesCount = $user
             ->receivedUnreadMessages()
             ->count();
+
+        if ($this->previousUnreadMessagesCount !== null
+            && $newUnreadMessagesCount > $this->previousUnreadMessagesCount) {
+            $this->dispatch('playNotificationSound');
+        }
+
+        $this->unreadMessagesCount = $newUnreadMessagesCount;
+        $this->previousUnreadMessagesCount = $newUnreadMessagesCount;
     }
 
     public function setMessageStatus($messageId): void
@@ -66,9 +77,6 @@ class UserNavigationMenu extends Component
         ]);
 
         $this->refreshNavigationData();
-
-        // Sound-Benachrichtigung abspielen
-        $this->dispatch('playNotificationSound');
     }
 
     public function render()

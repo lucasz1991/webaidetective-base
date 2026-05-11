@@ -9,7 +9,7 @@
         scrollTop: 0,
         lastScrollTop: 0,
         showNav: true 
-    }"
+    }" 
     x-init="$nextTick(() => {
         navHeight = $refs.nav.offsetHeight;
         isMobile = window.innerWidth <= 768;
@@ -358,33 +358,32 @@
              </div>
         </div>
     </div>
-</div>
-
-<!-- Notification Sound Player -->
-<audio id="notification-sound" preload="auto" style="display: none;">
-    <source src="{{ asset('sounds/notification.mp3') }}" type="audio/mpeg">
-</audio>
-
-@script
-<script>
-    Livewire.on('playNotificationSound', () => {
-        try {
-            const audio = document.getElementById('notification-sound');
-            if (audio) {
-                audio.currentTime = 0;
-                audio.play().catch(err => {
-                    console.log('[Sound] Benachrichtigungston konnte nicht abgespielt werden:', err.message);
-                });
-            }
-        } catch (error) {
-            console.error('[Sound] Fehler beim Abspielen:', error.message);
-        }
-    });
-</script>
-@endscript
             </nav>
     </div>
     <div :style="'height: ' + navHeight + 'px'" class="min-h-12 md:min-h-[4rem] duration-300 ease-in-out transition-all" > </div>
     <div id="megamenu"   class="transition-all duration-200 ease-in-out "></div>
+
+    <!-- Notification Sound Player -->
+    <audio id="notification-sound" preload="auto" style="display: none;">
+        <source src="{{ asset('sounds/notification.wav') }}" type="audio/wav">
+    </audio>
+
+    @script
+    <script>
+        Livewire.on('playNotificationSound', () => {
+            try {
+                const audio = document.getElementById('notification-sound');
+                if (audio) {
+                    audio.currentTime = 0;
+                    audio.play().catch(err => {
+                        console.log('[Sound] Benachrichtigungston konnte nicht abgespielt werden:', err.message);
+                    });
+                }
+            } catch (error) {
+                console.error('[Sound] Fehler beim Abspielen:', error.message);
+            }
+        });
+    </script>
+    @endscript
 </div>
  
