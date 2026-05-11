@@ -23,14 +23,14 @@ class Setting extends Model
      * @param string $key
      * @return mixed
      */
-    public static function getValue($type = null, $key)
+    public static function getValue($type, $key)
     {
         $query = self::where('key', $key);
-        
+
         if ($type !== null) {
             $query->where('type', $type);
         }
-        
+
         $setting = $query->first();
         return $setting ? $setting->value : null;
     }
@@ -50,4 +50,3 @@ class Setting extends Model
         );
     }
 }
-

@@ -8,7 +8,7 @@ use Illuminate\Console\Command;
 
 class RunTrackedPeopleMonitoring extends Command
 {
-    protected $signature = 'tracked-people:run-monitoring {--force : Ignoriert die Mindestwartezeit seit der letzten Analyse} {--older-than=30 : Analysiert nur Profile, deren letzte Analyse aelter als X Minuten ist}';
+    protected $signature = 'tracked-people:run-monitoring {--force : Ignoriert die Mindestwartezeit seit der letzten Analyse} {--older-than=3 : Analysiert nur Profile, deren letzte Analyse aelter als X Minuten ist}';
 
     protected $description = 'Plant automatische Instagram-Analysen fuer Personen mit aktivierter Dauerbeobachtung ein.';
 

@@ -13,8 +13,8 @@ class Kernel extends ConsoleKernel
     protected function schedule(Schedule $schedule): void
     {
         $schedule
-            ->command('tracked-people:run-monitoring --older-than=30')
-            ->everyThirtyMinutes()
+            ->command('tracked-people:run-monitoring --older-than=3')
+            ->everyThreeMinutes()
             ->withoutOverlapping();
     }
 

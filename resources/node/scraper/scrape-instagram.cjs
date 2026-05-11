@@ -129,6 +129,121 @@ function debugLog(message, data) {
   process.stderr.write(`[SCRAPER DEBUG] ${payload}\n`);
 }
 
+function sanitizeDebugPayload(value, depth = 0) {
+  if (depth > 5) {
+    return '[depth-limit]';
+  }
+
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    return value.length > 2500 ? `${value.slice(0, 2500)}…` : value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 60).map((entry) => sanitizeDebugPayload(entry, depth + 1));
+  }
+
+  if (typeof value === 'object') {
+    const sanitized = {};
+
+    for (const [key, entry] of Object.entries(value)) {
+      if (/^(password|loginPassword|login_password.*)$/i.test(key)) {
+        sanitized[key] = '[redacted]';
+        continue;
+      }
+
+      sanitized[key] = sanitizeDebugPayload(entry, depth + 1);
+    }
+
+    return sanitized;
+  }
+
+  return String(value);
+}
+
+function buildRunDebugLogPath(mode, currentUsername) {
+  const debugDirectory = ensureDirectory(
+    path.resolve(__dirname, '../../../storage/logs/instagram-scraper'),
+  );
+  const safeUsername = normalizeText(currentUsername || 'session')
+    .replace(/[^a-z0-9._-]+/gi, '_')
+    .slice(0, 80) || 'session';
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+  return path.join(debugDirectory, `${stamp}-${mode}-${safeUsername}.json`);
+}
+
+let activeRunDebug = null;
+
+function initializeRunDebug(mode, currentUsername, runtimeConfig) {
+  activeRunDebug = {
+    filePath: buildRunDebugLogPath(mode, currentUsername),
+    startedAt: new Date().toISOString(),
+    mode,
+    username: currentUsername || null,
+    profileLabel: runtimeConfig?.profileLabel || null,
+    persistentProfileEnabled: Boolean(runtimeConfig?.persistentProfileEnabled),
+    browserProfilePath: runtimeConfig?.browserProfilePath || null,
+    cookieFilePath: runtimeConfig?.cookieFilePath || null,
+    headlessEnabled: Boolean(runtimeConfig?.headlessEnabled),
+    autoLoginEnabled: Boolean(runtimeConfig?.autoLoginEnabled),
+    loginUsername: runtimeConfig?.loginUsername || null,
+    loginPasswordConfigured: Boolean(runtimeConfig?.loginPasswordConfigured),
+    loginPasswordDecryptable: runtimeConfig?.loginPasswordDecryptable !== false,
+    loginPasswordSource: runtimeConfig?.loginPasswordSource || null,
+    events: [],
+  };
+
+  return activeRunDebug.filePath;
+}
+
+function recordRunDebug(step, data = {}) {
+  if (!activeRunDebug) {
+    return;
+  }
+
+  activeRunDebug.events.push({
+    at: new Date().toISOString(),
+    step,
+    data: sanitizeDebugPayload(data),
+  });
+}
+
+function flushRunDebug(finalPayload = {}) {
+  if (!activeRunDebug?.filePath) {
+    return null;
+  }
+
+  const logPayload = {
+    ...activeRunDebug,
+    finishedAt: new Date().toISOString(),
+    final: sanitizeDebugPayload(finalPayload),
+  };
+
+  try {
+    fs.writeFileSync(activeRunDebug.filePath, JSON.stringify(logPayload, null, 2), 'utf8');
+  } catch (error) {
+    debugLog('Fehler beim Schreiben des Debug-Logs:', error.message);
+  }
+
+  return activeRunDebug.filePath;
+}
+
+function summarizeCookieCollection(cookies = []) {
+  return cookies.slice(0, 30).map((cookie) => ({
+    name: cookie.name,
+    domain: cookie.domain,
+    path: cookie.path,
+    expires: cookie.expires ?? null,
+    httpOnly: Boolean(cookie.httpOnly),
+    secure: Boolean(cookie.secure),
+    sameSite: cookie.sameSite ?? null,
+  }));
+}
+
 function dedupe(values) {
   return [...new Set(values.filter(Boolean))];
 }
@@ -143,6 +258,9 @@ function loadRuntimeConfig(configPath) {
     autoLoginEnabled: false,
     loginUsername: '',
     loginPassword: '',
+    loginPasswordConfigured: false,
+    loginPasswordDecryptable: true,
+    loginPasswordSource: null,
     navigationTimeoutMs: 120000,
     postLoginWaitMs: 2500,
     typingDelayMs: 35,
@@ -374,6 +492,12 @@ async function loadCookiesFromFileWithDiagnostics(page, cookieFilePath) {
     diagnostics.providedNames = cookies.map((cookie) => cookie.name);
     diagnostics.sessionCookieProvided = diagnostics.providedNames.includes('sessionid');
 
+    if (!diagnostics.sessionCookieProvided) {
+      diagnostics.warnings.push(
+        'Die Cookie-Datei enthaelt keine sessionid; daraus kann kein angemeldeter Instagram-Zustand wiederhergestellt werden.',
+      );
+    }
+
     await page.browserContext().setCookie(...cookies);
 
     const acceptedCookies = await page.cookies('https://www.instagram.com/');
@@ -383,6 +507,13 @@ async function loadCookiesFromFileWithDiagnostics(page, cookieFilePath) {
     diagnostics.loaded = true;
 
     debugLog('Instagram-Cookies geladen', diagnostics.providedNames);
+    recordRunDebug('cookies-loaded-from-file', {
+      cookieFilePath,
+      providedNames: diagnostics.providedNames,
+      acceptedNames: diagnostics.acceptedNames,
+      sessionCookieProvided: diagnostics.sessionCookieProvided,
+      sessionCookieAccepted: diagnostics.sessionCookieAccepted,
+    });
 
     if (diagnostics.sessionCookieProvided && !diagnostics.sessionCookieAccepted) {
       diagnostics.warnings.push('Die importierte sessionid wurde vom Browser-Context nicht akzeptiert.');
@@ -431,6 +562,7 @@ async function primeInstagramSession(page, cookieFilePath) {
   diagnostics.loginViewDetectedAfterReload = /log into instagram|melde dich an|password|passwort|forgot password|log in with facebook/i.test(
     diagnostics.postReloadBodyPreview,
   );
+  recordRunDebug('session-preflight', diagnostics);
 
   if (diagnostics.sessionCookieAccepted && !diagnostics.sessionCookieRetained) {
     diagnostics.warnings.push(
@@ -456,16 +588,52 @@ async function saveCookiesToFile(page, cookieFilePath) {
       cookie.domain && (cookie.domain.includes('instagram.com') || cookie.domain.includes('facebook.com')),
     );
 
+    const cookieNames = filteredCookies.map((cookie) => cookie.name);
+    const sessionCookieSaved = cookieNames.includes('sessionid');
+
     if (filteredCookies.length > 0) {
       const tempPath = `${cookieFilePath}.tmp`;
       fs.writeFileSync(tempPath, JSON.stringify(filteredCookies, null, 2), 'utf8');
       fs.renameSync(tempPath, cookieFilePath);
-      return true;
+      recordRunDebug('cookies-saved-to-file', {
+        cookieFilePath,
+        count: filteredCookies.length,
+        cookieNames,
+        sessionCookieSaved,
+      });
+
+      return {
+        saved: true,
+        count: filteredCookies.length,
+        cookieNames,
+        sessionCookieSaved,
+      };
     }
 
-    return false;
+    recordRunDebug('cookies-not-saved', {
+      cookieFilePath,
+      reason: 'no-relevant-cookies',
+    });
+
+    return {
+      saved: false,
+      count: 0,
+      cookieNames: [],
+      sessionCookieSaved: false,
+    };
   } catch (error) {
-    return false;
+    recordRunDebug('cookies-save-error', {
+      cookieFilePath,
+      error: normalizeText(error.message),
+    });
+
+    return {
+      saved: false,
+      count: 0,
+      cookieNames: [],
+      sessionCookieSaved: false,
+      error: normalizeText(error.message),
+    };
   }
 }
 
@@ -489,7 +657,7 @@ function cleanupDirectory(directoryPath) {
   }
 }
 
-function deriveScrapeOutcome({ title, finalUrl, profile, warnings, cookieDiagnostics }) {
+function deriveScrapeOutcome({ title, finalUrl, profile, warnings, cookieDiagnostics, loginDiagnostics }) {
   const normalizedTitle = normalizeText(title || '').toLowerCase();
   const normalizedBodyPreview = normalizeText(profile?.bodyTextPreview || '').toLowerCase();
   const normalizedDescription = normalizeText(profile?.description || '').toLowerCase();
@@ -509,6 +677,7 @@ function deriveScrapeOutcome({ title, finalUrl, profile, warnings, cookieDiagnos
   );
 
   const redirectedToLogin = (finalUrl || '').includes('/accounts/login');
+  const autoLoginFailed = Boolean(loginDiagnostics?.attempted && !loginDiagnostics?.success);
   const hasUsefulMetadata = Boolean(profile?.ogTitle || profile?.description || profile?.ogImage);
   const hasRenderedProfileContent =
     Boolean(profile?.usernameSeen) &&
@@ -524,6 +693,16 @@ function deriveScrapeOutcome({ title, finalUrl, profile, warnings, cookieDiagnos
       statusMessage: hasUsefulMetadata
         ? 'Instagram verwirft die importierte Login-Session; es wurden nur Metadaten extrahiert.'
         : 'Instagram verwirft die importierte Login-Session; es konnten keine brauchbaren Daten geladen werden.',
+    };
+  }
+
+  if (autoLoginFailed && (redirectedToLogin || profile?.requiresLogin)) {
+    return {
+      ok: false,
+      statusLevel: hasUsefulMetadata ? 'partial' : 'error',
+      statusMessage: hasUsefulMetadata
+        ? 'Instagram-Login wurde versucht, aber Instagram hat keinen stabilen angemeldeten Zustand geliefert; es wurden nur Metadaten extrahiert.'
+        : 'Instagram-Login wurde versucht, aber Instagram hat keinen stabilen angemeldeten Zustand geliefert.',
     };
   }
 
@@ -623,6 +802,19 @@ async function clickButtonByText(page, candidateTexts) {
   }, normalizedCandidates).catch(() => false);
 }
 
+async function dismissCookieConsentIfPresent(page) {
+  for (const candidateTexts of [
+    ['Alle Cookies erlauben', 'Allow all cookies', 'Allow All Cookies'],
+    ['Nur erforderliche Cookies erlauben', 'Allow essential cookies', 'Decline optional cookies'],
+  ]) {
+    const clicked = await clickButtonByText(page, candidateTexts);
+
+    if (clicked) {
+      await sleep(900);
+    }
+  }
+}
+
 async function dismissPostLoginPrompts(page) {
   for (const candidateTexts of [
     ['Jetzt nicht', 'Not now', 'Not Now'],
@@ -637,6 +829,54 @@ async function dismissPostLoginPrompts(page) {
   }
 }
 
+async function collectPageDiagnostics(page, options = {}) {
+  const includeCookies = options.includeCookies === true;
+  const bodyText = normalizeText(
+    await page.evaluate(() => document.body?.innerText || '').catch(() => ''),
+  );
+  const selectors = await page.evaluate(() => ({
+    usernameField: Boolean(document.querySelector('input[name="username"]')),
+    passwordField: Boolean(document.querySelector('input[name="password"]')),
+    submitButton: Boolean(document.querySelector('button[type="submit"]')),
+    totalInputs: document.querySelectorAll('input').length,
+    textLikeInputs: document.querySelectorAll('input[type="text"], input[type="email"], input[type="tel"], input:not([type])').length,
+    passwordInputs: document.querySelectorAll('input[type="password"]').length,
+  })).catch(() => ({
+    usernameField: false,
+    passwordField: false,
+    submitButton: false,
+    totalInputs: 0,
+    textLikeInputs: 0,
+    passwordInputs: 0,
+  }));
+  const diagnostics = {
+    url: page.url(),
+    title: await page.title().catch(() => null),
+    bodyPreview: bodyText.slice(0, 1200),
+    selectors,
+  };
+
+  if (includeCookies) {
+    const cookies = await page.cookies('https://www.instagram.com/').catch(() => []);
+    diagnostics.cookies = summarizeCookieCollection(cookies);
+  }
+
+  return diagnostics;
+}
+
+async function findFirstExistingSelector(page, selectors) {
+  for (const selector of selectors) {
+    const handle = await page.$(selector).catch(() => null);
+
+    if (handle) {
+      await handle.dispose().catch(() => {});
+      return selector;
+    }
+  }
+
+  return null;
+}
+
 async function performInstagramLogin(page, runtimeConfig) {
   const diagnostics = {
     attempted: false,
@@ -644,8 +884,10 @@ async function performInstagramLogin(page, runtimeConfig) {
     finalUrl: null,
     title: null,
     bodyPreview: '',
+    formDetected: false,
     invalidCredentials: false,
     challengeDetected: false,
+    sessionCookiePresent: false,
     warnings: [],
   };
 
@@ -657,36 +899,129 @@ async function performInstagramLogin(page, runtimeConfig) {
   const loginPassword = String(runtimeConfig.loginPassword || '');
 
   if (!loginUsername || !loginPassword) {
-    diagnostics.warnings.push('Auto-Login ist aktiviert, aber Benutzername oder Passwort fehlen.');
+    diagnostics.warnings.push(
+      !loginUsername
+        ? 'Auto-Login ist aktiviert, aber der Instagram-Benutzername fehlt.'
+        : (runtimeConfig?.loginPasswordConfigured && runtimeConfig?.loginPasswordDecryptable === false)
+          ? 'Auto-Login ist aktiviert, aber das gespeicherte Passwort konnte von der Base-Installation nicht entschluesselt werden.'
+          : 'Auto-Login ist aktiviert, aber Benutzername oder Passwort fehlen.',
+    );
+    recordRunDebug('auto-login-missing-credentials', {
+      hasUsername: Boolean(loginUsername),
+      hasPassword: Boolean(loginPassword),
+      loginPasswordConfigured: Boolean(runtimeConfig?.loginPasswordConfigured),
+      loginPasswordDecryptable: runtimeConfig?.loginPasswordDecryptable !== false,
+      loginPasswordSource: runtimeConfig?.loginPasswordSource || null,
+    });
     return diagnostics;
   }
 
   diagnostics.attempted = true;
+  recordRunDebug('auto-login-start', {
+    loginUsername,
+    hasPassword: Boolean(loginPassword),
+  });
+
+  const usernameSelectors = [
+    'input[name="username"]',
+    'input[autocomplete="username"]',
+    'input[aria-label*="Benutzername"]',
+    'input[aria-label*="username" i]',
+    'input[placeholder*="Benutzername"]',
+    'input[placeholder*="username" i]',
+    'input[type="email"]',
+    'input[type="text"]',
+    'input[type="tel"]',
+  ];
+  const passwordSelectors = [
+    'input[name="password"]',
+    'input[autocomplete="current-password"]',
+    'input[aria-label*="Passwort"]',
+    'input[aria-label*="password" i]',
+    'input[type="password"]',
+  ];
+  const submitSelectors = [
+    'button[type="submit"]',
+    'form button',
+  ];
 
   await page.goto('https://www.instagram.com/accounts/login/', {
     timeout: runtimeConfig.navigationTimeoutMs,
     waitUntil: 'domcontentloaded',
   });
 
-  await page.waitForSelector('input[name="username"]', {
-    timeout: runtimeConfig.navigationTimeoutMs,
-  });
+  await dismissCookieConsentIfPresent(page);
+
+  let usernameSelector = await findFirstExistingSelector(page, usernameSelectors);
+  let passwordSelector = await findFirstExistingSelector(page, passwordSelectors);
+  let submitSelector = await findFirstExistingSelector(page, submitSelectors);
+
+  try {
+    if (!usernameSelector || !passwordSelector || !submitSelector) {
+      await page.waitForFunction(() => {
+        const textLikeInput = document.querySelector('input[name="username"], input[autocomplete="username"], input[type="email"], input[type="text"], input[type="tel"], input[aria-label*="Benutzername"], input[aria-label*="username" i]');
+        const passwordInput = document.querySelector('input[name="password"], input[autocomplete="current-password"], input[type="password"], input[aria-label*="Passwort"], input[aria-label*="password" i]');
+        const submitButton = document.querySelector('button[type="submit"], form button');
+
+        return Boolean(textLikeInput && passwordInput && submitButton);
+      }, {
+        timeout: Math.min(runtimeConfig.navigationTimeoutMs, 20000),
+      });
+    }
+
+    usernameSelector = await findFirstExistingSelector(page, usernameSelectors);
+    passwordSelector = await findFirstExistingSelector(page, passwordSelectors);
+    submitSelector = await findFirstExistingSelector(page, submitSelectors);
+    await page.waitForSelector(usernameSelector, {
+      timeout: Math.min(runtimeConfig.navigationTimeoutMs, 20000),
+    });
+  } catch (error) {
+    const switchedAccount = await clickButtonByText(page, [
+      'Zu einem anderen Konto wechseln',
+      'Switch accounts',
+      'Switch Accounts',
+      'Anderes Konto verwenden',
+    ]);
+
+    if (switchedAccount) {
+      await sleep(1500);
+      await dismissCookieConsentIfPresent(page);
+      usernameSelector = await findFirstExistingSelector(page, usernameSelectors);
+      passwordSelector = await findFirstExistingSelector(page, passwordSelectors);
+      submitSelector = await findFirstExistingSelector(page, submitSelectors);
+    }
+  }
+
+  diagnostics.formDetected = Boolean(usernameSelector && passwordSelector && submitSelector);
+
+  if (!diagnostics.formDetected) {
+    const pageDiagnostics = await collectPageDiagnostics(page, { includeCookies: true });
+    diagnostics.finalUrl = pageDiagnostics.url;
+    diagnostics.title = pageDiagnostics.title;
+    diagnostics.bodyPreview = pageDiagnostics.bodyPreview;
+    diagnostics.warnings.push('Das Instagram-Login-Formular wurde nicht gefunden.');
+    recordRunDebug('auto-login-form-missing', pageDiagnostics);
+
+    return diagnostics;
+  }
+
+  recordRunDebug('auto-login-form-ready', await collectPageDiagnostics(page, { includeCookies: true }));
 
   await sleep(1200);
 
-  await page.$eval('input[name="username"]', (element) => {
+  await page.$eval(usernameSelector, (element) => {
     element.focus();
     element.value = '';
   });
-  await page.type('input[name="username"]', loginUsername, {
+  await page.type(usernameSelector, loginUsername, {
     delay: runtimeConfig.typingDelayMs,
   });
 
-  await page.$eval('input[name="password"]', (element) => {
+  await page.$eval(passwordSelector, (element) => {
     element.focus();
     element.value = '';
   });
-  await page.type('input[name="password"]', loginPassword, {
+  await page.type(passwordSelector, loginPassword, {
     delay: runtimeConfig.typingDelayMs,
   });
 
@@ -695,17 +1030,18 @@ async function performInstagramLogin(page, runtimeConfig) {
       timeout: runtimeConfig.navigationTimeoutMs,
       waitUntil: 'domcontentloaded',
     }),
-    page.click('button[type="submit"]'),
+    page.click(submitSelector),
   ]);
 
   await sleep(runtimeConfig.postLoginWaitMs);
   await dismissPostLoginPrompts(page);
 
-  diagnostics.finalUrl = page.url();
-  diagnostics.title = await page.title().catch(() => null);
-  diagnostics.bodyPreview = normalizeText(
-    await page.evaluate(() => document.body?.innerText || '').catch(() => ''),
-  ).slice(0, 1000);
+  let pageDiagnostics = await collectPageDiagnostics(page, { includeCookies: true });
+  diagnostics.finalUrl = pageDiagnostics.url;
+  diagnostics.title = pageDiagnostics.title;
+  diagnostics.bodyPreview = pageDiagnostics.bodyPreview;
+  diagnostics.sessionCookiePresent = (pageDiagnostics.cookies || []).some((cookie) => cookie.name === 'sessionid');
+  recordRunDebug('auto-login-after-submit', pageDiagnostics);
 
   const normalizedBody = diagnostics.bodyPreview.toLowerCase();
   diagnostics.invalidCredentials = /password was incorrect|incorrect password|dein passwort war nicht korrekt|falsches passwort/.test(normalizedBody);
@@ -713,8 +1049,30 @@ async function performInstagramLogin(page, runtimeConfig) {
   diagnostics.success =
     !diagnostics.invalidCredentials &&
     !diagnostics.challengeDetected &&
+    diagnostics.sessionCookiePresent &&
     !diagnostics.finalUrl.includes('/accounts/login') &&
     !/log into instagram|melde dich an|password|passwort/.test(normalizedBody);
+
+  if (diagnostics.success) {
+    await page.goto('https://www.instagram.com/', {
+      timeout: runtimeConfig.navigationTimeoutMs,
+      waitUntil: 'domcontentloaded',
+    }).catch(() => {});
+    await sleep(1200);
+
+    pageDiagnostics = await collectPageDiagnostics(page, { includeCookies: true });
+    diagnostics.finalUrl = pageDiagnostics.url;
+    diagnostics.title = pageDiagnostics.title;
+    diagnostics.bodyPreview = pageDiagnostics.bodyPreview;
+    diagnostics.sessionCookiePresent = (pageDiagnostics.cookies || []).some((cookie) => cookie.name === 'sessionid');
+    diagnostics.success =
+      diagnostics.sessionCookiePresent &&
+      !diagnostics.finalUrl.includes('/accounts/login') &&
+      !/log into instagram|melde dich an|password|passwort/.test(
+        diagnostics.bodyPreview.toLowerCase(),
+      );
+    recordRunDebug('auto-login-post-verify', pageDiagnostics);
+  }
 
   if (diagnostics.invalidCredentials) {
     diagnostics.warnings.push('Instagram hat die Zugangsdaten als ungueltig abgelehnt.');
@@ -727,6 +1085,8 @@ async function performInstagramLogin(page, runtimeConfig) {
   if (!diagnostics.success && !diagnostics.invalidCredentials && !diagnostics.challengeDetected) {
     diagnostics.warnings.push('Der Auto-Login wurde ausgefuehrt, aber Instagram hat keinen stabilen angemeldeten Zustand geliefert.');
   }
+
+  recordRunDebug('auto-login-result', diagnostics);
 
   return diagnostics;
 }
@@ -743,6 +1103,9 @@ async function waitForInteractiveLoginCompletion(page, runtimeConfig) {
   };
 
   const timeoutAt = Date.now() + Math.max(runtimeConfig.navigationTimeoutMs, 180000);
+  recordRunDebug('manual-login-wait-start', {
+    timeoutAt: new Date(timeoutAt).toISOString(),
+  });
 
   while (Date.now() < timeoutAt) {
     await dismissPostLoginPrompts(page);
@@ -761,6 +1124,7 @@ async function waitForInteractiveLoginCompletion(page, runtimeConfig) {
       diagnostics.finalUrl = currentUrl;
       diagnostics.title = await page.title().catch(() => null);
       diagnostics.bodyPreview = currentBody;
+      recordRunDebug('manual-login-success', diagnostics);
 
       return diagnostics;
     }
@@ -771,12 +1135,17 @@ async function waitForInteractiveLoginCompletion(page, runtimeConfig) {
 
     if (challengeDetected) {
       diagnostics.warnings.push('Instagram verlangt weiterhin eine Verifizierung oder Challenge.');
+      recordRunDebug('manual-login-challenge-visible', {
+        currentUrl,
+        bodyPreview: currentBody,
+      });
     }
 
     await sleep(1500);
   }
 
   diagnostics.warnings.push('Die manuelle Instagram-Anmeldung wurde nicht innerhalb des Zeitlimits abgeschlossen.');
+  recordRunDebug('manual-login-timeout', diagnostics);
 
   return diagnostics;
 }
@@ -815,18 +1184,24 @@ async function establishInstagramSession(page, runtimeConfig, notes) {
     !cookieDiagnostics.postReloadUrl?.includes('/accounts/login');
 
   if (alreadyAuthenticated) {
+    recordRunDebug('session-established-from-existing-state', cookieDiagnostics);
     return { cookieDiagnostics, loginDiagnostics, sessionEstablished: true };
   }
 
-  if (isLoginSessionMode && runtimeConfig.autoLoginEnabled) {
+  if (runtimeConfig.autoLoginEnabled) {
     loginDiagnostics = await performInstagramLogin(page, runtimeConfig);
 
     if (loginDiagnostics.attempted) {
-      notes.push('Auto-Login fuer Instagram wurde gestartet.');
+      notes.push(
+        isLoginSessionMode
+          ? 'Auto-Login fuer Instagram wurde gestartet.'
+          : 'Auto-Login fuer Instagram wurde im Hintergrund gestartet.',
+      );
     }
 
     if (loginDiagnostics.success) {
       notes.push('Instagram-Login wurde erfolgreich abgeschlossen.');
+      recordRunDebug('session-established-via-auto-login', loginDiagnostics);
       return { cookieDiagnostics, loginDiagnostics, sessionEstablished: true };
     }
 
@@ -839,9 +1214,15 @@ async function establishInstagramSession(page, runtimeConfig, notes) {
 
     if (loginDiagnostics.success) {
       notes.push('Manuelle Instagram-Anmeldung erfolgreich abgeschlossen.');
+      recordRunDebug('session-established-via-manual-login', loginDiagnostics);
       return { cookieDiagnostics, loginDiagnostics, sessionEstablished: true };
     }
   }
+
+  recordRunDebug('session-establish-failed', {
+    cookieDiagnostics,
+    loginDiagnostics,
+  });
 
   return {
     cookieDiagnostics,
@@ -1110,6 +1491,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
   const notes = [];
   const consoleMessages = [];
   const runtimeConfig = loadRuntimeConfig(runtimeConfigPath);
+  const debugLogPath = initializeRunDebug(operationMode, username, runtimeConfig);
   const profileUrl = isLoginSessionMode
     ? 'https://www.instagram.com/'
     : `https://www.instagram.com/${username}/`;
@@ -1139,6 +1521,14 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     success: false,
     warnings: [],
   };
+  recordRunDebug('run-start', {
+    runtimeConfigPath,
+    profileUrl,
+    artifacts,
+    cookieFilePath,
+    browserUserDataDir,
+    isLoginSessionMode,
+  });
 
   try {
     const launchOptions = {
@@ -1152,6 +1542,11 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
         '--lang=de-DE,de;q=0.9',
       ],
     };
+    recordRunDebug('browser-launch-options', {
+      headless: launchOptions.headless,
+      userDataDir: launchOptions.userDataDir,
+      args: launchOptions.args,
+    });
 
     try {
       browser = await puppeteer.launch(launchOptions);
@@ -1162,6 +1557,10 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
           path.join(runtimeTempDirectory, 'puppeteer-profile-fallback-'),
         );
         cleanupBrowserProfileOnExit = true;
+        recordRunDebug('browser-launch-fallback', {
+          previousError: normalizeText(launchError.message),
+          fallbackUserDataDir: activeBrowserUserDataDir,
+        });
         browser = await puppeteer.launch({
           ...launchOptions,
           userDataDir: activeBrowserUserDataDir,
@@ -1187,6 +1586,42 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
 
     page.on('pageerror', (error) => {
       consoleMessages.push(`pageerror: ${normalizeText(error.message)}`);
+      recordRunDebug('pageerror', {
+        message: normalizeText(error.message),
+      });
+    });
+
+    page.on('requestfailed', (request) => {
+      const requestUrl = request.url();
+
+      if (!/instagram|facebook/i.test(requestUrl)) {
+        return;
+      }
+
+      const failureText = normalizeText(request.failure()?.errorText || 'requestfailed');
+      const message = `requestfailed: ${failureText} ${requestUrl}`;
+      consoleMessages.push(message);
+      recordRunDebug('requestfailed', {
+        url: requestUrl,
+        resourceType: request.resourceType(),
+        failureText,
+      });
+    });
+
+    page.on('response', (response) => {
+      const responseUrl = response.url();
+
+      if (response.status() < 400 || !/instagram|facebook/i.test(responseUrl)) {
+        return;
+      }
+
+      const message = `response ${response.status()}: ${responseUrl}`;
+      consoleMessages.push(message);
+      recordRunDebug('http-error-response', {
+        status: response.status(),
+        url: responseUrl,
+        resourceType: response.request().resourceType(),
+      });
     });
 
     await page.setExtraHTTPHeaders({
@@ -1216,6 +1651,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     if (runtimeConfig.persistentProfileEnabled) {
       notes.push('Persistentes Browser-Profil aktiviert.');
     }
+    recordRunDebug('page-ready', await collectPageDiagnostics(page, { includeCookies: true }));
 
     const { cookieDiagnostics, loginDiagnostics: sessionLoginDiagnostics, sessionEstablished } = await establishInstagramSession(
       page,
@@ -1227,42 +1663,47 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     if (sessionEstablished) {
       const cookiesSavedAfterSession = await saveCookiesToFile(page, cookieFilePath);
 
-      if (cookiesSavedAfterSession) {
+      if (cookiesSavedAfterSession.saved) {
         notes.push('Sessiondaten wurden gespeichert.');
+
+        if (!cookiesSavedAfterSession.sessionCookieSaved) {
+          notes.push('Es wurden zwar Cookies gespeichert, aber keine sessionid.');
+        }
       }
     }
 
     if (isLoginSessionMode) {
-      console.log(
-        JSON.stringify({
-          ok: sessionEstablished,
-          statusLevel: sessionEstablished ? 'success' : 'error',
-          statusMessage: sessionEstablished
-            ? 'Instagram-Session wurde erfolgreich aufgebaut und gespeichert.'
-            : 'Instagram-Session konnte nicht stabil aufgebaut werden.',
-          username: null,
-          finalUrl: page.url(),
-          htmlBytes: 0,
-          htmlPath: null,
-          htmlPreview: '',
-          notes: dedupe(notes),
-          cookieDiagnostics,
-          loginDiagnostics,
-          profile: null,
-          profileUrl,
-          screenshotPath: null,
-          scrapedAt: new Date().toISOString(),
-          screenshotMode: null,
-          title: await page.title().catch(() => null),
-          warnings: dedupe([
-            ...consoleMessages,
-            ...(cookieDiagnostics.warnings || []),
-            ...(loginDiagnostics.warnings || []),
-          ]),
-          durationMs: Date.now() - startedAt,
-          operationMode,
-        }),
-      );
+      const responsePayload = {
+        ok: sessionEstablished,
+        statusLevel: sessionEstablished ? 'success' : 'error',
+        statusMessage: sessionEstablished
+          ? 'Instagram-Session wurde erfolgreich aufgebaut und gespeichert.'
+          : 'Instagram-Session konnte nicht stabil aufgebaut werden.',
+        username: null,
+        finalUrl: page.url(),
+        htmlBytes: 0,
+        htmlPath: null,
+        htmlPreview: '',
+        notes: dedupe(notes),
+        cookieDiagnostics,
+        loginDiagnostics,
+        profile: null,
+        profileUrl,
+        screenshotPath: null,
+        scrapedAt: new Date().toISOString(),
+        screenshotMode: null,
+        title: await page.title().catch(() => null),
+        warnings: dedupe([
+          ...consoleMessages,
+          ...(cookieDiagnostics.warnings || []),
+          ...(loginDiagnostics.warnings || []),
+        ]),
+        durationMs: Date.now() - startedAt,
+        operationMode,
+        debugLogPath,
+      };
+      flushRunDebug(responsePayload);
+      console.log(JSON.stringify(responsePayload));
 
       return;
     }
@@ -1306,14 +1747,18 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       profile: initialProfile,
       warnings: dedupedWarnings,
       cookieDiagnostics,
+      loginDiagnostics,
     });
 
     fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
 
     if (shouldSaveCookies(finalUrl, initialProfile)) {
       const cookiesSaved = await saveCookiesToFile(page, cookieFilePath);
-      if (cookiesSaved) {
+      if (cookiesSaved.saved) {
         notes.push('Aktualisierte Instagram-Cookies gespeichert.');
+        if (!cookiesSaved.sessionCookieSaved) {
+          notes.push('Die gespeicherten Cookies enthalten weiterhin keine sessionid.');
+        }
       } else {
         notes.push('Es wurden keine Cookies gespeichert, weil keine relevanten Instagram-Cookies gefunden wurden.');
       }
@@ -1331,50 +1776,53 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       dedupe(notes),
     );
 
-    console.log(
-      JSON.stringify({
-        ok: outcome.ok,
-        statusLevel: outcome.statusLevel,
-        statusMessage: outcome.statusMessage,
-        username,
-        finalUrl,
-        htmlBytes: Buffer.byteLength(initialHtml, 'utf8'),
-        htmlPath: artifacts.htmlPath,
-        htmlPreview: initialHtml.slice(0, 4000),
-        notes: dedupe(notes),
-        cookieDiagnostics,
-        loginDiagnostics,
-        profile: initialProfile,
-        profileUrl,
-        screenshotPath: artifacts.screenshotPath,
-        scrapedAt: new Date().toISOString(),
-        screenshotMode: 'generated-card',
-        title,
-        warnings: dedupedWarnings,
-        durationMs: Date.now() - startedAt,
-        operationMode,
-      }),
-    );
+    const responsePayload = {
+      ok: outcome.ok,
+      statusLevel: outcome.statusLevel,
+      statusMessage: outcome.statusMessage,
+      username,
+      finalUrl,
+      htmlBytes: Buffer.byteLength(initialHtml, 'utf8'),
+      htmlPath: artifacts.htmlPath,
+      htmlPreview: initialHtml.slice(0, 4000),
+      notes: dedupe(notes),
+      cookieDiagnostics,
+      loginDiagnostics,
+      profile: initialProfile,
+      profileUrl,
+      screenshotPath: artifacts.screenshotPath,
+      scrapedAt: new Date().toISOString(),
+      screenshotMode: 'generated-card',
+      title,
+      warnings: dedupedWarnings,
+      durationMs: Date.now() - startedAt,
+      operationMode,
+      debugLogPath,
+    };
+    flushRunDebug(responsePayload);
+    console.log(JSON.stringify(responsePayload));
   } catch (error) {
     if (initialHtml) {
       fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
     }
 
-    console.log(
-      JSON.stringify({
-        ok: false,
-        statusLevel: 'error',
-        statusMessage: 'Instagram-Scrape fehlgeschlagen.',
-        username,
-        error: normalizeText(error.message),
-        finalUrl,
-        htmlPath: initialHtml ? artifacts.htmlPath : null,
-        notes: dedupe(notes),
-        screenshotPath: null,
-        warnings: dedupe(consoleMessages),
-        durationMs: Date.now() - startedAt,
-      }),
-    );
+    const responsePayload = {
+      ok: false,
+      statusLevel: 'error',
+      statusMessage: 'Instagram-Scrape fehlgeschlagen.',
+      username,
+      error: normalizeText(error.message),
+      finalUrl,
+      htmlPath: initialHtml ? artifacts.htmlPath : null,
+      notes: dedupe(notes),
+      screenshotPath: null,
+      warnings: dedupe(consoleMessages),
+      durationMs: Date.now() - startedAt,
+      debugLogPath,
+    };
+    recordRunDebug('run-error', responsePayload);
+    flushRunDebug(responsePayload);
+    console.log(JSON.stringify(responsePayload));
 
     process.exitCode = 1;
   } finally {

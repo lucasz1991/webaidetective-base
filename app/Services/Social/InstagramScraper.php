@@ -81,6 +81,7 @@ class InstagramScraper
     {
         $profile = Setting::getValue('scraper', 'instagram_profile');
         $profile = is_array($profile) ? $profile : [];
+        $runtimePassword = $this->resolveRuntimePassword($profile);
 
         return [
             'profileLabel' => (string) ($profile['profile_label'] ?? 'instagram-default'),
@@ -91,10 +92,47 @@ class InstagramScraper
             'headlessEnabled' => true,
             'autoLoginEnabled' => (bool) ($profile['auto_login_enabled'] ?? false),
             'loginUsername' => trim((string) ($profile['login_username'] ?? '')),
-            'loginPassword' => $this->decryptRuntimePassword($profile['login_password_encrypted'] ?? null),
+            'loginPassword' => $runtimePassword['password'],
+            'loginPasswordConfigured' => $runtimePassword['configured'],
+            'loginPasswordDecryptable' => $runtimePassword['decryptable'],
+            'loginPasswordSource' => $runtimePassword['source'],
             'navigationTimeoutMs' => max(30000, ((int) ($profile['navigation_timeout_seconds'] ?? 120)) * 1000),
             'postLoginWaitMs' => max(500, (int) ($profile['post_login_wait_ms'] ?? 2500)),
             'typingDelayMs' => max(0, (int) ($profile['typing_delay_ms'] ?? 35)),
+        ];
+    }
+
+    private function resolveRuntimePassword(array $profile): array
+    {
+        $candidates = [
+            'login_password_base_encrypted' => $profile['login_password_base_encrypted'] ?? null,
+            'login_password_encrypted' => $profile['login_password_encrypted'] ?? null,
+        ];
+        $configured = false;
+
+        foreach ($candidates as $source => $encryptedPassword) {
+            if (! is_string($encryptedPassword) || trim($encryptedPassword) === '') {
+                continue;
+            }
+
+            $configured = true;
+            $decrypted = $this->decryptRuntimePassword($encryptedPassword);
+
+            if ($decrypted !== null) {
+                return [
+                    'password' => $decrypted,
+                    'configured' => true,
+                    'decryptable' => true,
+                    'source' => $source,
+                ];
+            }
+        }
+
+        return [
+            'password' => null,
+            'configured' => $configured,
+            'decryptable' => ! $configured,
+            'source' => null,
         ];
     }
 

@@ -9,6 +9,9 @@
         $latestSnapshot = $trackedPerson->latestInstagramSnapshot;
         $latestCountSources = data_get($latestSnapshot?->raw_payload, 'extractedProfile.countSources', []);
         $latestCountWarnings = data_get($latestSnapshot?->raw_payload, 'extractedProfile.countWarnings', []);
+        $latestDebugLogPath = data_get($latestSnapshot?->raw_payload, 'debugLogPath');
+        $latestCookieDiagnostics = data_get($latestSnapshot?->raw_payload, 'cookieDiagnostics', []);
+        $latestLoginDiagnostics = data_get($latestSnapshot?->raw_payload, 'loginDiagnostics', []);
         $countSourceLabels = [
             'body_text_preview' => 'sichtbarer Profiltext',
             'description_meta' => 'Meta-Beschreibung',
@@ -295,6 +298,30 @@
                         <p><span class="font-semibold">Beitraege-Quelle:</span> {{ $resolveCountSourceLabel($latestCountSources['posts'] ?? null) }}</p>
                         <p><span class="font-semibold">Profilbild-Hash:</span> {{ $latestSnapshot->profile_image_hash ?: '—' }}</p>
                     </div>
+
+                    @if($latestDebugLogPath)
+                        <p class="mt-4 break-all text-sm text-slate-700">
+                            <span class="font-semibold">Debug-Log:</span> {{ $latestDebugLogPath }}
+                        </p>
+                    @endif
+
+                    @if($latestCookieDiagnostics || $latestLoginDiagnostics)
+                        <div class="mt-4 grid gap-3 md:grid-cols-2">
+                            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
+                                <h4 class="font-semibold text-slate-900">Cookie-Diagnose</h4>
+                                <p class="mt-2">sessionid in Datei: {{ data_get($latestCookieDiagnostics, 'sessionCookieProvided') ? 'Ja' : 'Nein' }}</p>
+                                <p>sessionid akzeptiert: {{ data_get($latestCookieDiagnostics, 'sessionCookieAccepted') ? 'Ja' : 'Nein' }}</p>
+                                <p>sessionid nach Reload noch da: {{ data_get($latestCookieDiagnostics, 'sessionCookieRetained') ? 'Ja' : 'Nein' }}</p>
+                            </div>
+                            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
+                                <h4 class="font-semibold text-slate-900">Login-Diagnose</h4>
+                                <p class="mt-2">Auto-Login versucht: {{ data_get($latestLoginDiagnostics, 'attempted') ? 'Ja' : 'Nein' }}</p>
+                                <p>Formular gefunden: {{ data_get($latestLoginDiagnostics, 'formDetected') ? 'Ja' : 'Nein' }}</p>
+                                <p>Login erfolgreich: {{ data_get($latestLoginDiagnostics, 'success') ? 'Ja' : 'Nein' }}</p>
+                                <p>sessionid nach Login: {{ data_get($latestLoginDiagnostics, 'sessionCookiePresent') ? 'Ja' : 'Nein' }}</p>
+                            </div>
+                        </div>
+                    @endif
 
                     @if($latestCountWarnings)
                         <div class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
