@@ -1,4 +1,4 @@
-<div class="space-y-6">
+<div class="space-y-6" wire:loading.class="cursor-wait" wire:poll.10000ms>
     @php
         $managerStatusClass = match ($managerStatusLevel ?? 'neutral') {
             'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',

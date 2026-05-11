@@ -8,25 +8,15 @@ use Illuminate\Console\Command;
 
 class RunTrackedPeopleMonitoring extends Command
 {
-    protected $signature = 'tracked-people:run-monitoring {--force : Ignoriert die Mindestwartezeit seit der letzten Analyse} {--older-than=3 : Analysiert nur Profile, deren letzte Analyse aelter als X Minuten ist}';
+    protected $signature = 'tracked-people:run-monitoring';
 
     protected $description = 'Plant automatische Instagram-Analysen fuer Personen mit aktivierter Dauerbeobachtung ein.';
 
     public function handle(): int
     {
-        $olderThanMinutes = max((int) $this->option('older-than'), 0);
-
         $query = TrackedPerson::query()
             ->where('monitoring_enabled', true)
             ->whereNotNull('instagram_username');
-
-        if (! $this->option('force') && $olderThanMinutes > 0) {
-            $query->where(function ($builder) use ($olderThanMinutes) {
-                $builder
-                    ->whereNull('last_instagram_analyzed_at')
-                    ->orWhere('last_instagram_analyzed_at', '<=', now()->subMinutes($olderThanMinutes));
-            });
-        }
 
         $count = 0;
 
