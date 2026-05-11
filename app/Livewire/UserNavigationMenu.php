@@ -3,63 +3,72 @@
 namespace App\Livewire;
 
 use Livewire\Component;
-use App\Models\Message;
 
 class UserNavigationMenu extends Component
 {
-
-    
     public $currentUrl;
-    public $receivedMessages;
-    public $unreadMessagesCount;
 
+    public $receivedMessages;
+
+    public $unreadMessagesCount;
 
     public $message;
 
-    protected $listeners = ['refreshComponent' => '$refresh',];
+    protected $listeners = [
+        'refreshComponent' => 'refreshNavigationData',
+        'refresh-user-navigation-menu' => 'refreshNavigationData',
+    ];
 
-    public function mount()
+    public function mount(): void
     {
-        if (auth()->check()) {
-            $this->receivedMessages = auth()->user()
-                ->receivedMessages
-                ->sort(function ($a, $b) {
-                    // Priorität: Status (ungelesen zuerst)
-                    if ($a->status !== $b->status) {
-                        return $a->status <=> $b->status; // Ungelesene zuerst
-                    }
-                    // Zweite Priorität: Erstellungsdatum (neueste zuerst)
-                    return $b->created_at <=> $a->created_at;
-                })
-                ->take(3);
-            $this->unreadMessagesCount= auth()->user()->receivedUnreadMessages->count();
-
-        }
-        $this->currentUrl = url()->current();
+        $this->refreshNavigationData();
     }
 
-    public function setMessageStatus($messageId)
+    public function refreshNavigationData(): void
     {
-        $this->message = auth()->user()->receivedMessages->firstWhere('id', $messageId);
-        $this->message->update([
-            'status' => 2, 
-        ]);
-        $this->message->save();
+        $this->currentUrl = url()->current();
 
-        $this->receivedMessages = auth()->user()
-                ->receivedMessages
-                ->sort(function ($a, $b) {
-                    // Priorität: Status (ungelesen zuerst)
-                    if ($a->status !== $b->status) {
-                        return $a->status <=> $b->status; // Ungelesene zuerst
-                    }
-                    // Zweite Priorität: Erstellungsdatum (neueste zuerst)
-                    return $b->created_at <=> $a->created_at;
-                })
-                ->take(3);
-        $this->unreadMessagesCount= auth()->user()->receivedUnreadMessages->count();
-        
-        
+        if (! auth()->check()) {
+            $this->receivedMessages = collect();
+            $this->unreadMessagesCount = 0;
+
+            return;
+        }
+
+        $user = auth()->user();
+
+        $this->receivedMessages = $user
+            ->receivedMessages()
+            ->orderBy('status')
+            ->orderByDesc('created_at')
+            ->limit(3)
+            ->get();
+
+        $this->unreadMessagesCount = $user
+            ->receivedUnreadMessages()
+            ->count();
+    }
+
+    public function setMessageStatus($messageId): void
+    {
+        $this->message = auth()->user()
+            ->receivedMessages()
+            ->find($messageId);
+
+        if (! $this->message) {
+            $this->refreshNavigationData();
+
+            return;
+        }
+
+        $this->message->update([
+            'status' => 2,
+        ]);
+
+        $this->refreshNavigationData();
+
+        // Sound-Benachrichtigung abspielen
+        $this->dispatch('playNotificationSound');
     }
 
     public function render()

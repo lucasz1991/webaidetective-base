@@ -1,4 +1,4 @@
-<div class="space-y-6">
+<div class="space-y-6" wire:poll.visible.10000ms>
     @php
         $detailStatusClass = match ($detailStatusLevel ?? 'neutral') {
             'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
@@ -79,18 +79,18 @@
                     class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800"
                 >
                     Person speichern
-                </button>
-            </div>
+                </button> 
+            </div> 
         </div>
 
         @if($detailStatus)
             <div class="mt-5 rounded-2xl border p-4 text-sm {{ $detailStatusClass }}">
                 {{ $detailStatus }}
-            </div>
+            </div> 
         @endif
     </section>
 
-    <section class="grid gap-4 md:grid-cols-4">
+    <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
             <div class="mt-2 text-2xl font-bold text-slate-900">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '—' }}</div>
@@ -106,6 +106,10 @@
         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Bekannte Daten</div>
             <div class="mt-2 text-2xl font-bold text-slate-900">{{ number_format($trackedPerson->knownFacts->count()) }}</div>
+        </div>
+        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Oeffentliche Profile</div>
+            <div class="mt-2 text-2xl font-bold text-slate-900">{{ number_format($trackedPerson->publicProfiles->count()) }}</div>
         </div>
     </section>
 
@@ -216,6 +220,115 @@
                     <div class="flex justify-end">
                         <button wire:click="saveKnownFact" class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800">
                             Daten speichern
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h3 class="text-lg font-bold text-slate-900">Bekannte oeffentliche Profile</h3>
+                <p class="mt-1 text-sm text-slate-600">
+                    Hier speicherst du oeffentlich sichtbare Profile, die nachweisbar mit dieser Person verbunden sind.
+                </p>
+
+                <div class="mt-4 space-y-3">
+                    @forelse($trackedPerson->publicProfiles as $publicProfile)
+                        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                            <div class="flex flex-wrap items-start justify-between gap-3">
+                                <div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <span class="font-semibold text-slate-900">
+                                            {{ $publicProfile->display_name ?: $publicProfile->display_handle }}
+                                        </span>
+                                        <span class="rounded-full bg-white px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            {{ $publicProfile->platform }}
+                                        </span>
+                                        <span class="rounded-full bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-800">
+                                            {{ $publicProfile->relationship_label }}
+                                        </span>
+                                        @if($publicProfile->is_public)
+                                            <span class="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-semibold text-emerald-800">
+                                                Oeffentlich bestaetigt
+                                            </span>
+                                        @endif
+                                    </div>
+                                    <div class="mt-1 text-slate-600">{{ $publicProfile->display_handle }}</div>
+                                    @if($publicProfile->notes)
+                                        <p class="mt-2 whitespace-pre-wrap text-xs text-slate-500">{{ $publicProfile->notes }}</p>
+                                    @endif
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    @if($publicProfile->resolved_profile_url)
+                                        <a href="{{ $publicProfile->resolved_profile_url }}" target="_blank" class="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white">
+                                            Profil oeffnen
+                                        </a>
+                                    @endif
+                                    <button wire:click="deletePublicProfile({{ $publicProfile->id }})" class="rounded-xl border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50">
+                                        Entfernen
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    @empty
+                        <p class="text-sm text-slate-500">Bisher wurden noch keine bekannten oeffentlichen Profile hinterlegt.</p>
+                    @endforelse
+                </div>
+
+                <div class="mt-5 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div class="grid gap-3 md:grid-cols-2">
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Plattform</label>
+                            <select wire:model.defer="publicProfilePlatform" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                <option value="instagram">Instagram</option>
+                                <option value="tiktok">TikTok</option>
+                                <option value="facebook">Facebook</option>
+                                <option value="x">X / Twitter</option>
+                                <option value="youtube">YouTube</option>
+                                <option value="snapchat">Snapchat</option>
+                                <option value="other">Andere Plattform</option>
+                            </select>
+                            @error('publicProfilePlatform') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Handle / Nutzername</label>
+                            <input type="text" wire:model.defer="publicProfileUsername" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="@profilname">
+                            @error('publicProfileUsername') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        </div>
+                    </div>
+                    <div class="grid gap-3 md:grid-cols-2">
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Anzeigename</label>
+                            <input type="text" wire:model.defer="publicProfileDisplayName" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="Optionaler Klarname">
+                            @error('publicProfileDisplayName') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Beziehungsart</label>
+                            <select wire:model.defer="publicProfileRelationshipType" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                <option value="follows_target">Folgt der Person</option>
+                                <option value="followed_by_target">Wird von der Person gefolgt</option>
+                                <option value="mutual">Gegenseitige Verbindung</option>
+                                <option value="public_connection">Allgemeine oeffentliche Verbindung</option>
+                            </select>
+                            @error('publicProfileRelationshipType') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        </div>
+                    </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700">Profil-URL</label>
+                        <input type="url" wire:model.defer="publicProfileUrl" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="Optional, falls du die exakte URL speichern willst">
+                        @error('publicProfileUrl') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                    </div>
+                    <label class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+                        <input type="checkbox" wire:model.defer="publicProfileIsPublic" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                        <span class="font-medium">Profil ist oeffentlich bestaetigt</span>
+                    </label>
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700">Notizen</label>
+                        <textarea wire:model.defer="publicProfileNotes" rows="3" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="Warum dieses Profil relevant ist, z. B. gegenseitige Erwaehnungen oder bekannte Verbindungen"></textarea>
+                        @error('publicProfileNotes') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                    </div>
+                    <div class="flex justify-end">
+                        <button wire:click="savePublicProfile" class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800">
+                            Oeffentliches Profil speichern
                         </button>
                     </div>
                 </div>
@@ -350,22 +463,40 @@
                         </div>
                     @endif
 
-                    @if($latestSnapshot->media->isNotEmpty())
+                    @if($latestSnapshot->profile_image_storage_url)
                         <div class="mt-4">
-                            <h4 class="text-sm font-semibold text-slate-900">Gespeicherte Bilder der letzten Analyse</h4>
-                            <div class="mt-3 grid grid-cols-2 gap-3">
-                                @foreach($latestSnapshot->media as $media)
-                                    @if($media->storage_url)
-                                        <a href="{{ $media->storage_url }}" target="_blank" class="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
-                                            <img src="{{ $media->storage_url }}" alt="Gespeichertes Medienbild" class="h-32 w-full object-cover">
-                                        </a>
-                                    @endif
-                                @endforeach
+                            <h4 class="text-sm font-semibold text-slate-900">Gespeichertes Profilbild der letzten Analyse</h4>
+                            <div class="mt-3">
+                                <a href="{{ $latestSnapshot->profile_image_storage_url }}" target="_blank" class="block overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
+                                    <img src="{{ $latestSnapshot->profile_image_storage_url }}" alt="Gespeichertes Profilbild" class="h-40 w-full object-cover">
+                                </a>
                             </div>
                         </div>
                     @endif
                 @else
                     <p class="mt-4 text-sm text-slate-500">Bisher wurde noch keine Instagram-Analyse gespeichert.</p>
+                @endif
+            </div>
+
+            <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                <h3 class="text-lg font-bold text-slate-900">Profilbild-Historie</h3>
+                <p class="mt-1 text-sm text-slate-600">
+                    Gespeichert werden nur eindeutig dem analysierten Profil zuordenbare Profilbilder, keine Vorschlagsbilder oder Bilder des eingeloggten Such-Profils.
+                </p>
+
+                @if($profileImageHistory->isNotEmpty())
+                    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        @foreach($profileImageHistory as $profileImage)
+                            <a href="{{ $profileImage->storage_url }}" target="_blank" class="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-sm">
+                                <img src="{{ $profileImage->storage_url }}" alt="Gespeichertes Profilbild" class="h-44 w-full object-cover">
+                                <div class="border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
+                                    {{ optional($profileImage->snapshot?->analyzed_at)->format('d.m.Y H:i') ?: 'Unbekanntes Datum' }}
+                                </div>
+                            </a>
+                        @endforeach
+                    </div>
+                @else
+                    <p class="mt-4 text-sm text-slate-500">Bisher wurden noch keine Profilbilder in der Historie gespeichert.</p>
                 @endif
             </div>
 

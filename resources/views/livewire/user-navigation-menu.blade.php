@@ -1,4 +1,5 @@
 <div
+    wire:poll.15000ms="refreshNavigationData"
     x-data="{ 
         isMobileMenuOpen: false, 
         screenWidth: window.innerWidth, 
@@ -56,7 +57,6 @@
                  <div class="container mx-auto flex justify-between items-center ">
                     @if (optional(Auth::user())->role === 'guest')
                          <div class="max-md:order-1  md:order-2 flex-none self-stretch" @click="isMobileMenuOpen = false">
-                             <livewire:tools.search-modal />
                          </div>
                     @endif
                          <div class="flex-none flex items-center h-full py-2 max-md:order-1" @click="$dispatch('navhide')">
@@ -356,6 +356,32 @@
                              </div>
                  </div>
              </div>
+        </div>
+    </div>
+</div>
+
+<!-- Notification Sound Player -->
+<audio id="notification-sound" preload="auto" style="display: none;">
+    <source src="{{ asset('sounds/notification.mp3') }}" type="audio/mpeg">
+</audio>
+
+@script
+<script>
+    Livewire.on('playNotificationSound', () => {
+        try {
+            const audio = document.getElementById('notification-sound');
+            if (audio) {
+                audio.currentTime = 0;
+                audio.play().catch(err => {
+                    console.log('[Sound] Benachrichtigungston konnte nicht abgespielt werden:', err.message);
+                });
+            }
+        } catch (error) {
+            console.error('[Sound] Fehler beim Abspielen:', error.message);
+        }
+    });
+</script>
+@endscript
             </nav>
     </div>
     <div :style="'height: ' + navHeight + 'px'" class="min-h-12 md:min-h-[4rem] duration-300 ease-in-out transition-all" > </div>

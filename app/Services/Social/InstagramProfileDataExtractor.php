@@ -245,26 +245,18 @@ class InstagramProfileDataExtractor
 
     private function extractImageUrls(string $html, ?string $profileImageUrl): array
     {
-        $urls = [];
-
-        if ($profileImageUrl) {
-            $urls[] = $profileImageUrl;
+        if (! $profileImageUrl) {
+            return [];
         }
 
-        preg_match_all('/https?:\\\\\/\\\\\/scontent[^"\'<\s]+/iu', $html, $escapedMatches);
-        preg_match_all('/https?:\/\/scontent[^"\'<\s]+/iu', $html, $plainMatches);
+        $decodedUrl = html_entity_decode((string) $profileImageUrl, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $decodedUrl = str_replace(['\\/', '\u0026', '&amp;'], ['/', '&', '&'], $decodedUrl);
 
-        foreach (array_merge($escapedMatches[0] ?? [], $plainMatches[0] ?? []) as $rawUrl) {
-            $decodedUrl = str_replace(['\\/', '\u0026', '&amp;'], ['/', '&', '&'], $rawUrl);
-            $decodedUrl = html_entity_decode($decodedUrl, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-
-            if (! Str::startsWith($decodedUrl, 'http')) {
-                continue;
-            }
-
-            $urls[] = $decodedUrl;
+        if (! Str::startsWith($decodedUrl, 'http')) {
+            return [];
         }
 
-        return array_values(array_slice(array_unique($urls), 0, 10));
+        // Nur das eindeutig dem Zielprofil zuordenbare Profilbild speichern.
+        return [$decodedUrl];
     }
 }

@@ -63,7 +63,13 @@ class TrackedPersonInstagramAnalysisService
                 'analyzed_at' => $payload['scrapedAt'] ?? $analyzedAt,
             ]);
 
-            $storedMedia = $this->storeSnapshotMedia($trackedPerson, $snapshot, $extracted['image_urls'] ?? [], $persistedWarnings);
+            $storedMedia = $this->storeSnapshotMedia(
+                $trackedPerson,
+                $snapshot,
+                $extracted['image_urls'] ?? [],
+                $persistedWarnings,
+                $previousSnapshot,
+            );
             $profileMedia = collect($storedMedia)->firstWhere('is_profile_image', true);
             $profileImagePath = $profileMedia['storage_path'] ?? null;
             $profileImageHash = $profileMedia['content_hash'] ?? null;
@@ -291,14 +297,37 @@ class TrackedPersonInstagramAnalysisService
         TrackedPersonInstagramSnapshot $snapshot,
         array $imageUrls,
         array &$persistedWarnings,
+        ?TrackedPersonInstagramSnapshot $previousSnapshot = null,
     ): array {
         $storedMedia = [];
         $directory = 'tracked-people/'.$trackedPerson->id.'/instagram/'.$snapshot->analyzed_at->format('YmdHis').'-'.$snapshot->id;
+        $previousProfileImageHash = $previousSnapshot?->profile_image_hash;
+        $previousProfileImagePath = $previousSnapshot?->profile_image_path;
 
         foreach (array_values($imageUrls) as $index => $imageUrl) {
             $mediaType = $index === 0 ? 'profile' : 'image';
             $isProfileImage = $index === 0;
-            $downloadedMedia = $this->downloadImage($imageUrl, $directory, $mediaType, $index, $persistedWarnings);
+            $downloadedMedia = $this->downloadImage(
+                $imageUrl,
+                $directory,
+                $mediaType,
+                $index,
+                $persistedWarnings,
+                $isProfileImage ? $previousProfileImageHash : null,
+                $isProfileImage ? $previousProfileImagePath : null,
+            );
+
+            if (($downloadedMedia['should_create_media_row'] ?? true) === false) {
+                $storedMedia[] = [
+                    'source_url' => $imageUrl,
+                    'storage_path' => $downloadedMedia['storage_path'] ?? null,
+                    'content_hash' => $downloadedMedia['content_hash'] ?? null,
+                    'is_profile_image' => $isProfileImage,
+                    'reused_existing' => true,
+                ];
+
+                continue;
+            }
 
             $snapshot->media()->create([
                 'tracked_person_id' => $trackedPerson->id,
@@ -315,6 +344,7 @@ class TrackedPersonInstagramAnalysisService
                 'storage_path' => $downloadedMedia['storage_path'] ?? null,
                 'content_hash' => $downloadedMedia['content_hash'] ?? null,
                 'is_profile_image' => $isProfileImage,
+                'reused_existing' => false,
             ];
         }
 
@@ -327,6 +357,8 @@ class TrackedPersonInstagramAnalysisService
         string $mediaType,
         int $index,
         array &$persistedWarnings,
+        ?string $previousProfileImageHash = null,
+        ?string $previousProfileImagePath = null,
     ): array {
         try {
             $response = Http::withHeaders([
@@ -352,6 +384,20 @@ class TrackedPersonInstagramAnalysisService
         }
 
         $body = $response->body();
+        $contentHash = hash('sha256', $body);
+
+        if (
+            $previousProfileImageHash !== null
+            && $previousProfileImagePath !== null
+            && $contentHash === $previousProfileImageHash
+        ) {
+            return [
+                'storage_path' => $previousProfileImagePath,
+                'content_hash' => $contentHash,
+                'should_create_media_row' => false,
+            ];
+        }
+
         $extension = $this->guessExtension($response->header('Content-Type'), $imageUrl);
         $filename = $mediaType.'-'.str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT).'.'.$extension;
         $relativePath = $directory.'/'.$filename;
@@ -360,7 +406,8 @@ class TrackedPersonInstagramAnalysisService
 
         return [
             'storage_path' => $relativePath,
-            'content_hash' => hash('sha256', $body),
+            'content_hash' => $contentHash,
+            'should_create_media_row' => true,
         ];
     }
 
