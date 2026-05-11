@@ -12,14 +12,10 @@ class Kernel extends ConsoleKernel
      */
     protected function schedule(Schedule $schedule): void
     {
-        // Schedule the shelf rentals check command to run at 9 AM, 4 PM, and 7 PM daily
-        // $schedule->command('shelf:check-rentals')->cron('0 9,16,19 * * *');
-
-        // Schedule the rental reminders command to run daily at 12:00 PM
-        // $schedule->command('rental:send-reminders')->dailyAt('12:00');
-
-        // Schedule the exports command to run monthly on the 1st at 2:00 AM
-        // $schedule->command('exports:run')->monthlyOn(1, '02:00');
+        $schedule
+            ->command('tracked-people:run-monitoring --older-than=30')
+            ->everyThirtyMinutes()
+            ->withoutOverlapping();
     }
 
     /**

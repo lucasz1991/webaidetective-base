@@ -24,6 +24,10 @@ Homestead.json
 
 /public/build
 /storage/pail
+/storage/app/tmp
+/storage/app/browser-profiles
+/storage/app/cookies
+/undefined
 .env.backup
 .env.production
 .phpactor.json

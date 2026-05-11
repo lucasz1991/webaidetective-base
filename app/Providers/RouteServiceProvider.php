@@ -19,19 +19,20 @@ class RouteServiceProvider extends ServiceProvider
      * @var string
      */
 
-     public static function home()
-     {
-        if (Auth::check()) {
-            $user = Auth::user();
-            if ($user->role === 'guest') {
-                return '/user/dashboard';
-            } elseif ($user->role === 'tutor') {
-                return '/user/tutor/dashboard';
-            }
-        }else {
+    public static function home(): string
+    {
+        if (! Auth::check()) {
             return '/login';
         }
-     }
+
+        $user = Auth::user();
+
+        return match ($user->role) {
+            'tutor' => '/tutor/dashboard',
+            'guest', 'admin' => '/user/dashboard',
+            default => '/user/dashboard',
+        };
+    }
 
     /**
      * Define your route model bindings, pattern filters, and other route configuration.

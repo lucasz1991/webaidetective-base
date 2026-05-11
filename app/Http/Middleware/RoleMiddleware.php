@@ -17,8 +17,16 @@ class RoleMiddleware
      */
     public function handle($request, Closure $next, $role)
     {
-        if (!Auth::check() || Auth::user()->role !== $role) {
-                return redirect(RouteServiceProvider::home());
+        if (! Auth::check()) {
+            return redirect(RouteServiceProvider::home());
+        }
+
+        if (Auth::user()->role === 'admin') {
+            return $next($request);
+        }
+
+        if (Auth::user()->role !== $role) {
+            return redirect(RouteServiceProvider::home());
         }
 
         return $next($request);

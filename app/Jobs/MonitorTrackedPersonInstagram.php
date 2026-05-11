@@ -1,0 +1,101 @@
+<?php
+
+namespace App\Jobs;
+
+use App\Models\TrackedPerson;
+use Illuminate\Bus\Queueable;
+use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Queue\InteractsWithQueue;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Log;
+
+class MonitorTrackedPersonInstagram implements ShouldQueue
+{
+    use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
+
+    public function __construct(
+        public readonly int $trackedPersonId,
+    ) {
+    }
+
+    public function handle(): void
+    {
+        $trackedPerson = TrackedPerson::query()
+            ->with('user')
+            ->find($this->trackedPersonId);
+
+        if (! $trackedPerson || ! $trackedPerson->monitoring_enabled || ! $trackedPerson->instagram_username) {
+            return;
+        }
+
+        try {
+            $snapshot = $trackedPerson->analyzeInstagram();
+        } catch (\Throwable $exception) {
+            Log::warning('Monitoring fuer getrackte Person fehlgeschlagen.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'instagram_username' => $trackedPerson->instagram_username,
+                'error' => $exception->getMessage(),
+            ]);
+
+            return;
+        }
+
+        if (! $trackedPerson->notify_social_changes || ! $snapshot->has_changes) {
+            return;
+        }
+
+        $owner = $trackedPerson->user;
+
+        if (! $owner) {
+            return;
+        }
+
+        $owner->sendMessage(
+            $owner->id,
+            'Aenderungen bei '.$trackedPerson->display_name,
+            $this->buildNotificationMessage($trackedPerson, $snapshot),
+        );
+    }
+
+    private function buildNotificationMessage(TrackedPerson $trackedPerson, $snapshot): string
+    {
+        $changesMarkup = collect($snapshot->detected_changes ?? [])
+            ->map(function (array $change) {
+                $before = $this->formatChangeValue(Arr::get($change, 'before'));
+                $after = $this->formatChangeValue(Arr::get($change, 'after'));
+                $label = e((string) (Arr::get($change, 'label') ?: Arr::get($change, 'field', 'Aenderung')));
+
+                return '<li><strong>'.$label.':</strong> '.$before.' &rarr; '.$after.'</li>';
+            })
+            ->implode('');
+
+        $timestamp = optional($snapshot->analyzed_at)->format('d.m.Y H:i') ?: now()->format('d.m.Y H:i');
+        $username = $trackedPerson->instagram_username ? '@'.e($trackedPerson->instagram_username) : 'ohne Instagram-Namen';
+
+        return implode('', [
+            '<p>Bei <strong>'.e($trackedPerson->display_name).'</strong> wurden waehrend der automatischen Dauerbeobachtung Aenderungen erkannt.</p>',
+            '<p><strong>Profil:</strong> '.$username.'<br><strong>Analysezeit:</strong> '.e($timestamp).'</p>',
+            '<ul>'.$changesMarkup.'</ul>',
+            '<p><strong>Status:</strong> '.e((string) $snapshot->status_message).'</p>',
+        ]);
+    }
+
+    private function formatChangeValue(mixed $value): string
+    {
+        if ($value === null || $value === '') {
+            return '—';
+        }
+
+        if (is_numeric($value)) {
+            return number_format((float) $value, 0, ',', '.');
+        }
+
+        if (is_string($value) && strlen($value) === 64 && preg_match('/^[a-f0-9]{64}$/i', $value)) {
+            return 'Hash '.e(substr($value, 0, 12)).'...';
+        }
+
+        return e((string) $value);
+    }
+}

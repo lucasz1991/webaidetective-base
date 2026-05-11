@@ -72,6 +72,11 @@ class User extends Authenticatable
     {
         return $this->hasOne(Customer::class, 'user_id');
     }
+
+    public function trackedPeople()
+    {
+        return $this->hasMany(TrackedPerson::class);
+    }
     
     public function receivedMessages()
     {

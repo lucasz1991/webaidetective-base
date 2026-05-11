@@ -1,0 +1,109 @@
+<?php
+
+namespace App\Models;
+
+use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Facades\Storage;
+
+class TrackedPerson extends Model
+{
+    use HasFactory;
+
+    protected $fillable = [
+        'user_id',
+        'first_name',
+        'last_name',
+        'alias',
+        'date_of_birth',
+        'city',
+        'country',
+        'notes',
+        'instagram_username',
+        'tiktok_username',
+        'facebook_username',
+        'x_username',
+        'youtube_username',
+        'snapchat_username',
+        'notify_social_changes',
+        'notify_instagram_changes',
+        'notify_tiktok_changes',
+        'notify_facebook_changes',
+        'notify_x_changes',
+        'notify_youtube_changes',
+        'notify_snapchat_changes',
+        'monitoring_enabled',
+        'profile_image_path',
+        'profile_image_hash',
+        'instagram_profile_image_path',
+        'instagram_profile_image_hash',
+        'instagram_followers_count',
+        'instagram_following_count',
+        'instagram_posts_count',
+        'last_instagram_status_level',
+        'last_instagram_status_message',
+        'last_instagram_analyzed_at',
+    ];
+
+    protected $casts = [
+        'date_of_birth' => 'date',
+        'last_instagram_analyzed_at' => 'datetime',
+        'notify_social_changes' => 'boolean',
+        'notify_instagram_changes' => 'boolean',
+        'notify_tiktok_changes' => 'boolean',
+        'notify_facebook_changes' => 'boolean',
+        'notify_x_changes' => 'boolean',
+        'notify_youtube_changes' => 'boolean',
+        'notify_snapchat_changes' => 'boolean',
+        'monitoring_enabled' => 'boolean',
+    ];
+
+    protected $appends = [
+        'display_name',
+        'profile_image_url',
+    ];
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    public function knownFacts(): HasMany
+    {
+        return $this->hasMany(TrackedPersonKnownFact::class);
+    }
+
+    public function instagramSnapshots(): HasMany
+    {
+        return $this->hasMany(TrackedPersonInstagramSnapshot::class);
+    }
+
+    public function latestInstagramSnapshot(): HasOne
+    {
+        return $this->hasOne(TrackedPersonInstagramSnapshot::class)->latestOfMany('analyzed_at');
+    }
+
+    public function getDisplayNameAttribute(): string
+    {
+        return trim(collect([$this->first_name, $this->last_name])->implode(' '))
+            ?: ($this->alias ?: 'Unbenannte Person');
+    }
+
+    public function getProfileImageUrlAttribute(): ?string
+    {
+        if (! $this->profile_image_path) {
+            return null;
+        }
+
+        return Storage::disk('public')->url($this->profile_image_path);
+    }
+
+    public function analyzeInstagram(): TrackedPersonInstagramSnapshot
+    {
+        return app(TrackedPersonInstagramAnalysisService::class)->analyze($this);
+    }
+}
