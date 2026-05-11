@@ -63,10 +63,7 @@
     @click.away="isMobileMenuOpen = false"
     >
     <div>
-        <nav x-ref="nav"  :style="(!showNav && !isMobileMenuOpen ) ? 'margin-top: -'+navHeight+'px': 'margin-top:0px;' " class="fixed  w-screen bg-white   z-30 transition-all duration-300 ease-in-out"  
-                wire:loading.class="cursor-wait"
-                
-            >
+        <nav x-ref="nav"  :style="(!showNav && !isMobileMenuOpen ) ? 'margin-top: -'+navHeight+'px': 'margin-top:0px;' " class="fixed  w-screen bg-white   z-30 transition-all duration-300 ease-in-out"  wire:loading.class="cursor-wait">
              <div class="w-full border-b border-gray-300 px-3 md:px-8">
 
                  <!-- Primary Navigation Menu -->
