@@ -1,18 +1,58 @@
 <div
     wire:poll.15000ms="refreshNavigationData"
-    x-data="{ 
-        isMobileMenuOpen: false, 
-        screenWidth: window.innerWidth, 
+    x-data="{
+        isMobileMenuOpen: false,
         navHeight: $persist(113).using(sessionStorage),
         isMobile: false,
-        isScrolled: false,
         scrollTop: 0,
         lastScrollTop: 0,
         showNav: true,
         notificationAudio: null,
+        notificationSoundUrl: @js(asset('sounds/notification.wav')),
+        soundListenerCleanup: null,
+
+        init() {
+            this.$nextTick(() => {
+                this.navHeight = this.$refs.nav.offsetHeight;
+                this.isMobile = window.innerWidth <= 768;
+            });
+
+            this.soundListenerCleanup = Livewire.on('playNotificationSound', () => {
+                this.playNotificationSound();
+            });
+        },
+
+        destroy() {
+            this.soundListenerCleanup?.();
+        },
+
+        handleScroll() {
+            this.scrollTop = window.scrollY;
+
+            const scrollingDown = this.scrollTop > this.lastScrollTop;
+            const scrollingUp = this.scrollTop < this.lastScrollTop;
+
+            if (scrollingDown && this.scrollTop > 120) {
+                this.$dispatch('navhide');
+                this.showNav = false;
+            } else if ((scrollingUp && (this.lastScrollTop - this.scrollTop) >= 30) || this.scrollTop < 120) {
+                this.showNav = true;
+            }
+
+            this.lastScrollTop = this.scrollTop;
+        },
+
+        handleResize() {
+            this.$nextTick(() => {
+                this.isMobile = window.innerWidth <= 768;
+                this.isMobileMenuOpen = false;
+                this.navHeight = this.$refs.nav.offsetHeight;
+            });
+        },
+
         playNotificationSound() {
             if (!this.notificationAudio) {
-                this.notificationAudio = new Audio('{{ asset('sounds/notification.wav') }}');
+                this.notificationAudio = new Audio(this.notificationSoundUrl);
                 this.notificationAudio.preload = 'auto';
             }
 
@@ -21,58 +61,23 @@
                 console.log('[Sound] Benachrichtigungston konnte nicht abgespielt werden:', err.message);
             });
         }
-    }" 
-    x-init="$nextTick(() => {
-        navHeight = $refs.nav.offsetHeight;
-        isMobile = window.innerWidth <= 768;
-    });
-
-    Livewire.on('playNotificationSound', () => {
-        playNotificationSound();
-    });"
-
-    x-on:scroll.window="
-        scrollTop = window.scrollY;
-        isScrolled = scrollTop > 0;
-
-        const scrollingDown = scrollTop > lastScrollTop;
-        const scrollingUp = scrollTop < lastScrollTop;
-
-        if (scrollingDown && scrollTop > 120) {
-            $dispatch('navhide');
-            showNav = false;
-        } else if (scrollingUp && (lastScrollTop - scrollTop) >= 30 || scrollTop < 120) {
-            showNav = true;
-        }
-
-        lastScrollTop = scrollTop;
-    "
-
-    x-resize="
-        $nextTick(() => {
-            screenWidth = window.innerWidth;
-            if (screenWidth <= 768) {
-                isMobile = true;
-                isMobileMenuOpen = false;
-            } else {
-                isMobile = false;
-                isMobileMenuOpen = false;
-            }
-            navHeight = $refs.nav.offsetHeight; 
-        })"
-    @click.away="isMobileMenuOpen = false"
+    }"
+    x-init="init()"
+    x-on:scroll.window="handleScroll()"
+    x-resize="handleResize()"
+    x-on:click.outside="isMobileMenuOpen = false"
+>
+    <nav
+        x-ref="nav"
+        :style="(!showNav && !isMobileMenuOpen) ? 'margin-top: -' + navHeight + 'px' : 'margin-top: 0px'"
+        class="fixed z-30 w-screen bg-white transition-all duration-300 ease-in-out"
+        wire:loading.class="cursor-wait"
     >
-    <div>
-        <nav x-ref="nav"  :style="(!showNav && !isMobileMenuOpen ) ? 'margin-top: -'+navHeight+'px': 'margin-top:0px;' " class="fixed  w-screen bg-white   z-30 transition-all duration-300 ease-in-out"  wire:loading.class="cursor-wait">
              <div class="w-full border-b border-gray-300 px-3 md:px-8">
 
                  <!-- Primary Navigation Menu -->
                  <div class="container mx-auto flex justify-between items-center ">
-                    @if (optional(Auth::user())->role === 'guest')
-                         <div class="max-md:order-1  md:order-2 flex-none self-stretch" @click="isMobileMenuOpen = false">
-                         </div>
-                    @endif
-                         <div class="flex-none flex items-center h-full py-2 max-md:order-1" @click="$dispatch('navhide')">
+                        <div class="flex-none flex items-center h-full py-2 max-md:order-1" @click="$dispatch('navhide')">
                              <a href="{{ \App\Providers\RouteServiceProvider::home() }}" wire:navigate   class="h-full flex items-center max-sm:max-w-[120px]">
                                  <x-application-mark />
                              </a>
@@ -119,7 +124,7 @@
                                          x-cloak
                                          class="absolute md:p-4 right-0 md:mt-2 md:w-[24.5rem] max-md:fixed max-md:inset-0 max-md:w-full max-md:top-0 max-md:flex max-md:items-center max-md:justify-center max-md:bg-black max-md:bg-opacity-50 max-md:z-50"
                                          x-transition>
-                                         <div @click.away="open = false" class="relative max-w-full max-md:pt-10 divide-y divide-slate-400/20 rounded-lg bg-white text-[0.8125rem]/5 text-slate-900 ring-1 shadow-xl shadow-black/5 ring-slate-700/10 z-50">
+                                        <div x-on:click.outside="open = false" class="relative max-w-full max-md:pt-10 divide-y divide-slate-400/20 rounded-lg bg-white text-[0.8125rem]/5 text-slate-900 ring-1 shadow-xl shadow-black/5 ring-slate-700/10 z-50">
                                                      <button type="button" @click="open = false; selectedMessage = null;" class="md:hidden absolute top-2 right-2 text-gray-400 hover:text-gray-600">
                                                          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -165,7 +170,7 @@
                                              x-transition:leave="transition ease-in duration-200"
                                              x-transition:leave-start="opacity-100"
                                              x-transition:leave-end="opacity-0">
-                                         <div @click.away="modalOpen = false"  class="bg-white w-[90%] max-w-md rounded-lg shadow-lg p-6 relative">
+                                        <div x-on:click.outside="modalOpen = false" class="relative w-[90%] max-w-md rounded-lg bg-white p-6 shadow-lg">
                                              <div>
                                                  <button type="button" @click="modalOpen = false; selectedMessage = null;" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
                                                      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -190,12 +195,13 @@
                                                  </div>
                                          </div>
                                      </div>
-                                 </div>
-                                 @endif
-                             </div>
-             
-             
-                             <div class="hidden md:block">
+                                </div>
+                                @endif
+                            </div>
+
+
+
+                            <div class="hidden md:block">
              
                                  @auth
                                      <!-- Settings Dropdown -->
@@ -367,12 +373,8 @@
                                      </div>
                                  </div>
                              </div>
-                 </div>
-             </div>
-        </div>
-    </div>
-            </nav>
-    </div>
-    <div :style="'height: ' + navHeight + 'px'" class="min-h-12 md:min-h-[4rem] duration-300 ease-in-out transition-all" > </div>
-    <div id="megamenu"   class="transition-all duration-200 ease-in-out "></div>
+                </div>
+    </nav>
+    <div :style="'height: ' + navHeight + 'px'" class="min-h-12 transition-all duration-300 ease-in-out md:min-h-[4rem]"></div>
+    <div id="megamenu" class="transition-all duration-200 ease-in-out"></div>
 </div>
