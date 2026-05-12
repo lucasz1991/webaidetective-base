@@ -156,6 +156,7 @@ class InstagramScraper
         $expected = (int) ($event['expectedCount'] ?? 0);
         $round = (int) ($event['round'] ?? 0);
         $maxRounds = max(1, (int) ($event['maxScrollRounds'] ?? 1));
+        $openAttempt = (int) ($event['openAttempt'] ?? 0);
         $stage = (string) ($event['stage'] ?? '');
         $phasePercent = match ($stage) {
             'relationship-opening' => 2,
@@ -176,19 +177,36 @@ class InstagramScraper
             'loaded' => $loaded,
             'expected' => $expected,
             'round' => $round,
-            'message' => $this->buildProgressMessage($phase, $stage, $loaded, $expected),
+            'openAttempt' => $openAttempt,
+            'message' => $this->buildProgressMessage($phase, $stage, $loaded, $expected, $openAttempt),
         ];
     }
 
-    private function buildProgressMessage(string $phase, string $stage, int $loaded, int $expected): string
+    private function buildProgressMessage(string $phase, string $stage, int $loaded, int $expected, int $openAttempt = 0): string
     {
         if ($phase === 'followers') {
+            if ($stage === 'relationship-reopening') {
+                return 'Followerliste wird erneut geoeffnet'.($openAttempt > 0 ? ' (Pass '.$openAttempt.')' : '').': '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
+            }
+
+            if ($stage === 'relationship-pass-complete') {
+                return 'Followerlisten-Pass abgeschlossen: '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
+            }
+
             return $expected > 0
                 ? 'Followerliste wird geladen: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.')
                 : 'Followerliste wird geladen: '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
         }
 
         if ($phase === 'following') {
+            if ($stage === 'relationship-reopening') {
+                return 'Gefolgt-Liste wird erneut geoeffnet'.($openAttempt > 0 ? ' (Pass '.$openAttempt.')' : '').': '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
+            }
+
+            if ($stage === 'relationship-pass-complete') {
+                return 'Gefolgt-Listen-Pass abgeschlossen: '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
+            }
+
             return $expected > 0
                 ? 'Gefolgt-Liste wird geladen: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.')
                 : 'Gefolgt-Liste wird geladen: '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';

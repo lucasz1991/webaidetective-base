@@ -66,6 +66,10 @@ class InstagramProfileDataExtractor
             'complete' => (bool) data_get($relationshipList, 'complete', false),
             'count' => count($items),
             'maxItems' => (int) data_get($relationshipList, 'maxItems', 0),
+            'expectedCount' => (int) data_get($relationshipList, 'expectedCount', 0),
+            'openAttempts' => (int) data_get($relationshipList, 'openAttempts', 0),
+            'scrollRounds' => (int) data_get($relationshipList, 'scrollRounds', 0),
+            'noProgressReopenLimit' => (int) data_get($relationshipList, 'noProgressReopenLimit', 0),
             'reason' => data_get($relationshipList, 'reason'),
             'items' => $items,
         ];

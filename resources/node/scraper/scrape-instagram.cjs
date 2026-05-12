@@ -115,6 +115,7 @@ const shouldCollectFollowers = operationMode === 'analyze' || isFollowersOnlyMod
 const shouldCollectFollowing = operationMode === 'analyze' || isFollowingOnlyMode;
 const DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS = 0;
 const DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS = 100000;
+const RELATIONSHIP_NO_PROGRESS_REOPEN_LIMIT = 2;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -347,6 +348,24 @@ function buildBrowserUserDataDir(runtimeConfig) {
   return fs.mkdtempSync(
     path.join(runtimeTempDirectory, 'puppeteer-profile-'),
   );
+}
+
+function hasDisplayServer() {
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    return true;
+  }
+
+  return Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+}
+
+function resolvePuppeteerHeadlessMode(runtimeConfig) {
+  const requestedHeadful = isLoginSessionMode || runtimeConfig?.headlessEnabled === false;
+
+  if (requestedHeadful && hasDisplayServer()) {
+    return false;
+  }
+
+  return 'new';
 }
 
 function shouldCleanupBrowserProfile(runtimeConfig, browserUserDataDir) {
@@ -893,6 +912,37 @@ async function collectFollowerEntriesFromDialog(page) {
   }).catch(() => []);
 }
 
+async function waitForRelationshipDialogUpdate(page, previousState = {}, timeoutMs = 650) {
+  return page.waitForFunction((state) => {
+    const dialog = document.querySelector('div[role="dialog"]');
+    const root = dialog || document.body;
+    const candidates = dialog
+      ? Array.from(dialog.querySelectorAll('div, ul, section'))
+        .filter((element) => element.scrollHeight > element.clientHeight + 40)
+      : [];
+    const scrollTarget = candidates
+      .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight))[0];
+    const profileLinkCount = Array.from(root.querySelectorAll('a[href]'))
+      .filter((anchor) => {
+        try {
+          const parts = new URL(anchor.getAttribute('href'), window.location.origin)
+            .pathname
+            .split('/')
+            .filter(Boolean);
+
+          return parts.length === 1;
+        } catch (error) {
+          return false;
+        }
+      })
+      .length;
+    const scrollHeight = scrollTarget?.scrollHeight || document.documentElement.scrollHeight || 0;
+
+    return profileLinkCount > (state.profileLinkCount || 0)
+      || scrollHeight > (state.scrollHeight || 0);
+  }, { timeout: timeoutMs }, previousState).then(() => true).catch(() => false);
+}
+
 async function scrollFollowerDialog(page) {
   return page.evaluate(() => {
     const dialog = document.querySelector('div[role="dialog"]');
@@ -909,6 +959,7 @@ async function scrollFollowerDialog(page) {
         scrollHeight,
         clientHeight: window.innerHeight,
         atBottom: after + window.innerHeight >= scrollHeight - 8,
+        profileLinkCount: Array.from(document.querySelectorAll('a[href]')).length,
       };
     }
 
@@ -924,6 +975,7 @@ async function scrollFollowerDialog(page) {
         scrollHeight: 0,
         clientHeight: 0,
         atBottom: true,
+        profileLinkCount: Array.from(dialog.querySelectorAll('a[href]')).length,
       };
     }
 
@@ -941,6 +993,7 @@ async function scrollFollowerDialog(page) {
       scrollHeight: scrollTarget.scrollHeight,
       clientHeight: scrollTarget.clientHeight,
       atBottom: after + scrollTarget.clientHeight >= scrollTarget.scrollHeight - 8,
+      profileLinkCount: Array.from(dialog.querySelectorAll('a[href]')).length,
     };
   }).catch(() => ({
     scrolled: false,
@@ -948,7 +1001,14 @@ async function scrollFollowerDialog(page) {
     scrollHeight: 0,
     clientHeight: 0,
     atBottom: false,
+    profileLinkCount: 0,
   }));
+}
+
+async function waitForInstagramRelationshipDialog(page, timeoutMs = 3000) {
+  return page.waitForSelector('div[role="dialog"]', {
+    timeout: timeoutMs,
+  }).then(() => true).catch(() => false);
 }
 
 async function openInstagramRelationshipDialog(page, username, relationship) {
@@ -981,13 +1041,8 @@ async function openInstagramRelationshipDialog(page, username, relationship) {
     return true;
   }, normalizedUsername, normalizedRelationship).catch(() => false);
 
-  if (clicked) {
-    await sleep(1800);
-  }
-
-  const hasDialog = await page.evaluate(() => Boolean(document.querySelector('div[role="dialog"]'))).catch(() => false);
-
-  if (hasDialog) {
+  if (clicked && await waitForInstagramRelationshipDialog(page, 2800)) {
+    await sleep(250);
     return true;
   }
 
@@ -995,7 +1050,11 @@ async function openInstagramRelationshipDialog(page, username, relationship) {
     timeout: 60000,
     waitUntil: 'domcontentloaded',
   }).catch(() => null);
-  await sleep(2200);
+
+  if (await waitForInstagramRelationshipDialog(page, 4500)) {
+    await sleep(250);
+    return true;
+  }
 
   return page.evaluate(() => Boolean(document.querySelector('div[role="dialog"]'))).catch(() => false);
 }
@@ -1029,6 +1088,9 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     expectedCount,
     items: [],
     reason: null,
+    openAttempts: 0,
+    scrollRounds: 0,
+    noProgressReopenLimit: RELATIONSHIP_NO_PROGRESS_REOPEN_LIMIT,
   };
 
   if (profile?.isPrivate) {
@@ -1042,90 +1104,177 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   }
 
   result.attempted = true;
-  progressLog('relationship-opening', {
-    relationship: normalizedRelationship,
-    expectedCount,
-    maxItems,
-  });
-
-  const opened = normalizedRelationship === 'following'
-    ? await openFollowingDialog(page, username)
-    : await openFollowersDialog(page, username);
-
-  if (!opened) {
-    result.reason = `${normalizedRelationship}-dialog-not-found`;
-    progressLog('relationship-dialog-missing', {
-      relationship: normalizedRelationship,
-      reason: result.reason,
-    });
-    return result;
-  }
-
   const usersByUsername = new Map();
   const targetUsername = normalizeInstagramUsername(username);
-  let unchangedRounds = 0;
-  let previousCount = 0;
   let lastScrollState = null;
+  let totalScrollRounds = 0;
+  let openAttempts = 0;
+  let noProgressOpenAttempts = 0;
+  let stopReason = null;
 
-  for (let round = 0; round < maxScrollRounds && (!hasItemLimit || usersByUsername.size < maxItems); round++) {
-    const entries = await collectFollowerEntriesFromDialog(page);
-
-    for (const entry of entries) {
-      const relatedUsername = normalizeInstagramUsername(entry.username);
-
-      if (!relatedUsername || relatedUsername === targetUsername || usersByUsername.has(relatedUsername)) {
-        continue;
-      }
-
-      usersByUsername.set(relatedUsername, {
-        username: relatedUsername,
-        displayName: entry.displayName,
-        profileUrl: entry.profileUrl,
-      });
+  const targetReached = () => {
+    if (hasItemLimit && usersByUsername.size >= maxItems) {
+      return true;
     }
 
-    progressLog('relationship-progress', {
+    return expectedCount > 0 && usersByUsername.size >= expectedCount;
+  };
+
+  while (totalScrollRounds < maxScrollRounds && !targetReached()) {
+    openAttempts++;
+
+    progressLog(openAttempts === 1 ? 'relationship-opening' : 'relationship-reopening', {
       relationship: normalizedRelationship,
-      round: round + 1,
       loaded: usersByUsername.size,
       expectedCount,
       maxItems,
+      openAttempt: openAttempts,
       maxScrollRounds,
-      unchangedRounds,
-      atBottom: Boolean(lastScrollState?.atBottom),
     });
 
-    if (hasItemLimit && usersByUsername.size >= maxItems) {
+    const opened = normalizedRelationship === 'following'
+      ? await openFollowingDialog(page, username)
+      : await openFollowersDialog(page, username);
+
+    if (!opened) {
+      stopReason = `${normalizedRelationship}-dialog-not-found`;
+
+      progressLog('relationship-dialog-missing', {
+        relationship: normalizedRelationship,
+        loaded: usersByUsername.size,
+        expectedCount,
+        openAttempt: openAttempts,
+        reason: stopReason,
+      });
+
+      if (usersByUsername.size === 0) {
+        result.reason = stopReason;
+        return result;
+      }
+
       break;
     }
 
-    if (expectedCount > 0 && usersByUsername.size >= expectedCount) {
+    const passStartCount = usersByUsername.size;
+    let unchangedRounds = 0;
+    let previousCount = usersByUsername.size;
+    let passRounds = 0;
+
+    while (totalScrollRounds < maxScrollRounds && !targetReached()) {
+      const entries = await collectFollowerEntriesFromDialog(page);
+
+      for (const entry of entries) {
+        const relatedUsername = normalizeInstagramUsername(entry.username);
+
+        if (!relatedUsername || relatedUsername === targetUsername || usersByUsername.has(relatedUsername)) {
+          continue;
+        }
+
+        usersByUsername.set(relatedUsername, {
+          username: relatedUsername,
+          displayName: entry.displayName,
+          profileUrl: entry.profileUrl,
+        });
+      }
+
+      totalScrollRounds++;
+      passRounds++;
+
+      if (usersByUsername.size === previousCount) {
+        unchangedRounds++;
+      } else {
+        unchangedRounds = 0;
+        previousCount = usersByUsername.size;
+      }
+
+      progressLog('relationship-progress', {
+        relationship: normalizedRelationship,
+        round: totalScrollRounds,
+        passRound: passRounds,
+        openAttempt: openAttempts,
+        loaded: usersByUsername.size,
+        expectedCount,
+        maxItems,
+        maxScrollRounds,
+        unchangedRounds,
+        atBottom: Boolean(lastScrollState?.atBottom),
+      });
+
+      if (targetReached()) {
+        stopReason = expectedCount > 0 && usersByUsername.size >= expectedCount
+          ? 'expected-count-reached'
+          : 'max-items-reached';
+        break;
+      }
+
+      const scrollState = await scrollFollowerDialog(page);
+      lastScrollState = scrollState;
+
+      if (scrollState.atBottom && unchangedRounds >= 5) {
+        stopReason = 'pass-bottom-stale';
+        break;
+      }
+
+      if (!scrollState.scrolled && unchangedRounds >= 3) {
+        stopReason = 'pass-scroll-stale';
+        break;
+      }
+
+      if (unchangedRounds >= 12) {
+        stopReason = 'pass-no-new-items';
+        break;
+      }
+
+      const updated = await waitForRelationshipDialogUpdate(
+        page,
+        scrollState,
+        scrollState.atBottom ? 900 : 550,
+      );
+
+      if (!updated) {
+        await sleep(scrollState.atBottom ? 350 : 180);
+      }
+    }
+
+    const passAdded = usersByUsername.size - passStartCount;
+
+    progressLog('relationship-pass-complete', {
+      relationship: normalizedRelationship,
+      round: totalScrollRounds,
+      passRound: passRounds,
+      openAttempt: openAttempts,
+      loaded: usersByUsername.size,
+      addedThisPass: passAdded,
+      expectedCount,
+      maxItems,
+      maxScrollRounds,
+      complete: targetReached(),
+      reason: stopReason,
+    });
+
+    await closeInstagramDialog(page);
+
+    if (targetReached()) {
       break;
     }
 
-    if (usersByUsername.size === previousCount) {
-      unchangedRounds++;
+    if (totalScrollRounds >= maxScrollRounds) {
+      stopReason = 'max-scroll-rounds-reached';
+      break;
+    }
+
+    if (passAdded <= 0) {
+      noProgressOpenAttempts++;
     } else {
-      unchangedRounds = 0;
-      previousCount = usersByUsername.size;
+      noProgressOpenAttempts = 0;
     }
 
-    const scrollState = await scrollFollowerDialog(page);
-    lastScrollState = scrollState;
-
-    if (scrollState.atBottom && unchangedRounds >= 8) {
+    if (noProgressOpenAttempts >= RELATIONSHIP_NO_PROGRESS_REOPEN_LIMIT) {
+      stopReason = 'no-new-items-after-reopen';
       break;
     }
 
-    if (!scrollState.scrolled && unchangedRounds >= 4) {
-      break;
-    }
-
-    if (unchangedRounds >= 18) {
-      break;
-    }
-
-    await sleep(scrollState.atBottom ? 1400 : 850);
+    await sleep(450);
   }
 
   result.items = hasItemLimit
@@ -1133,21 +1282,25 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     : Array.from(usersByUsername.values());
   result.count = result.items.length;
   result.available = result.count > 0;
+  result.openAttempts = openAttempts;
+  result.scrollRounds = totalScrollRounds;
   result.complete = expectedCount > 0
     ? result.count >= expectedCount
-    : ((!hasItemLimit || result.count < maxItems) && unchangedRounds >= 8);
-  result.reason = result.available ? null : `no-${normalizedRelationship}-found`;
+    : ((!hasItemLimit || result.count < maxItems) && ['no-new-items-after-reopen', 'pass-bottom-stale', 'pass-scroll-stale'].includes(stopReason));
+  result.reason = result.available
+    ? (result.complete ? null : (stopReason || `incomplete-${normalizedRelationship}-list`))
+    : `no-${normalizedRelationship}-found`;
 
   progressLog('relationship-complete', {
     relationship: normalizedRelationship,
     loaded: result.count,
     expectedCount,
     maxItems,
+    openAttempts,
+    scrollRounds: totalScrollRounds,
     complete: result.complete,
     reason: result.reason,
   });
-
-  await closeInstagramDialog(page);
 
   return result;
 }
@@ -1905,13 +2058,20 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
   });
 
   try {
+    const resolvedHeadlessMode = resolvePuppeteerHeadlessMode(runtimeConfig);
+
+    if (resolvedHeadlessMode !== false && (isLoginSessionMode || runtimeConfig.headlessEnabled === false)) {
+      notes.push('Kein Display-Server erkannt; Chrome wird headless gestartet. Fuer einen sichtbaren Browser DISPLAY/xvfb konfigurieren.');
+    }
+
     const launchOptions = {
-      headless: isLoginSessionMode ? false : runtimeConfig.headlessEnabled,
+      headless: resolvedHeadlessMode,
       userDataDir: activeBrowserUserDataDir,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
+        '--disable-gpu',
         '--disable-blink-features=AutomationControlled',
         '--lang=de-DE,de;q=0.9',
       ],
