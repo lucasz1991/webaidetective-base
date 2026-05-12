@@ -217,6 +217,23 @@
             </div>
 
             <div class="overflow-y-auto p-5">
+                @if((int) data_get($latestFollowersList, 'addedCount', 0) > 0 || (int) data_get($latestFollowersList, 'removedCount', 0) > 0)
+                    <div class="mb-4 grid gap-3 md:grid-cols-2">
+                        <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                            <div class="font-semibold">{{ number_format((int) data_get($latestFollowersList, 'addedCount', 0)) }} hinzugefuegt</div>
+                            <div class="mt-1 break-words">
+                                {{ collect(data_get($latestFollowersList, 'addedPreview', []))->pluck('username')->map(fn ($username) => '@'.$username)->implode(', ') ?: 'Keine neuen Eintraege' }}
+                            </div>
+                        </div>
+                        <div class="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900">
+                            <div class="font-semibold">{{ number_format((int) data_get($latestFollowersList, 'removedCount', 0)) }} entfernt</div>
+                            <div class="mt-1 break-words">
+                                {{ collect(data_get($latestFollowersList, 'removedPreview', []))->pluck('username')->map(fn ($username) => '@'.$username)->implode(', ') ?: 'Keine entfernten Eintraege' }}
+                            </div>
+                        </div>
+                    </div>
+                @endif
+
                 @if($latestFollowerItems->isNotEmpty())
                     <div class="space-y-2">
                         @foreach($latestFollowerItems as $follower)
@@ -271,6 +288,23 @@
             </div>
 
             <div class="overflow-y-auto p-5">
+                @if((int) data_get($latestFollowingList, 'addedCount', 0) > 0 || (int) data_get($latestFollowingList, 'removedCount', 0) > 0)
+                    <div class="mb-4 grid gap-3 md:grid-cols-2">
+                        <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
+                            <div class="font-semibold">{{ number_format((int) data_get($latestFollowingList, 'addedCount', 0)) }} hinzugefuegt</div>
+                            <div class="mt-1 break-words">
+                                {{ collect(data_get($latestFollowingList, 'addedPreview', []))->pluck('username')->map(fn ($username) => '@'.$username)->implode(', ') ?: 'Keine neuen Eintraege' }}
+                            </div>
+                        </div>
+                        <div class="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900">
+                            <div class="font-semibold">{{ number_format((int) data_get($latestFollowingList, 'removedCount', 0)) }} entfernt</div>
+                            <div class="mt-1 break-words">
+                                {{ collect(data_get($latestFollowingList, 'removedPreview', []))->pluck('username')->map(fn ($username) => '@'.$username)->implode(', ') ?: 'Keine entfernten Eintraege' }}
+                            </div>
+                        </div>
+                    </div>
+                @endif
+
                 @if($latestFollowingItems->isNotEmpty())
                     <div class="space-y-2">
                         @foreach($latestFollowingItems as $followedProfile)

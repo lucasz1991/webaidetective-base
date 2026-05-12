@@ -80,6 +80,7 @@ class TrackedPersonInstagramAnalysisService
                 $snapshot,
                 $extracted,
                 $persistedWarnings,
+                $previousSnapshot,
             );
 
             $storedMedia = $this->storeSnapshotMedia(
@@ -407,11 +408,18 @@ class TrackedPersonInstagramAnalysisService
             'available' => (bool) ($relationshipList['available'] ?? false),
             'complete' => (bool) ($relationshipList['complete'] ?? false),
             'count' => (int) ($relationshipList['count'] ?? count($relationshipList['items'] ?? [])),
+            'observedCount' => (int) ($relationshipList['observedCount'] ?? count($relationshipList['observedItems'] ?? $relationshipList['items'] ?? [])),
+            'knownCount' => (int) ($relationshipList['knownCount'] ?? $relationshipList['count'] ?? count($relationshipList['items'] ?? [])),
+            'addedCount' => (int) ($relationshipList['addedCount'] ?? count($relationshipList['addedItems'] ?? [])),
+            'removedCount' => (int) ($relationshipList['removedCount'] ?? count($relationshipList['removedItems'] ?? [])),
+            'trimmed' => (bool) ($relationshipList['trimmed'] ?? false),
             'maxItems' => (int) ($relationshipList['maxItems'] ?? 0),
             'expectedCount' => (int) ($relationshipList['expectedCount'] ?? 0),
             'reason' => $relationshipList['reason'] ?? null,
             'itemsPath' => $relationshipList['itemsPath'] ?? null,
             'itemsPreview' => array_slice($relationshipList['items'] ?? [], 0, 25),
+            'addedPreview' => array_slice($relationshipList['addedItems'] ?? [], 0, 25),
+            'removedPreview' => array_slice($relationshipList['removedItems'] ?? [], 0, 25),
         ];
     }
 
@@ -472,6 +480,41 @@ class TrackedPersonInstagramAnalysisService
             ];
         }
 
+        foreach ([
+            'followers_list' => 'Followerliste',
+            'following_list' => 'Gefolgt-Liste',
+        ] as $key => $label) {
+            $relationshipList = $extracted[$key] ?? [];
+            $addedItems = array_values($relationshipList['addedItems'] ?? []);
+            $removedItems = array_values($relationshipList['removedItems'] ?? []);
+
+            if ($addedItems !== []) {
+                $changes[] = [
+                    'field' => $key.'_added',
+                    'label' => $label.' hinzugefuegt',
+                    'before' => null,
+                    'after' => implode(', ', array_map(
+                        fn (array $item) => '@'.($item['username'] ?? ''),
+                        array_slice($addedItems, 0, 50),
+                    )),
+                    'count' => count($addedItems),
+                ];
+            }
+
+            if ($removedItems !== []) {
+                $changes[] = [
+                    'field' => $key.'_removed',
+                    'label' => $label.' entfernt',
+                    'before' => implode(', ', array_map(
+                        fn (array $item) => '@'.($item['username'] ?? ''),
+                        array_slice($removedItems, 0, 50),
+                    )),
+                    'after' => null,
+                    'count' => count($removedItems),
+                ];
+            }
+        }
+
         return $changes;
     }
 
@@ -493,6 +536,7 @@ class TrackedPersonInstagramAnalysisService
         TrackedPersonInstagramSnapshot $snapshot,
         array $extracted,
         array &$persistedWarnings,
+        ?TrackedPersonInstagramSnapshot $previousSnapshot = null,
     ): array {
         $directory = 'tracked-people/'.$trackedPerson->id.'/instagram/'.$snapshot->analyzed_at->format('YmdHis').'-'.$snapshot->id.'/relationships';
 
@@ -506,10 +550,27 @@ class TrackedPersonInstagramAnalysisService
                 continue;
             }
 
-            $items = array_values($relationshipList['items'] ?? []);
-            $relationshipList['count'] = count($items);
+            $observedItems = $this->normalizeRelationshipItems($relationshipList['items'] ?? []);
+            $previousItems = $this->loadPreviousRelationshipItems($previousSnapshot, $filename);
+            $currentIsComplete = (bool) ($relationshipList['complete'] ?? false);
+            $mergedItems = $this->mergeRelationshipItems($previousItems, $observedItems, $currentIsComplete);
+            $addedItems = $this->diffRelationshipItems($observedItems, $previousItems);
+            $removedItems = $currentIsComplete
+                ? $this->diffRelationshipItems($previousItems, $observedItems)
+                : [];
 
-            if ($items === []) {
+            $relationshipList['observedCount'] = count($observedItems);
+            $relationshipList['knownCount'] = count($mergedItems);
+            $relationshipList['count'] = count($mergedItems);
+            $relationshipList['items'] = $mergedItems;
+            $relationshipList['observedItems'] = $observedItems;
+            $relationshipList['addedItems'] = $addedItems;
+            $relationshipList['removedItems'] = $removedItems;
+            $relationshipList['addedCount'] = count($addedItems);
+            $relationshipList['removedCount'] = count($removedItems);
+            $relationshipList['trimmed'] = $currentIsComplete && $removedItems !== [];
+
+            if ($observedItems === [] && $mergedItems === []) {
                 $extracted[$extractedKey] = $relationshipList;
                 continue;
             }
@@ -520,12 +581,20 @@ class TrackedPersonInstagramAnalysisService
                 'snapshotId' => $snapshot->id,
                 'instagramUsername' => $snapshot->instagram_username,
                 'type' => $filename,
-                'count' => count($items),
-                'complete' => (bool) ($relationshipList['complete'] ?? false),
+                'count' => count($mergedItems),
+                'observedCount' => count($observedItems),
+                'knownCount' => count($mergedItems),
+                'addedCount' => count($addedItems),
+                'removedCount' => count($removedItems),
+                'complete' => $currentIsComplete,
+                'trimmed' => (bool) $relationshipList['trimmed'],
                 'expectedCount' => (int) ($relationshipList['expectedCount'] ?? 0),
                 'maxItems' => (int) ($relationshipList['maxItems'] ?? 0),
                 'scrapedAt' => optional($snapshot->analyzed_at)->toIso8601String(),
-                'items' => $items,
+                'items' => $mergedItems,
+                'observedItems' => $observedItems,
+                'addedItems' => $addedItems,
+                'removedItems' => $removedItems,
             ];
 
             try {
@@ -551,6 +620,77 @@ class TrackedPersonInstagramAnalysisService
         }
 
         return $extracted;
+    }
+
+    private function normalizeRelationshipItems(array $items): array
+    {
+        return collect($items)
+            ->filter(fn ($item) => is_array($item) && filled($item['username'] ?? null))
+            ->map(function (array $item) {
+                $username = Str::lower(trim((string) ($item['username'] ?? '')));
+
+                return [
+                    'username' => $username,
+                    'displayName' => filled($item['displayName'] ?? null) ? trim((string) $item['displayName']) : null,
+                    'profileUrl' => filled($item['profileUrl'] ?? null) ? (string) $item['profileUrl'] : 'https://www.instagram.com/'.$username.'/',
+                ];
+            })
+            ->filter(fn (array $item) => $item['username'] !== '')
+            ->unique('username')
+            ->values()
+            ->all();
+    }
+
+    private function loadPreviousRelationshipItems(?TrackedPersonInstagramSnapshot $previousSnapshot, string $type): array
+    {
+        if (! $previousSnapshot) {
+            return [];
+        }
+
+        $payloadKey = $type === 'followers' ? 'followersList' : 'followingList';
+        $itemsPath = data_get($previousSnapshot->raw_payload, 'extractedProfile.'.$payloadKey.'.itemsPath');
+
+        if (is_string($itemsPath) && $itemsPath !== '' && Storage::disk('public')->exists($itemsPath)) {
+            try {
+                $decoded = json_decode(Storage::disk('public')->get($itemsPath), true, flags: JSON_THROW_ON_ERROR);
+
+                return $this->normalizeRelationshipItems(data_get($decoded, 'items', []));
+            } catch (\Throwable) {
+                return [];
+            }
+        }
+
+        $legacyItems = data_get($previousSnapshot->raw_payload, 'extractedProfile.'.$payloadKey.'.items', []);
+
+        if (is_array($legacyItems) && $legacyItems !== []) {
+            return $this->normalizeRelationshipItems($legacyItems);
+        }
+
+        return $this->normalizeRelationshipItems(
+            data_get($previousSnapshot->raw_payload, 'extractedProfile.'.$payloadKey.'.itemsPreview', []),
+        );
+    }
+
+    private function mergeRelationshipItems(array $previousItems, array $observedItems, bool $currentIsComplete): array
+    {
+        if ($currentIsComplete) {
+            return $this->normalizeRelationshipItems($observedItems);
+        }
+
+        return collect([...$previousItems, ...$observedItems])
+            ->keyBy('username')
+            ->values()
+            ->all();
+    }
+
+    private function diffRelationshipItems(array $leftItems, array $rightItems): array
+    {
+        $rightUsernames = collect($rightItems)->pluck('username')->filter()->flip();
+
+        return collect($leftItems)
+            ->reject(fn (array $item) => $rightUsernames->has($item['username'] ?? null))
+            ->values()
+            ->all();
     }
 
     private function storeSnapshotMedia(
