@@ -122,6 +122,8 @@ class TrackedPersonDetail extends Component
 
     public function analyzeInstagram(): void
     {
+        @set_time_limit(0);
+
         $trackedPerson = $this->resolveTrackedPerson();
 
         try {
@@ -232,7 +234,10 @@ class TrackedPersonDetail extends Component
                 'knownFacts' => fn ($query) => $query->latest(),
                 'publicProfiles' => fn ($query) => $query->latest(),
                 'latestInstagramSnapshot.media' => fn ($query) => $query->orderBy('sort_order'),
-                'instagramSnapshots' => fn ($query) => $query->latest('analyzed_at')->limit(6),
+                'instagramSnapshots' => fn ($query) => $query
+                    ->where('has_changes', true)
+                    ->latest('analyzed_at')
+                    ->limit(6),
             ]);
         $profileImageHistory = TrackedPersonInstagramMedia::query()
             ->with([
@@ -242,8 +247,11 @@ class TrackedPersonDetail extends Component
             ->where('is_profile_image', true)
             ->whereNotNull('storage_path')
             ->latest('id')
-            ->limit(12)
-            ->get();
+            ->limit(50)
+            ->get()
+            ->unique('content_hash')
+            ->take(12)
+            ->values();
 
         return view('livewire.user.tracked-person-detail', [
             'trackedPerson' => $trackedPerson,

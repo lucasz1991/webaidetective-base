@@ -27,7 +27,7 @@ class TrackedPersonInstagramAnalysisService
             throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');
         }
 
-        [$payload, $extracted, $attemptInfo] = $this->scrapeUntilVisibleCounts($trackedPerson->instagram_username);
+        [$payload, $extracted, $attemptInfo] = $this->scrapePortioned($trackedPerson->instagram_username);
         $analyzedAt = now();
         $persistedWarnings = [];
         $previousSnapshot = $trackedPerson->instagramSnapshots()
@@ -71,7 +71,9 @@ class TrackedPersonInstagramAnalysisService
                 $previousSnapshot,
             );
             $profileMedia = collect($storedMedia)->firstWhere('is_profile_image', true);
-            $profileImagePath = $profileMedia['storage_path'] ?? null;
+            $profileImagePath = ($profileMedia['reused_existing'] ?? false)
+                ? null
+                : ($profileMedia['storage_path'] ?? null);
             $profileImageHash = $profileMedia['content_hash'] ?? null;
             $detectedChanges = $this->detectSnapshotChanges($previousSnapshot, $extracted, $profileImageHash);
             $snapshotPayload = $this->buildStoredPayload(
@@ -131,7 +133,7 @@ class TrackedPersonInstagramAnalysisService
         $lastExtracted = [];
 
         for ($attempt = 1; $attempt <= self::MAX_VISIBLE_RETRY_ATTEMPTS; $attempt++) {
-            $payload = $this->scraper->scrape($username);
+            $payload = $this->scraper->scrape($username, 'profile');
             $extracted = $this->extractor->extract($payload);
 
             $attempts[] = [
@@ -166,6 +168,74 @@ class TrackedPersonInstagramAnalysisService
                 'attempts' => $attempts,
             ],
         ];
+    }
+
+    private function scrapePortioned(string $username): array
+    {
+        [$payload, $extracted, $attemptInfo] = $this->scrapeUntilVisibleCounts($username);
+        $phaseResults = [
+            [
+                'phase' => 'profile',
+                'statusLevel' => $payload['statusLevel'] ?? 'unknown',
+                'statusMessage' => $payload['statusMessage'] ?? null,
+                'ok' => (bool) ($payload['ok'] ?? false),
+            ],
+        ];
+        $phaseWarnings = [];
+
+        foreach ([
+            'followers' => 'followersList',
+            'following' => 'followingList',
+        ] as $phase => $profilePayloadKey) {
+            try {
+                $phasePayload = $this->scraper->scrape($username, $phase);
+                $phaseList = data_get($phasePayload, 'profile.'.$profilePayloadKey);
+
+                if (is_array($phaseList)) {
+                    data_set($payload, 'profile.'.$profilePayloadKey, $phaseList);
+                }
+
+                $payload['notes'] = array_values(array_unique(array_filter(array_merge(
+                    $payload['notes'] ?? [],
+                    $phasePayload['notes'] ?? [],
+                ))));
+                $payload['warnings'] = array_values(array_unique(array_filter(array_merge(
+                    $payload['warnings'] ?? [],
+                    $phasePayload['warnings'] ?? [],
+                ))));
+                $phaseResults[] = [
+                    'phase' => $phase,
+                    'statusLevel' => $phasePayload['statusLevel'] ?? 'unknown',
+                    'statusMessage' => $phasePayload['statusMessage'] ?? null,
+                    'ok' => (bool) ($phasePayload['ok'] ?? false),
+                    'count' => is_array($phaseList) ? (int) ($phaseList['count'] ?? 0) : 0,
+                    'available' => is_array($phaseList) ? (bool) ($phaseList['available'] ?? false) : false,
+                ];
+            } catch (\Throwable $exception) {
+                $phaseWarning = sprintf(
+                    'Instagram-%s-Phase fehlgeschlagen: %s',
+                    $phase === 'followers' ? 'Followerliste' : 'Gefolgt-Liste',
+                    $exception->getMessage(),
+                );
+                $phaseWarnings[] = $phaseWarning;
+                $phaseResults[] = [
+                    'phase' => $phase,
+                    'statusLevel' => 'error',
+                    'statusMessage' => $phaseWarning,
+                    'ok' => false,
+                ];
+            }
+        }
+
+        $payload['warnings'] = array_values(array_unique(array_filter(array_merge(
+            $payload['warnings'] ?? [],
+            $phaseWarnings,
+        ))));
+        $payload['scrapePhases'] = $phaseResults;
+        $extracted = $this->extractor->extract($payload);
+        $attemptInfo['phases'] = $phaseResults;
+
+        return [$payload, $extracted, $attemptInfo];
     }
 
     private function resolveStatusMessage(array $payload, array $attemptInfo): string
@@ -205,12 +275,27 @@ class TrackedPersonInstagramAnalysisService
             'countSources' => $extracted['count_sources'] ?? [],
             'countWarnings' => $extracted['count_warnings'] ?? [],
             'visibleCountsComplete' => (bool) ($extracted['visible_counts_complete'] ?? false),
+            'followersList' => $extracted['followers_list'] ?? [
+                'attempted' => false,
+                'available' => false,
+                'complete' => false,
+                'count' => 0,
+                'items' => [],
+            ],
+            'followingList' => $extracted['following_list'] ?? [
+                'attempted' => false,
+                'available' => false,
+                'complete' => false,
+                'count' => 0,
+                'items' => [],
+            ],
             'profileImageHash' => $profileImageHash,
             'detectedChanges' => $detectedChanges,
         ];
         $payload['analysisPolicy'] = [
             'counts' => 'visible-only',
             'retryAttempts' => $attemptInfo['attempts'] ?? [],
+            'scrapePhases' => $attemptInfo['phases'] ?? [],
             'usedAttempt' => $attemptInfo['used_attempt'] ?? 1,
             'maxAttempts' => $attemptInfo['max_attempts'] ?? self::MAX_VISIBLE_RETRY_ATTEMPTS,
             'monitoringOnly' => 'public-visible-data',

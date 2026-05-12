@@ -107,6 +107,14 @@ const username = rawUsername.replace(/^@/, '').trim();
 const runtimeConfigPath = process.argv[3] || '';
 const operationMode = normalizeText(process.argv[4] || 'analyze').toLowerCase();
 const isLoginSessionMode = operationMode === 'login-session';
+const isProfileOnlyMode = ['profile', 'basic', 'grunddaten'].includes(operationMode);
+const isFollowersOnlyMode = operationMode === 'followers';
+const isFollowingOnlyMode = operationMode === 'following';
+const isRelationshipOnlyMode = isFollowersOnlyMode || isFollowingOnlyMode;
+const shouldCollectFollowers = operationMode === 'analyze' || isFollowersOnlyMode;
+const shouldCollectFollowing = operationMode === 'analyze' || isFollowingOnlyMode;
+const DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS = 0;
+const DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS = 1000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -248,6 +256,23 @@ function dedupe(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
+function normalizeInstagramUsername(value = '') {
+  return normalizeText(String(value || ''))
+    .replace(/^@/, '')
+    .replace(/[^a-z0-9._]/gi, '')
+    .toLowerCase();
+}
+
+function normalizeOptionalPositiveInteger(value, fallback = 0) {
+  const normalizedValue = Number(value ?? fallback);
+
+  if (!Number.isFinite(normalizedValue) || normalizedValue <= 0) {
+    return 0;
+  }
+
+  return Math.floor(normalizedValue);
+}
+
 function loadRuntimeConfig(configPath) {
   const defaults = {
     profileLabel: 'instagram-default',
@@ -264,6 +289,9 @@ function loadRuntimeConfig(configPath) {
     navigationTimeoutMs: 120000,
     postLoginWaitMs: 2500,
     typingDelayMs: 35,
+    followerListMaxItems: DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS,
+    followingListMaxItems: DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS,
+    relationshipListMaxScrollRounds: DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS,
   };
 
   if (!configPath || !fs.existsSync(configPath)) {
@@ -282,6 +310,15 @@ function loadRuntimeConfig(configPath) {
       navigationTimeoutMs: Math.max(30000, Number(parsed?.navigationTimeoutMs || defaults.navigationTimeoutMs)),
       postLoginWaitMs: Math.max(500, Number(parsed?.postLoginWaitMs || defaults.postLoginWaitMs)),
       typingDelayMs: Math.max(0, Number(parsed?.typingDelayMs || defaults.typingDelayMs)),
+      followerListMaxItems: normalizeOptionalPositiveInteger(parsed?.followerListMaxItems, defaults.followerListMaxItems),
+      followingListMaxItems: normalizeOptionalPositiveInteger(parsed?.followingListMaxItems, defaults.followingListMaxItems),
+      relationshipListMaxScrollRounds: Math.max(
+        20,
+        normalizeOptionalPositiveInteger(
+          parsed?.relationshipListMaxScrollRounds,
+          defaults.relationshipListMaxScrollRounds,
+        ) || defaults.relationshipListMaxScrollRounds,
+      ),
     };
   } catch (error) {
     debugLog('Fehler beim Laden der Runtime-Konfiguration:', error.message);
@@ -784,6 +821,266 @@ async function collectProfileInfo(page, username) {
       bodyText.toLowerCase().includes(username.toLowerCase()) ||
       (ogTitle || '').toLowerCase().includes(username.toLowerCase()),
   };
+}
+
+async function closeInstagramDialog(page) {
+  await page.keyboard.press('Escape').catch(() => {});
+  await sleep(400);
+}
+
+async function collectFollowerEntriesFromDialog(page) {
+  return page.evaluate(() => {
+    const reservedPaths = new Set([
+      'accounts',
+      'direct',
+      'explore',
+      'p',
+      'reel',
+      'reels',
+      'stories',
+      'tv',
+    ]);
+    const dialog = document.querySelector('div[role="dialog"]') || document.body;
+    const anchors = Array.from(dialog.querySelectorAll('a[href]'));
+
+    return anchors
+      .map((anchor) => {
+        let pathname = '';
+
+        try {
+          pathname = new URL(anchor.getAttribute('href'), window.location.origin).pathname;
+        } catch (error) {
+          return null;
+        }
+
+        const parts = pathname.split('/').filter(Boolean);
+
+        if (parts.length !== 1 || reservedPaths.has(parts[0])) {
+          return null;
+        }
+
+        const username = parts[0].trim();
+
+        if (!/^[a-z0-9._]+$/i.test(username)) {
+          return null;
+        }
+
+        const textLines = (anchor.innerText || '')
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean);
+
+        return {
+          username,
+          displayName: textLines.find((line) => line.toLowerCase() !== username.toLowerCase()) || null,
+          profileUrl: `https://www.instagram.com/${username}/`,
+        };
+      })
+      .filter(Boolean);
+  }).catch(() => []);
+}
+
+async function scrollFollowerDialog(page) {
+  return page.evaluate(() => {
+    const dialog = document.querySelector('div[role="dialog"]');
+
+    if (!dialog) {
+      window.scrollBy(0, window.innerHeight);
+
+      return {
+        scrolled: true,
+        scrollTop: window.scrollY,
+        scrollHeight: document.documentElement.scrollHeight,
+      };
+    }
+
+    const candidates = Array.from(dialog.querySelectorAll('div, ul, section'))
+      .filter((element) => element.scrollHeight > element.clientHeight + 40);
+    const scrollTarget = candidates
+      .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight))[0];
+
+    if (!scrollTarget) {
+      return {
+        scrolled: false,
+        scrollTop: 0,
+        scrollHeight: 0,
+      };
+    }
+
+    scrollTarget.scrollTop = scrollTarget.scrollHeight;
+
+    return {
+      scrolled: true,
+      scrollTop: scrollTarget.scrollTop,
+      scrollHeight: scrollTarget.scrollHeight,
+    };
+  }).catch(() => ({
+    scrolled: false,
+    scrollTop: 0,
+    scrollHeight: 0,
+  }));
+}
+
+async function openInstagramRelationshipDialog(page, username, relationship) {
+  const normalizedUsername = normalizeInstagramUsername(username);
+  const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
+  const clicked = await page.evaluate((targetUsername, targetRelationship) => {
+    const anchors = Array.from(document.querySelectorAll('a[href]'));
+    const targetPath = `/${targetUsername}/${targetRelationship}/`;
+    const labelPatternText = targetRelationship === 'following'
+      ? 'following|gefolgt|abonniert'
+      : 'followers|follower';
+    const labelPattern = new RegExp(labelPatternText, 'i');
+    const target = anchors.find((anchor) => {
+      let pathname = '';
+
+      try {
+        pathname = new URL(anchor.getAttribute('href'), window.location.origin).pathname;
+      } catch (error) {
+        return false;
+      }
+
+      return pathname.toLowerCase() === targetPath;
+    }) || anchors.find((anchor) => labelPattern.test(anchor.innerText || ''));
+
+    if (!target) {
+      return false;
+    }
+
+    target.click();
+    return true;
+  }, normalizedUsername, normalizedRelationship).catch(() => false);
+
+  if (clicked) {
+    await sleep(1800);
+  }
+
+  const hasDialog = await page.evaluate(() => Boolean(document.querySelector('div[role="dialog"]'))).catch(() => false);
+
+  if (hasDialog) {
+    return true;
+  }
+
+  await page.goto(`https://www.instagram.com/${normalizedUsername}/${normalizedRelationship}/`, {
+    timeout: 60000,
+    waitUntil: 'domcontentloaded',
+  }).catch(() => null);
+  await sleep(2200);
+
+  return page.evaluate(() => Boolean(document.querySelector('div[role="dialog"]'))).catch(() => false);
+}
+
+async function openFollowersDialog(page, username) {
+  return openInstagramRelationshipDialog(page, username, 'followers');
+}
+
+async function openFollowingDialog(page, username) {
+  return openInstagramRelationshipDialog(page, username, 'following');
+}
+
+async function collectPublicRelationshipList(page, username, profile, relationship, options = {}) {
+  const maxItems = normalizeOptionalPositiveInteger(options.maxItems, DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS);
+  const maxScrollRounds = Math.max(
+    20,
+    normalizeOptionalPositiveInteger(
+      options.maxScrollRounds,
+      DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS,
+    ) || DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS,
+  );
+  const hasItemLimit = maxItems > 0;
+  const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
+  const result = {
+    attempted: false,
+    available: false,
+    complete: false,
+    count: 0,
+    maxItems,
+    items: [],
+    reason: null,
+  };
+
+  if (profile?.isPrivate) {
+    result.reason = 'private-profile';
+    return result;
+  }
+
+  if (profile?.requiresLogin) {
+    result.reason = 'login-required';
+    return result;
+  }
+
+  result.attempted = true;
+
+  const opened = normalizedRelationship === 'following'
+    ? await openFollowingDialog(page, username)
+    : await openFollowersDialog(page, username);
+
+  if (!opened) {
+    result.reason = `${normalizedRelationship}-dialog-not-found`;
+    return result;
+  }
+
+  const usersByUsername = new Map();
+  const targetUsername = normalizeInstagramUsername(username);
+  let unchangedRounds = 0;
+  let previousCount = 0;
+
+  for (let round = 0; round < maxScrollRounds && (!hasItemLimit || usersByUsername.size < maxItems) && unchangedRounds < 4; round++) {
+    const entries = await collectFollowerEntriesFromDialog(page);
+
+    for (const entry of entries) {
+      const relatedUsername = normalizeInstagramUsername(entry.username);
+
+      if (!relatedUsername || relatedUsername === targetUsername || usersByUsername.has(relatedUsername)) {
+        continue;
+      }
+
+      usersByUsername.set(relatedUsername, {
+        username: relatedUsername,
+        displayName: entry.displayName,
+        profileUrl: entry.profileUrl,
+      });
+    }
+
+    if (hasItemLimit && usersByUsername.size >= maxItems) {
+      break;
+    }
+
+    if (usersByUsername.size === previousCount) {
+      unchangedRounds++;
+    } else {
+      unchangedRounds = 0;
+      previousCount = usersByUsername.size;
+    }
+
+    const scrollState = await scrollFollowerDialog(page);
+
+    if (!scrollState.scrolled) {
+      break;
+    }
+
+    await sleep(900);
+  }
+
+  result.items = hasItemLimit
+    ? Array.from(usersByUsername.values()).slice(0, maxItems)
+    : Array.from(usersByUsername.values());
+  result.count = result.items.length;
+  result.available = result.count > 0;
+  result.complete = (!hasItemLimit || result.count < maxItems) && unchangedRounds >= 4;
+  result.reason = result.available ? null : `no-${normalizedRelationship}-found`;
+
+  await closeInstagramDialog(page);
+
+  return result;
+}
+
+async function collectPublicFollowersList(page, username, profile, options = {}) {
+  return collectPublicRelationshipList(page, username, profile, 'followers', options);
+}
+
+async function collectPublicFollowingList(page, username, profile, options = {}) {
+  return collectPublicRelationshipList(page, username, profile, 'following', options);
 }
 
 async function clickButtonByText(page, candidateTexts) {
@@ -1720,6 +2017,52 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     title = await page.title().catch(() => null);
     finalUrl = page.url();
 
+    if (shouldCollectFollowers) {
+      initialProfile.followersList = await collectPublicFollowersList(page, username, initialProfile, {
+        maxItems: runtimeConfig.followerListMaxItems,
+        maxScrollRounds: runtimeConfig.relationshipListMaxScrollRounds,
+      });
+      recordRunDebug('followers-list-collected', initialProfile.followersList);
+
+      if (initialProfile.followersList?.available) {
+        notes.push(`Followerliste ausgelesen: ${initialProfile.followersList.count} Eintraege.`);
+      } else if (initialProfile.followersList?.attempted) {
+        notes.push('Followerliste konnte nicht ausgelesen werden.');
+      }
+
+      if (page.url().includes('/followers')) {
+        await page.goto(profileUrl, {
+          timeout: runtimeConfig.navigationTimeoutMs,
+          waitUntil: 'domcontentloaded',
+        }).catch(() => null);
+        await sleep(900);
+      }
+    }
+
+    if (shouldCollectFollowing) {
+      initialProfile.followingList = await collectPublicFollowingList(page, username, initialProfile, {
+        maxItems: runtimeConfig.followingListMaxItems,
+        maxScrollRounds: runtimeConfig.relationshipListMaxScrollRounds,
+      });
+      recordRunDebug('following-list-collected', initialProfile.followingList);
+
+      if (initialProfile.followingList?.available) {
+        notes.push(`Gefolgt-Liste ausgelesen: ${initialProfile.followingList.count} Eintraege.`);
+      } else if (initialProfile.followingList?.attempted) {
+        notes.push('Gefolgt-Liste konnte nicht ausgelesen werden.');
+      }
+
+      if (page.url().includes('/followers') || page.url().includes('/following')) {
+        await page.goto(profileUrl, {
+          timeout: runtimeConfig.navigationTimeoutMs,
+          waitUntil: 'domcontentloaded',
+        }).catch(() => null);
+        await sleep(900);
+      }
+    }
+
+    finalUrl = page.url();
+
     if (finalUrl.includes('/accounts/login')) {
       notes.push('Instagram hat den Seitenaufruf direkt auf die Login-Seite umgeleitet.');
     }
@@ -1766,15 +2109,17 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       notes.push('Cookies wurden nicht gespeichert, weil die Session offenbar nicht gueltig war.');
     }
 
-    await renderProfileSnapshot(
-      browser,
-      artifacts.screenshotPath,
-      username,
-      profileUrl,
-      title,
-      initialProfile,
-      dedupe(notes),
-    );
+    if (!isRelationshipOnlyMode) {
+      await renderProfileSnapshot(
+        browser,
+        artifacts.screenshotPath,
+        username,
+        profileUrl,
+        title,
+        initialProfile,
+        dedupe(notes),
+      );
+    }
 
     const responsePayload = {
       ok: outcome.ok,
@@ -1790,9 +2135,9 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       loginDiagnostics,
       profile: initialProfile,
       profileUrl,
-      screenshotPath: artifacts.screenshotPath,
+      screenshotPath: isRelationshipOnlyMode ? null : artifacts.screenshotPath,
       scrapedAt: new Date().toISOString(),
-      screenshotMode: 'generated-card',
+      screenshotMode: isRelationshipOnlyMode ? null : 'generated-card',
       title,
       warnings: dedupedWarnings,
       durationMs: Date.now() - startedAt,

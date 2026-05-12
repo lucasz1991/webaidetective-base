@@ -1,4 +1,4 @@
-<div class="space-y-6" wire:poll.visible.10000ms>
+<div class="space-y-6" wire:poll.visible.10000ms x-data="{ instagramListModal: null }" @keydown.escape.window="instagramListModal = null">
     @php
         $detailStatusClass = match ($detailStatusLevel ?? 'neutral') {
             'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
@@ -12,6 +12,11 @@
         $latestDebugLogPath = data_get($latestSnapshot?->raw_payload, 'debugLogPath');
         $latestCookieDiagnostics = data_get($latestSnapshot?->raw_payload, 'cookieDiagnostics', []);
         $latestLoginDiagnostics = data_get($latestSnapshot?->raw_payload, 'loginDiagnostics', []);
+        $latestFollowersList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followersList', []);
+        $latestFollowingList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followingList', []);
+        $latestFollowerItems = collect(data_get($latestFollowersList, 'items', []));
+        $latestFollowingItems = collect(data_get($latestFollowingList, 'items', []));
+        $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
         $countSourceLabels = [
             'body_text_preview' => 'sichtbarer Profiltext',
             'description_meta' => 'Meta-Beschreibung',
@@ -21,6 +26,20 @@
             return $source ? ($countSourceLabels[$source] ?? $source) : 'keine sichtbaren Werte';
         };
     @endphp
+
+    <div
+        wire:loading.flex
+        wire:target="analyzeInstagram"
+        class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/60 px-4"
+    >
+        <div class="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl">
+            <div class="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-pink-600"></div>
+            <h3 class="mt-4 text-lg font-bold text-slate-900">Instagram-Analyse laeuft</h3>
+            <p class="mt-2 text-sm leading-6 text-slate-600">
+                Grunddaten, Followerliste und Gefolgt-Liste werden nacheinander abgearbeitet. Das kann bei grossen Profilen mehrere Minuten dauern.
+            </p>
+        </div>
+    </div>
 
     <section class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
         <div class="flex flex-wrap items-start justify-between gap-4">
@@ -70,9 +89,12 @@
             <div class="flex flex-wrap gap-2">
                 <button
                     wire:click="analyzeInstagram"
+                    wire:loading.attr="disabled"
+                    wire:target="analyzeInstagram"
                     class="rounded-xl bg-pink-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-pink-700"
                 >
-                    Instagram analysieren
+                    <span wire:loading.remove wire:target="analyzeInstagram">Instagram analysieren</span>
+                    <span wire:loading wire:target="analyzeInstagram">Analyse laeuft...</span>
                 </button>
                 <button
                     wire:click="saveTrackedPerson"
@@ -92,12 +114,34 @@
 
     <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
+            <div class="flex items-center justify-between gap-3">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
+                <button
+                    type="button"
+                    @click="instagramListModal = 'followers'"
+                    class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    @disabled($latestFollowerItems->isEmpty())
+                >
+                    Liste
+                </button>
+            </div>
             <div class="mt-2 text-2xl font-bold text-slate-900">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '—' }}</div>
+            <div class="mt-1 text-xs text-slate-500">{{ number_format($latestFollowerItems->count()) }} gespeichert</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gefolgt</div>
+            <div class="flex items-center justify-between gap-3">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gefolgt</div>
+                <button
+                    type="button"
+                    @click="instagramListModal = 'following'"
+                    class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    @disabled($latestFollowingItems->isEmpty())
+                >
+                    Liste
+                </button>
+            </div>
             <div class="mt-2 text-2xl font-bold text-slate-900">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '—' }}</div>
+            <div class="mt-1 text-xs text-slate-500">{{ number_format($latestFollowingItems->count()) }} gespeichert</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Beitraege</div>
@@ -112,6 +156,114 @@
             <div class="mt-2 text-2xl font-bold text-slate-900">{{ number_format($trackedPerson->publicProfiles->count()) }}</div>
         </div>
     </section>
+
+    <div
+        x-cloak
+        x-show="instagramListModal === 'followers'"
+        x-transition.opacity
+        class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6"
+        @click.self="instagramListModal = null"
+    >
+        <div class="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                <div>
+                    <h3 class="text-lg font-bold text-slate-900">Followerliste</h3>
+                    <p class="mt-1 text-sm text-slate-500">
+                        {{ number_format($latestFollowerItems->count()) }} Eintraege aus der letzten Instagram-Analyse
+                        @if(data_get($latestFollowersList, 'maxItems'))
+                            · Limit {{ number_format((int) data_get($latestFollowersList, 'maxItems')) }}
+                        @endif
+                    </p>
+                </div>
+                <button type="button" @click="instagramListModal = null" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Schliessen
+                </button>
+            </div>
+
+            <div class="overflow-y-auto p-5">
+                @if($latestFollowerItems->isNotEmpty())
+                    <div class="space-y-2">
+                        @foreach($latestFollowerItems as $follower)
+                            <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+                                <div class="min-w-0">
+                                    <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($follower, 'username') }}</div>
+                                    @if(data_get($follower, 'displayName'))
+                                        <div class="mt-0.5 truncate text-slate-500">{{ data_get($follower, 'displayName') }}</div>
+                                    @endif
+                                </div>
+                                @if(data_get($follower, 'profileUrl'))
+                                    <a href="{{ data_get($follower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white">
+                                        Oeffnen
+                                    </a>
+                                @endif
+                            </div>
+                        @endforeach
+                    </div>
+                @else
+                    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                        Keine Followerliste gespeichert.
+                        @if(data_get($latestFollowersList, 'reason'))
+                            Grund: {{ data_get($latestFollowersList, 'reason') }}
+                        @endif
+                    </div>
+                @endif
+            </div>
+        </div>
+    </div>
+
+    <div
+        x-cloak
+        x-show="instagramListModal === 'following'"
+        x-transition.opacity
+        class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6"
+        @click.self="instagramListModal = null"
+    >
+        <div class="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                <div>
+                    <h3 class="text-lg font-bold text-slate-900">Gefolgt-Liste</h3>
+                    <p class="mt-1 text-sm text-slate-500">
+                        {{ number_format($latestFollowingItems->count()) }} Eintraege aus der letzten Instagram-Analyse
+                        @if(data_get($latestFollowingList, 'maxItems'))
+                            · Limit {{ number_format((int) data_get($latestFollowingList, 'maxItems')) }}
+                        @endif
+                    </p>
+                </div>
+                <button type="button" @click="instagramListModal = null" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Schliessen
+                </button>
+            </div>
+
+            <div class="overflow-y-auto p-5">
+                @if($latestFollowingItems->isNotEmpty())
+                    <div class="space-y-2">
+                        @foreach($latestFollowingItems as $followedProfile)
+                            <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+                                <div class="min-w-0">
+                                    <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($followedProfile, 'username') }}</div>
+                                    @if(data_get($followedProfile, 'displayName'))
+                                        <div class="mt-0.5 truncate text-slate-500">{{ data_get($followedProfile, 'displayName') }}</div>
+                                    @endif
+                                </div>
+                                @if(data_get($followedProfile, 'profileUrl'))
+                                    <a href="{{ data_get($followedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white">
+                                        Oeffnen
+                                    </a>
+                                @endif
+                            </div>
+                        @endforeach
+                    </div>
+                @else
+                    <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                        Keine Gefolgt-Liste gespeichert.
+                        @if(data_get($latestFollowingList, 'reason'))
+                            Grund: {{ data_get($latestFollowingList, 'reason') }}
+                        @endif
+                    </div>
+                @endif
+            </div>
+        </div>
+    </div>
 
     <section class="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
         <div class="space-y-6">
@@ -412,6 +564,32 @@
                         <p><span class="font-semibold">Profilbild-Hash:</span> {{ $latestSnapshot->profile_image_hash ?: '—' }}</p>
                     </div>
 
+                    @if($latestScrapePhases->isNotEmpty())
+                        <div class="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
+                            <h4 class="font-semibold text-slate-900">Scrape-Phasen</h4>
+                            <div class="mt-3 grid gap-2">
+                                @foreach($latestScrapePhases as $phase)
+                                    <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white px-3 py-2">
+                                        <span class="font-semibold">
+                                            {{ match(data_get($phase, 'phase')) {
+                                                'profile' => 'Grunddaten',
+                                                'followers' => 'Followerliste',
+                                                'following' => 'Gefolgt-Liste',
+                                                default => data_get($phase, 'phase', 'Unbekannt'),
+                                            } }}
+                                        </span>
+                                        <span class="text-slate-500">
+                                            {{ data_get($phase, 'statusLevel', 'unknown') }}
+                                            @if(data_get($phase, 'count') !== null)
+                                                · {{ number_format((int) data_get($phase, 'count')) }} Eintraege
+                                            @endif
+                                        </span>
+                                    </div>
+                                @endforeach
+                            </div>
+                        </div>
+                    @endif
+
                     @if($latestDebugLogPath)
                         <p class="mt-4 break-all text-sm text-slate-700">
                             <span class="font-semibold">Debug-Log:</span> {{ $latestDebugLogPath }}
@@ -530,7 +708,7 @@
                             </div>
                         </div>
                     @empty
-                        <p class="text-sm text-slate-500">Noch keine Verlaufseintraege vorhanden.</p>
+                        <p class="text-sm text-slate-500">Noch keine Verlaufseintraege mit erkannten Aenderungen vorhanden.</p>
                     @endforelse
                 </div>
             </div>

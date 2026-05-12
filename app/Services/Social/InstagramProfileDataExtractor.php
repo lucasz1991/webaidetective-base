@@ -31,6 +31,43 @@ class InstagramProfileDataExtractor
             'visible_counts_complete' => $counts['visible_complete'],
             'profile_image_url' => $profileImageUrl,
             'image_urls' => $this->extractImageUrls($html, $profileImageUrl),
+            'followers_list' => $this->extractFollowersList($payload),
+            'following_list' => $this->extractFollowingList($payload),
+        ];
+    }
+
+    private function extractFollowersList(array $payload): array
+    {
+        return $this->extractRelationshipList($payload, 'followersList');
+    }
+
+    private function extractFollowingList(array $payload): array
+    {
+        return $this->extractRelationshipList($payload, 'followingList');
+    }
+
+    private function extractRelationshipList(array $payload, string $payloadKey): array
+    {
+        $relationshipList = data_get($payload, 'profile.'.$payloadKey, []);
+        $items = collect(data_get($relationshipList, 'items', []))
+            ->filter(fn ($item) => is_array($item) && filled($item['username'] ?? null))
+            ->map(fn ($item) => [
+                'username' => Str::lower(trim((string) ($item['username'] ?? ''))),
+                'displayName' => filled($item['displayName'] ?? null) ? trim((string) $item['displayName']) : null,
+                'profileUrl' => filled($item['profileUrl'] ?? null) ? (string) $item['profileUrl'] : null,
+            ])
+            ->unique('username')
+            ->values()
+            ->all();
+
+        return [
+            'attempted' => (bool) data_get($relationshipList, 'attempted', false),
+            'available' => (bool) data_get($relationshipList, 'available', false),
+            'complete' => (bool) data_get($relationshipList, 'complete', false),
+            'count' => count($items),
+            'maxItems' => (int) data_get($relationshipList, 'maxItems', 0),
+            'reason' => data_get($relationshipList, 'reason'),
+            'items' => $items,
         ];
     }
 
