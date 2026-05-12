@@ -125,10 +125,22 @@ class TrackedPersonDetail extends Component
         @set_time_limit(0);
 
         $trackedPerson = $this->resolveTrackedPerson();
+        $progress = fn (array $state) => $this->streamInstagramProgress($state);
 
         try {
-            $snapshot = $trackedPerson->analyzeInstagram();
+            $this->streamInstagramProgress([
+                'phase' => 'start',
+                'percent' => 1,
+                'message' => 'Instagram-Analyse wird vorbereitet.',
+            ]);
+
+            $snapshot = $trackedPerson->analyzeInstagram($progress);
         } catch (\Throwable $exception) {
+            $this->streamInstagramProgress([
+                'phase' => 'error',
+                'percent' => 100,
+                'message' => 'Instagram-Analyse fehlgeschlagen.',
+            ]);
             $this->setDetailStatus(
                 'Instagram-Analyse fehlgeschlagen: '.$exception->getMessage(),
                 'error',
@@ -143,6 +155,31 @@ class TrackedPersonDetail extends Component
             $snapshot->status_level === 'success' ? 'success' : ($snapshot->status_level === 'partial' ? 'partial' : 'error'),
         );
         $this->dispatch('tracked-person-refresh');
+    }
+
+    private function streamInstagramProgress(array $state): void
+    {
+        $percent = max(0, min(100, (int) ($state['percent'] ?? 0)));
+        $phase = match ($state['phase'] ?? 'analysis') {
+            'start' => 'Start',
+            'profile' => 'Grunddaten',
+            'followers' => 'Followerliste',
+            'following' => 'Gefolgt-Liste',
+            'saving' => 'Speichern',
+            'done' => 'Fertig',
+            'error' => 'Fehler',
+            default => 'Analyse',
+        };
+        $message = (string) ($state['message'] ?? 'Instagram-Analyse laeuft.');
+
+        $this->stream('instagram-progress-phase', e($phase), true);
+        $this->stream('instagram-progress-message', e($message), true);
+        $this->stream('instagram-progress-percent', $percent.'%', true);
+        $this->stream(
+            'instagram-progress-bar',
+            '<div class="h-full rounded-full bg-pink-600 transition-all duration-300" style="width: '.$percent.'%"></div>',
+            true,
+        );
     }
 
     public function saveKnownFact(): void

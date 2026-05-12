@@ -8,10 +8,18 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Symfony\Component\Process\Process as SymfonyProcess;
 
 class InstagramScraper
 {
-    public function scrape(string $username, string $operationMode = 'analyze'): array
+    public function scrape(
+        string $username,
+        string $operationMode = 'analyze',
+        ?callable $progress = null,
+        array $runtimeConfigOverrides = [],
+        int $progressStart = 0,
+        int $progressEnd = 100,
+    ): array
     {
         $username = $this->normalizeInstagramUsername($username);
         $operationMode = $this->normalizeOperationMode($operationMode);
@@ -26,7 +34,10 @@ class InstagramScraper
             throw new \RuntimeException('Node-Skript nicht gefunden.');
         }
 
-        $runtimeConfigPath = $this->writeRuntimeConfig();
+        $runtimeConfigPath = $this->writeRuntimeConfig($runtimeConfigOverrides);
+        $stdout = '';
+        $stderr = '';
+        $stderrBuffer = '';
 
         try {
             $result = Process::path(base_path())
@@ -37,15 +48,39 @@ class InstagramScraper
                     $username,
                     $runtimeConfigPath,
                     $operationMode,
-                ]);
+                ], function (string $type, string $buffer) use (
+                    &$stdout,
+                    &$stderr,
+                    &$stderrBuffer,
+                    $progress,
+                    $operationMode,
+                    $progressStart,
+                    $progressEnd,
+                ) {
+                    if ($type === SymfonyProcess::OUT) {
+                        $stdout .= $buffer;
+
+                        return;
+                    }
+
+                    $stderr .= $buffer;
+                    $this->handleProgressOutput(
+                        $stderrBuffer,
+                        $buffer,
+                        $operationMode,
+                        $progressStart,
+                        $progressEnd,
+                        $progress,
+                    );
+                });
         } finally {
             if ($runtimeConfigPath && File::exists($runtimeConfigPath)) {
                 File::delete($runtimeConfigPath);
             }
         }
 
-        $output = trim($result->output());
-        $errorOutput = trim($result->errorOutput());
+        $output = trim($stdout !== '' ? $stdout : $result->output());
+        $errorOutput = trim($stderr !== '' ? $stderr : $result->errorOutput());
 
         if ($output === '') {
             throw new \RuntimeException(
@@ -69,13 +104,110 @@ class InstagramScraper
         return $payload;
     }
 
+    private function handleProgressOutput(
+        string &$buffer,
+        string $chunk,
+        string $operationMode,
+        int $progressStart,
+        int $progressEnd,
+        ?callable $progress,
+    ): void {
+        if (! $progress) {
+            return;
+        }
+
+        $buffer .= $chunk;
+        $lines = preg_split("/\r\n|\n|\r/", $buffer);
+
+        if ($lines === false) {
+            return;
+        }
+
+        $buffer = array_pop($lines) ?? '';
+
+        foreach ($lines as $line) {
+            $event = $this->parseProgressLine($line);
+
+            if (! $event) {
+                continue;
+            }
+
+            $progress($this->normalizeProgressEvent($event, $operationMode, $progressStart, $progressEnd));
+        }
+    }
+
+    private function parseProgressLine(string $line): ?array
+    {
+        $prefix = '[SCRAPER PROGRESS] ';
+
+        if (! Str::startsWith($line, $prefix)) {
+            return null;
+        }
+
+        $payload = json_decode(Str::after($line, $prefix), true);
+
+        return is_array($payload) ? $payload : null;
+    }
+
+    private function normalizeProgressEvent(array $event, string $operationMode, int $progressStart, int $progressEnd): array
+    {
+        $phase = $event['relationship'] ?? $operationMode;
+        $loaded = (int) ($event['loaded'] ?? 0);
+        $expected = (int) ($event['expectedCount'] ?? 0);
+        $round = (int) ($event['round'] ?? 0);
+        $maxRounds = max(1, (int) ($event['maxScrollRounds'] ?? 1));
+        $stage = (string) ($event['stage'] ?? '');
+        $phasePercent = match ($stage) {
+            'relationship-opening' => 2,
+            'relationship-dialog-missing' => 100,
+            'relationship-complete' => 100,
+            'profile-page-loaded' => 45,
+            'profile-collected' => 100,
+            default => $expected > 0
+                ? min(99, (int) floor(($loaded / max(1, $expected)) * 100))
+                : min(95, (int) floor(($round / $maxRounds) * 100)),
+        };
+        $overallPercent = $progressStart + (int) floor((max(0, min(100, $phasePercent)) / 100) * max(1, $progressEnd - $progressStart));
+
+        return [
+            'phase' => $phase,
+            'stage' => $stage,
+            'percent' => max($progressStart, min($progressEnd, $overallPercent)),
+            'loaded' => $loaded,
+            'expected' => $expected,
+            'round' => $round,
+            'message' => $this->buildProgressMessage($phase, $stage, $loaded, $expected),
+        ];
+    }
+
+    private function buildProgressMessage(string $phase, string $stage, int $loaded, int $expected): string
+    {
+        if ($phase === 'followers') {
+            return $expected > 0
+                ? 'Followerliste wird geladen: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.')
+                : 'Followerliste wird geladen: '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
+        }
+
+        if ($phase === 'following') {
+            return $expected > 0
+                ? 'Gefolgt-Liste wird geladen: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.')
+                : 'Gefolgt-Liste wird geladen: '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
+        }
+
+        return match ($stage) {
+            'profile-page-loaded' => 'Profilseite geladen, Grunddaten werden ausgelesen.',
+            'profile-collected' => 'Grunddaten wurden ausgelesen.',
+            default => 'Instagram-Grunddaten werden geladen.',
+        };
+    }
+
     private function resolveProcessTimeout(string $operationMode): int
     {
         $profile = Setting::getValue('scraper', 'instagram_profile');
         $profile = is_array($profile) ? $profile : [];
 
         if (in_array($operationMode, ['followers', 'following'], true)) {
-            return max(240, (int) ($profile['relationship_list_process_timeout_seconds'] ?? 900));
+            return max(240, (int) ($profile['relationship_list_process_timeout_seconds'] ?? 3600));
         }
 
         return max(120, (int) ($profile['profile_process_timeout_seconds'] ?? 240));
@@ -90,13 +222,16 @@ class InstagramScraper
             : 'analyze';
     }
 
-    private function writeRuntimeConfig(): string
+    private function writeRuntimeConfig(array $overrides = []): string
     {
         $directory = storage_path('app/tmp');
         File::ensureDirectoryExists($directory);
 
         $path = $directory.DIRECTORY_SEPARATOR.'instagram-scraper-config-'.Str::uuid().'.json';
-        File::put($path, json_encode($this->buildRuntimeConfig(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        File::put($path, json_encode([
+            ...$this->buildRuntimeConfig(),
+            ...$overrides,
+        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
         return $path;
     }

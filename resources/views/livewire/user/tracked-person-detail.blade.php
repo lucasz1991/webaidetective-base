@@ -34,9 +34,22 @@
     >
         <div class="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl">
             <div class="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-pink-600"></div>
-            <h3 class="mt-4 text-lg font-bold text-slate-900">Instagram-Analyse laeuft</h3>
-            <p class="mt-2 text-sm leading-6 text-slate-600">
-                Grunddaten, Followerliste und Gefolgt-Liste werden nacheinander abgearbeitet. Das kann bei grossen Profilen mehrere Minuten dauern.
+            <div class="mt-4 text-xs font-semibold uppercase tracking-wide text-pink-700" wire:stream="instagram-progress-phase">Start</div>
+            <h3 class="mt-1 text-lg font-bold text-slate-900">Instagram-Analyse laeuft</h3>
+            <p class="mt-2 text-sm leading-6 text-slate-600" wire:stream="instagram-progress-message">
+                Grunddaten, Followerliste und Gefolgt-Liste werden nacheinander abgearbeitet.
+            </p>
+            <div class="mt-5">
+                <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
+                    <span>Fortschritt</span>
+                    <span wire:stream="instagram-progress-percent">0%</span>
+                </div>
+                <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200" wire:stream="instagram-progress-bar">
+                    <div class="h-full rounded-full bg-pink-600" style="width: 0%"></div>
+                </div>
+            </div>
+            <p class="mt-4 text-xs leading-5 text-slate-500">
+                Die Listen sind nicht nach Eintraegen begrenzt. Instagram kann das Laden bei sehr grossen Profilen trotzdem abbremsen oder blockieren.
             </p>
         </div>
     </div>

@@ -21,18 +21,30 @@ class TrackedPersonInstagramAnalysisService
     ) {
     }
 
-    public function analyze(TrackedPerson $trackedPerson): TrackedPersonInstagramSnapshot
+    public function analyze(TrackedPerson $trackedPerson, ?callable $progress = null): TrackedPersonInstagramSnapshot
     {
         if (! $trackedPerson->instagram_username) {
             throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');
         }
 
-        [$payload, $extracted, $attemptInfo] = $this->scrapePortioned($trackedPerson->instagram_username);
+        $this->reportProgress($progress, [
+            'phase' => 'start',
+            'percent' => 1,
+            'message' => 'Instagram-Analyse wird vorbereitet.',
+        ]);
+
+        [$payload, $extracted, $attemptInfo] = $this->scrapePortioned($trackedPerson->instagram_username, $progress);
         $analyzedAt = now();
         $persistedWarnings = [];
         $previousSnapshot = $trackedPerson->instagramSnapshots()
             ->latest('analyzed_at')
             ->first();
+
+        $this->reportProgress($progress, [
+            'phase' => 'saving',
+            'percent' => 97,
+            'message' => 'Analyseergebnis wird gespeichert.',
+        ]);
 
         $snapshot = DB::transaction(function () use (
             $trackedPerson,
@@ -123,17 +135,36 @@ class TrackedPersonInstagramAnalysisService
             return $snapshot;
         });
 
+        $this->reportProgress($progress, [
+            'phase' => 'done',
+            'percent' => 100,
+            'message' => 'Instagram-Analyse abgeschlossen.',
+        ]);
+
         return $snapshot->fresh('media');
     }
 
-    private function scrapeUntilVisibleCounts(string $username): array
+    private function scrapeUntilVisibleCounts(string $username, ?callable $progress = null): array
     {
         $attempts = [];
         $lastPayload = [];
         $lastExtracted = [];
 
         for ($attempt = 1; $attempt <= self::MAX_VISIBLE_RETRY_ATTEMPTS; $attempt++) {
-            $payload = $this->scraper->scrape($username, 'profile');
+            $this->reportProgress($progress, [
+                'phase' => 'profile',
+                'percent' => 4,
+                'message' => 'Grunddaten werden geladen'.($attempt > 1 ? ' (Versuch '.$attempt.')' : '').'.',
+            ]);
+
+            $payload = $this->scraper->scrape(
+                $username,
+                'profile',
+                $progress,
+                [],
+                4,
+                24,
+            );
             $extracted = $this->extractor->extract($payload);
 
             $attempts[] = [
@@ -170,9 +201,14 @@ class TrackedPersonInstagramAnalysisService
         ];
     }
 
-    private function scrapePortioned(string $username): array
+    private function scrapePortioned(string $username, ?callable $progress = null): array
     {
-        [$payload, $extracted, $attemptInfo] = $this->scrapeUntilVisibleCounts($username);
+        [$payload, $extracted, $attemptInfo] = $this->scrapeUntilVisibleCounts($username, $progress);
+        $this->reportProgress($progress, [
+            'phase' => 'profile',
+            'percent' => 25,
+            'message' => 'Grunddaten abgeschlossen.',
+        ]);
         $phaseResults = [
             [
                 'phase' => 'profile',
@@ -184,12 +220,41 @@ class TrackedPersonInstagramAnalysisService
         $phaseWarnings = [];
 
         foreach ([
-            'followers' => 'followersList',
-            'following' => 'followingList',
-        ] as $phase => $profilePayloadKey) {
+            'followers' => [
+                'payload_key' => 'followersList',
+                'start' => 26,
+                'end' => 62,
+                'expected' => $extracted['followers_count'] ?? 0,
+                'expected_override' => 'expectedFollowerCount',
+                'label' => 'Followerliste',
+            ],
+            'following' => [
+                'payload_key' => 'followingList',
+                'start' => 63,
+                'end' => 95,
+                'expected' => $extracted['following_count'] ?? 0,
+                'expected_override' => 'expectedFollowingCount',
+                'label' => 'Gefolgt-Liste',
+            ],
+        ] as $phase => $phaseConfig) {
             try {
-                $phasePayload = $this->scraper->scrape($username, $phase);
-                $phaseList = data_get($phasePayload, 'profile.'.$profilePayloadKey);
+                $this->reportProgress($progress, [
+                    'phase' => $phase,
+                    'percent' => $phaseConfig['start'],
+                    'message' => $phaseConfig['label'].' wird gestartet.',
+                ]);
+
+                $phasePayload = $this->scraper->scrape(
+                    $username,
+                    $phase,
+                    $progress,
+                    [
+                        $phaseConfig['expected_override'] => max(0, (int) ($phaseConfig['expected'] ?? 0)),
+                    ],
+                    $phaseConfig['start'],
+                    $phaseConfig['end'],
+                );
+                $phaseList = data_get($phasePayload, 'profile.'.$phaseConfig['payload_key']);
 
                 if (is_array($phaseList)) {
                     data_set($payload, 'profile.'.$profilePayloadKey, $phaseList);
@@ -251,6 +316,21 @@ class TrackedPersonInstagramAnalysisService
         }
 
         return $statusMessage;
+    }
+
+    private function reportProgress(?callable $progress, array $payload): void
+    {
+        if (! $progress) {
+            return;
+        }
+
+        $progress([
+            'phase' => $payload['phase'] ?? 'analysis',
+            'percent' => max(0, min(100, (int) ($payload['percent'] ?? 0))),
+            'message' => (string) ($payload['message'] ?? 'Instagram-Analyse laeuft.'),
+            'loaded' => $payload['loaded'] ?? null,
+            'expected' => $payload['expected'] ?? null,
+        ]);
     }
 
     private function buildStoredPayload(

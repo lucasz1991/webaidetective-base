@@ -137,6 +137,15 @@ function debugLog(message, data) {
   process.stderr.write(`[SCRAPER DEBUG] ${payload}\n`);
 }
 
+function progressLog(stage, data = {}) {
+  process.stderr.write(`[SCRAPER PROGRESS] ${JSON.stringify({
+    at: new Date().toISOString(),
+    mode: operationMode,
+    stage,
+    ...data,
+  })}\n`);
+}
+
 function sanitizeDebugPayload(value, depth = 0) {
   if (depth > 5) {
     return '[depth-limit]';
@@ -292,6 +301,8 @@ function loadRuntimeConfig(configPath) {
     followerListMaxItems: DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS,
     followingListMaxItems: DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS,
     relationshipListMaxScrollRounds: DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS,
+    expectedFollowerCount: 0,
+    expectedFollowingCount: 0,
   };
 
   if (!configPath || !fs.existsSync(configPath)) {
@@ -319,6 +330,8 @@ function loadRuntimeConfig(configPath) {
           defaults.relationshipListMaxScrollRounds,
         ) || defaults.relationshipListMaxScrollRounds,
       ),
+      expectedFollowerCount: normalizeOptionalPositiveInteger(parsed?.expectedFollowerCount, defaults.expectedFollowerCount),
+      expectedFollowingCount: normalizeOptionalPositiveInteger(parsed?.expectedFollowingCount, defaults.expectedFollowingCount),
     };
   } catch (error) {
     debugLog('Fehler beim Laden der Runtime-Konfiguration:', error.message);
@@ -885,12 +898,17 @@ async function scrollFollowerDialog(page) {
     const dialog = document.querySelector('div[role="dialog"]');
 
     if (!dialog) {
-      window.scrollBy(0, window.innerHeight);
+      const before = window.scrollY;
+      window.scrollBy(0, Math.max(480, window.innerHeight * 0.85));
+      const after = window.scrollY;
+      const scrollHeight = document.documentElement.scrollHeight;
 
       return {
-        scrolled: true,
-        scrollTop: window.scrollY,
-        scrollHeight: document.documentElement.scrollHeight,
+        scrolled: after > before,
+        scrollTop: after,
+        scrollHeight,
+        clientHeight: window.innerHeight,
+        atBottom: after + window.innerHeight >= scrollHeight - 8,
       };
     }
 
@@ -904,20 +922,32 @@ async function scrollFollowerDialog(page) {
         scrolled: false,
         scrollTop: 0,
         scrollHeight: 0,
+        clientHeight: 0,
+        atBottom: true,
       };
     }
 
-    scrollTarget.scrollTop = scrollTarget.scrollHeight;
+    const before = scrollTarget.scrollTop;
+    const step = Math.max(420, scrollTarget.clientHeight * 0.85);
+    scrollTarget.scrollTop = Math.min(
+      scrollTarget.scrollTop + step,
+      scrollTarget.scrollHeight,
+    );
+    const after = scrollTarget.scrollTop;
 
     return {
-      scrolled: true,
-      scrollTop: scrollTarget.scrollTop,
+      scrolled: after > before,
+      scrollTop: after,
       scrollHeight: scrollTarget.scrollHeight,
+      clientHeight: scrollTarget.clientHeight,
+      atBottom: after + scrollTarget.clientHeight >= scrollTarget.scrollHeight - 8,
     };
   }).catch(() => ({
     scrolled: false,
     scrollTop: 0,
     scrollHeight: 0,
+    clientHeight: 0,
+    atBottom: false,
   }));
 }
 
@@ -980,6 +1010,7 @@ async function openFollowingDialog(page, username) {
 
 async function collectPublicRelationshipList(page, username, profile, relationship, options = {}) {
   const maxItems = normalizeOptionalPositiveInteger(options.maxItems, DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS);
+  const expectedCount = normalizeOptionalPositiveInteger(options.expectedCount, 0);
   const maxScrollRounds = Math.max(
     20,
     normalizeOptionalPositiveInteger(
@@ -995,6 +1026,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     complete: false,
     count: 0,
     maxItems,
+    expectedCount,
     items: [],
     reason: null,
   };
@@ -1010,6 +1042,11 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   }
 
   result.attempted = true;
+  progressLog('relationship-opening', {
+    relationship: normalizedRelationship,
+    expectedCount,
+    maxItems,
+  });
 
   const opened = normalizedRelationship === 'following'
     ? await openFollowingDialog(page, username)
@@ -1017,6 +1054,10 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
 
   if (!opened) {
     result.reason = `${normalizedRelationship}-dialog-not-found`;
+    progressLog('relationship-dialog-missing', {
+      relationship: normalizedRelationship,
+      reason: result.reason,
+    });
     return result;
   }
 
@@ -1024,8 +1065,9 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   const targetUsername = normalizeInstagramUsername(username);
   let unchangedRounds = 0;
   let previousCount = 0;
+  let lastScrollState = null;
 
-  for (let round = 0; round < maxScrollRounds && (!hasItemLimit || usersByUsername.size < maxItems) && unchangedRounds < 4; round++) {
+  for (let round = 0; round < maxScrollRounds && (!hasItemLimit || usersByUsername.size < maxItems); round++) {
     const entries = await collectFollowerEntriesFromDialog(page);
 
     for (const entry of entries) {
@@ -1042,7 +1084,22 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
       });
     }
 
+    progressLog('relationship-progress', {
+      relationship: normalizedRelationship,
+      round: round + 1,
+      loaded: usersByUsername.size,
+      expectedCount,
+      maxItems,
+      maxScrollRounds,
+      unchangedRounds,
+      atBottom: Boolean(lastScrollState?.atBottom),
+    });
+
     if (hasItemLimit && usersByUsername.size >= maxItems) {
+      break;
+    }
+
+    if (expectedCount > 0 && usersByUsername.size >= expectedCount) {
       break;
     }
 
@@ -1054,12 +1111,21 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     }
 
     const scrollState = await scrollFollowerDialog(page);
+    lastScrollState = scrollState;
 
-    if (!scrollState.scrolled) {
+    if (scrollState.atBottom && unchangedRounds >= 8) {
       break;
     }
 
-    await sleep(900);
+    if (!scrollState.scrolled && unchangedRounds >= 4) {
+      break;
+    }
+
+    if (unchangedRounds >= 18) {
+      break;
+    }
+
+    await sleep(scrollState.atBottom ? 1400 : 850);
   }
 
   result.items = hasItemLimit
@@ -1067,8 +1133,19 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     : Array.from(usersByUsername.values());
   result.count = result.items.length;
   result.available = result.count > 0;
-  result.complete = (!hasItemLimit || result.count < maxItems) && unchangedRounds >= 4;
+  result.complete = expectedCount > 0
+    ? result.count >= expectedCount
+    : ((!hasItemLimit || result.count < maxItems) && unchangedRounds >= 8);
   result.reason = result.available ? null : `no-${normalizedRelationship}-found`;
+
+  progressLog('relationship-complete', {
+    relationship: normalizedRelationship,
+    loaded: result.count,
+    expectedCount,
+    maxItems,
+    complete: result.complete,
+    reason: result.reason,
+  });
 
   await closeInstagramDialog(page);
 
@@ -2010,6 +2087,11 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       waitUntil: 'domcontentloaded',
     });
 
+    progressLog('profile-page-loaded', {
+      relationship: null,
+      url: page.url(),
+    });
+
     await sleep(1800);
 
     initialHtml = await page.content();
@@ -2017,10 +2099,18 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     title = await page.title().catch(() => null);
     finalUrl = page.url();
 
+    progressLog('profile-collected', {
+      usernameSeen: Boolean(initialProfile.usernameSeen),
+      isPrivate: Boolean(initialProfile.isPrivate),
+      requiresLogin: Boolean(initialProfile.requiresLogin),
+      imageCount: initialProfile.imageCount || 0,
+    });
+
     if (shouldCollectFollowers) {
       initialProfile.followersList = await collectPublicFollowersList(page, username, initialProfile, {
         maxItems: runtimeConfig.followerListMaxItems,
         maxScrollRounds: runtimeConfig.relationshipListMaxScrollRounds,
+        expectedCount: runtimeConfig.expectedFollowerCount,
       });
       recordRunDebug('followers-list-collected', initialProfile.followersList);
 
@@ -2043,6 +2133,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       initialProfile.followingList = await collectPublicFollowingList(page, username, initialProfile, {
         maxItems: runtimeConfig.followingListMaxItems,
         maxScrollRounds: runtimeConfig.relationshipListMaxScrollRounds,
+        expectedCount: runtimeConfig.expectedFollowingCount,
       });
       recordRunDebug('following-list-collected', initialProfile.followingList);
 

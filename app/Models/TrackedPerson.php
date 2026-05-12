@@ -107,8 +107,8 @@ class TrackedPerson extends Model
         return Storage::disk('public')->url($this->profile_image_path);
     }
 
-    public function analyzeInstagram(): TrackedPersonInstagramSnapshot
+    public function analyzeInstagram(?callable $progress = null): TrackedPersonInstagramSnapshot
     {
-        return app(TrackedPersonInstagramAnalysisService::class)->analyze($this);
+        return app(TrackedPersonInstagramAnalysisService::class)->analyze($this, $progress);
     }
 }
