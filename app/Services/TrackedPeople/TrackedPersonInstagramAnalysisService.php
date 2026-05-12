@@ -265,7 +265,7 @@ class TrackedPersonInstagramAnalysisService
                 $phaseList = data_get($phasePayload, 'profile.'.$phaseConfig['payload_key']);
 
                 if (is_array($phaseList)) {
-                    data_set($payload, 'profile.'.$profilePayloadKey, $phaseList);
+                    data_set($payload, 'profile.'.$phaseConfig['payload_key'], $phaseList);
                 }
 
                 $payload['notes'] = array_values(array_unique(array_filter(array_merge(
