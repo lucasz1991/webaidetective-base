@@ -873,9 +873,34 @@ async function collectFollowerEntriesFromDialog(page) {
       'tv',
     ]);
     const dialog = document.querySelector('div[role="dialog"]') || document.body;
-    const anchors = Array.from(dialog.querySelectorAll('a[href]'));
+    const suggestionHeadingPattern = /^(f[uü]r dich vorgeschlagen|vorschl[aä]ge f[uü]r dich|suggested for you|suggestions for you|suggested)$/i;
+    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const getOwnText = (element) => normalizeElementText(
+      Array.from(element.childNodes || [])
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent || '')
+        .join(' '),
+    );
+    const isSuggestionHeading = (element) => {
+      const ownText = getOwnText(element);
+      const fullText = normalizeElementText(element.innerText || element.textContent || '');
+      const text = ownText || fullText;
 
-    return anchors
+      return text !== '' && text.length <= 80 && suggestionHeadingPattern.test(text);
+    };
+    const suggestionHeading = Array.from(dialog.querySelectorAll('span, div, h1, h2, h3, h4, p'))
+      .find(isSuggestionHeading) || null;
+    const isAfterSuggestionHeading = (element) => {
+      if (!suggestionHeading) {
+        return false;
+      }
+
+      return Boolean(suggestionHeading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+    };
+    const anchors = Array.from(dialog.querySelectorAll('a[href]'))
+      .filter((anchor) => !isAfterSuggestionHeading(anchor));
+
+    const entries = anchors
       .map((anchor) => {
         let pathname = '';
 
@@ -909,13 +934,48 @@ async function collectFollowerEntriesFromDialog(page) {
         };
       })
       .filter(Boolean);
-  }).catch(() => []);
+
+    return {
+      entries,
+      suggestionsVisible: Boolean(suggestionHeading),
+      suggestionHeadingText: suggestionHeading
+        ? normalizeElementText(suggestionHeading.innerText || suggestionHeading.textContent || '')
+        : null,
+    };
+  }).catch(() => ({
+    entries: [],
+    suggestionsVisible: false,
+    suggestionHeadingText: null,
+  }));
 }
 
 async function waitForRelationshipDialogUpdate(page, previousState = {}, timeoutMs = 650) {
   return page.waitForFunction((state) => {
     const dialog = document.querySelector('div[role="dialog"]');
     const root = dialog || document.body;
+    const suggestionHeadingPattern = /^(f[uü]r dich vorgeschlagen|vorschl[aä]ge f[uü]r dich|suggested for you|suggestions for you|suggested)$/i;
+    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const getOwnText = (element) => normalizeElementText(
+      Array.from(element.childNodes || [])
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent || '')
+        .join(' '),
+    );
+    const suggestionHeading = Array.from(root.querySelectorAll('span, div, h1, h2, h3, h4, p'))
+      .find((element) => {
+        const ownText = getOwnText(element);
+        const fullText = normalizeElementText(element.innerText || element.textContent || '');
+        const text = ownText || fullText;
+
+        return text !== '' && text.length <= 80 && suggestionHeadingPattern.test(text);
+      }) || null;
+    const isAfterSuggestionHeading = (element) => {
+      if (!suggestionHeading) {
+        return false;
+      }
+
+      return Boolean(suggestionHeading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+    };
     const candidates = dialog
       ? Array.from(dialog.querySelectorAll('div, ul, section'))
         .filter((element) => element.scrollHeight > element.clientHeight + 40)
@@ -923,6 +983,7 @@ async function waitForRelationshipDialogUpdate(page, previousState = {}, timeout
     const scrollTarget = candidates
       .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight))[0];
     const profileLinkCount = Array.from(root.querySelectorAll('a[href]'))
+      .filter((anchor) => !isAfterSuggestionHeading(anchor))
       .filter((anchor) => {
         try {
           const parts = new URL(anchor.getAttribute('href'), window.location.origin)
@@ -1161,7 +1222,9 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     let passRounds = 0;
 
     while (totalScrollRounds < maxScrollRounds && !targetReached()) {
-      const entries = await collectFollowerEntriesFromDialog(page);
+      const collection = await collectFollowerEntriesFromDialog(page);
+      const entries = Array.isArray(collection) ? collection : (collection.entries || []);
+      const suggestionsVisible = !Array.isArray(collection) && Boolean(collection.suggestionsVisible);
 
       for (const entry of entries) {
         const relatedUsername = normalizeInstagramUsername(entry.username);
@@ -1198,12 +1261,18 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
         maxScrollRounds,
         unchangedRounds,
         atBottom: Boolean(lastScrollState?.atBottom),
+        suggestionsVisible,
       });
 
       if (targetReached()) {
         stopReason = expectedCount > 0 && usersByUsername.size >= expectedCount
           ? 'expected-count-reached'
           : 'max-items-reached';
+        break;
+      }
+
+      if (suggestionsVisible) {
+        stopReason = 'suggestions-section-reached';
         break;
       }
 
@@ -1286,7 +1355,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   result.scrollRounds = totalScrollRounds;
   result.complete = expectedCount > 0
     ? result.count >= expectedCount
-    : ((!hasItemLimit || result.count < maxItems) && ['no-new-items-after-reopen', 'pass-bottom-stale', 'pass-scroll-stale'].includes(stopReason));
+    : ((!hasItemLimit || result.count < maxItems) && ['suggestions-section-reached', 'no-new-items-after-reopen', 'pass-bottom-stale', 'pass-scroll-stale'].includes(stopReason));
   result.reason = result.available
     ? (result.complete ? null : (stopReason || `incomplete-${normalizedRelationship}-list`))
     : `no-${normalizedRelationship}-found`;
