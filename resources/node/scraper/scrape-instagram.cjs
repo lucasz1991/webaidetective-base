@@ -114,7 +114,7 @@ const isRelationshipOnlyMode = isFollowersOnlyMode || isFollowingOnlyMode;
 const shouldCollectFollowers = operationMode === 'analyze' || isFollowersOnlyMode;
 const shouldCollectFollowing = operationMode === 'analyze' || isFollowingOnlyMode;
 const DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS = 0;
-const DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS = 1000;
+const DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS = 100000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

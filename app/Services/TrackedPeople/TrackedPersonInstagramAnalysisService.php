@@ -71,9 +71,16 @@ class TrackedPersonInstagramAnalysisService
                 'status_message' => $this->resolveStatusMessage($payload, $attemptInfo),
                 'has_changes' => false,
                 'detected_changes' => [],
-                'raw_payload' => $this->buildStoredPayload($payload, $extracted, [], $attemptInfo, null),
+                'raw_payload' => null,
                 'analyzed_at' => $payload['scrapedAt'] ?? $analyzedAt,
             ]);
+
+            $extracted = $this->storeRelationshipListArtifacts(
+                $trackedPerson,
+                $snapshot,
+                $extracted,
+                $persistedWarnings,
+            );
 
             $storedMedia = $this->storeSnapshotMedia(
                 $trackedPerson,
@@ -340,6 +347,7 @@ class TrackedPersonInstagramAnalysisService
         array $attemptInfo,
         ?string $profileImageHash,
     ): array {
+        $payload = $this->stripRelationshipItemsFromPayload($payload, $extracted);
         $existingWarnings = array_values(array_filter(array_merge(
             $payload['warnings'] ?? [],
             $extracted['count_warnings'] ?? [],
@@ -355,20 +363,8 @@ class TrackedPersonInstagramAnalysisService
             'countSources' => $extracted['count_sources'] ?? [],
             'countWarnings' => $extracted['count_warnings'] ?? [],
             'visibleCountsComplete' => (bool) ($extracted['visible_counts_complete'] ?? false),
-            'followersList' => $extracted['followers_list'] ?? [
-                'attempted' => false,
-                'available' => false,
-                'complete' => false,
-                'count' => 0,
-                'items' => [],
-            ],
-            'followingList' => $extracted['following_list'] ?? [
-                'attempted' => false,
-                'available' => false,
-                'complete' => false,
-                'count' => 0,
-                'items' => [],
-            ],
+            'followersList' => $this->summarizeRelationshipListForPayload($extracted['followers_list'] ?? []),
+            'followingList' => $this->summarizeRelationshipListForPayload($extracted['following_list'] ?? []),
             'profileImageHash' => $profileImageHash,
             'detectedChanges' => $detectedChanges,
         ];
@@ -382,6 +378,41 @@ class TrackedPersonInstagramAnalysisService
         ];
 
         return $payload;
+    }
+
+    private function stripRelationshipItemsFromPayload(array $payload, array $extracted): array
+    {
+        foreach ([
+            'followersList' => 'followers_list',
+            'followingList' => 'following_list',
+        ] as $payloadKey => $extractedKey) {
+            if (! is_array(data_get($payload, 'profile.'.$payloadKey))) {
+                continue;
+            }
+
+            data_set(
+                $payload,
+                'profile.'.$payloadKey,
+                $this->summarizeRelationshipListForPayload($extracted[$extractedKey] ?? []),
+            );
+        }
+
+        return $payload;
+    }
+
+    private function summarizeRelationshipListForPayload(array $relationshipList): array
+    {
+        return [
+            'attempted' => (bool) ($relationshipList['attempted'] ?? false),
+            'available' => (bool) ($relationshipList['available'] ?? false),
+            'complete' => (bool) ($relationshipList['complete'] ?? false),
+            'count' => (int) ($relationshipList['count'] ?? count($relationshipList['items'] ?? [])),
+            'maxItems' => (int) ($relationshipList['maxItems'] ?? 0),
+            'expectedCount' => (int) ($relationshipList['expectedCount'] ?? 0),
+            'reason' => $relationshipList['reason'] ?? null,
+            'itemsPath' => $relationshipList['itemsPath'] ?? null,
+            'itemsPreview' => array_slice($relationshipList['items'] ?? [], 0, 25),
+        ];
     }
 
     private function appendPersistedWarnings(array $payload, array $persistedWarnings): array
@@ -455,6 +486,71 @@ class TrackedPersonInstagramAnalysisService
         }
 
         return $before !== $after;
+    }
+
+    private function storeRelationshipListArtifacts(
+        TrackedPerson $trackedPerson,
+        TrackedPersonInstagramSnapshot $snapshot,
+        array $extracted,
+        array &$persistedWarnings,
+    ): array {
+        $directory = 'tracked-people/'.$trackedPerson->id.'/instagram/'.$snapshot->analyzed_at->format('YmdHis').'-'.$snapshot->id.'/relationships';
+
+        foreach ([
+            'followers_list' => 'followers',
+            'following_list' => 'following',
+        ] as $extractedKey => $filename) {
+            $relationshipList = $extracted[$extractedKey] ?? null;
+
+            if (! is_array($relationshipList)) {
+                continue;
+            }
+
+            $items = array_values($relationshipList['items'] ?? []);
+            $relationshipList['count'] = count($items);
+
+            if ($items === []) {
+                $extracted[$extractedKey] = $relationshipList;
+                continue;
+            }
+
+            $relativePath = $directory.'/'.$filename.'.json';
+            $filePayload = [
+                'trackedPersonId' => $trackedPerson->id,
+                'snapshotId' => $snapshot->id,
+                'instagramUsername' => $snapshot->instagram_username,
+                'type' => $filename,
+                'count' => count($items),
+                'complete' => (bool) ($relationshipList['complete'] ?? false),
+                'expectedCount' => (int) ($relationshipList['expectedCount'] ?? 0),
+                'maxItems' => (int) ($relationshipList['maxItems'] ?? 0),
+                'scrapedAt' => optional($snapshot->analyzed_at)->toIso8601String(),
+                'items' => $items,
+            ];
+
+            try {
+                $stored = Storage::disk('public')->put(
+                    $relativePath,
+                    json_encode($filePayload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR),
+                );
+
+                if (! $stored) {
+                    throw new \RuntimeException('Storage::put lieferte false zurueck.');
+                }
+
+                $relationshipList['itemsPath'] = $relativePath;
+            } catch (\Throwable $exception) {
+                $persistedWarnings[] = sprintf(
+                    '%s-Liste konnte nicht als JSON-Datei gespeichert werden: %s',
+                    $filename === 'followers' ? 'Follower' : 'Gefolgt',
+                    $exception->getMessage(),
+                );
+            }
+
+            $extracted[$extractedKey] = $relationshipList;
+        }
+
+        return $extracted;
     }
 
     private function storeSnapshotMedia(

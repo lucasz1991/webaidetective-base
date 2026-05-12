@@ -207,7 +207,7 @@ class InstagramScraper
         $profile = is_array($profile) ? $profile : [];
 
         if (in_array($operationMode, ['followers', 'following'], true)) {
-            return max(240, (int) ($profile['relationship_list_process_timeout_seconds'] ?? 3600));
+            return max(14400, (int) ($profile['relationship_list_process_timeout_seconds'] ?? 14400));
         }
 
         return max(120, (int) ($profile['profile_process_timeout_seconds'] ?? 240));
@@ -260,7 +260,7 @@ class InstagramScraper
             'typingDelayMs' => max(0, (int) ($profile['typing_delay_ms'] ?? 35)),
             'followerListMaxItems' => max(0, (int) ($profile['follower_list_max_items'] ?? 0)),
             'followingListMaxItems' => max(0, (int) ($profile['following_list_max_items'] ?? 0)),
-            'relationshipListMaxScrollRounds' => max(20, (int) ($profile['relationship_list_max_scroll_rounds'] ?? 1000)),
+            'relationshipListMaxScrollRounds' => max(20, (int) ($profile['relationship_list_max_scroll_rounds'] ?? 100000)),
         ];
     }
 

@@ -14,8 +14,31 @@
         $latestLoginDiagnostics = data_get($latestSnapshot?->raw_payload, 'loginDiagnostics', []);
         $latestFollowersList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followersList', []);
         $latestFollowingList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followingList', []);
-        $latestFollowerItems = collect(data_get($latestFollowersList, 'items', []));
-        $latestFollowingItems = collect(data_get($latestFollowingList, 'items', []));
+        $loadRelationshipItems = function (array $relationshipList) {
+            $items = collect(data_get($relationshipList, 'items', []));
+            $itemsPath = data_get($relationshipList, 'itemsPath');
+
+            if ($items->isNotEmpty() || ! is_string($itemsPath) || $itemsPath === '') {
+                return $items;
+            }
+
+            try {
+                if (! \Illuminate\Support\Facades\Storage::disk('public')->exists($itemsPath)) {
+                    return collect();
+                }
+
+                $decoded = json_decode(
+                    \Illuminate\Support\Facades\Storage::disk('public')->get($itemsPath),
+                    true,
+                );
+
+                return collect(data_get($decoded, 'items', []));
+            } catch (\Throwable) {
+                return collect();
+            }
+        };
+        $latestFollowerItems = $loadRelationshipItems($latestFollowersList);
+        $latestFollowingItems = $loadRelationshipItems($latestFollowingList);
         $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
         $countSourceLabels = [
             'body_text_preview' => 'sichtbarer Profiltext',
@@ -139,7 +162,7 @@
                 </button>
             </div>
             <div class="mt-2 text-2xl font-bold text-slate-900">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '—' }}</div>
-            <div class="mt-1 text-xs text-slate-500">{{ number_format($latestFollowerItems->count()) }} gespeichert</div>
+            <div class="mt-1 text-xs text-slate-500">{{ number_format((int) data_get($latestFollowersList, 'count', $latestFollowerItems->count())) }} gespeichert</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div class="flex items-center justify-between gap-3">
@@ -154,7 +177,7 @@
                 </button>
             </div>
             <div class="mt-2 text-2xl font-bold text-slate-900">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '—' }}</div>
-            <div class="mt-1 text-xs text-slate-500">{{ number_format($latestFollowingItems->count()) }} gespeichert</div>
+            <div class="mt-1 text-xs text-slate-500">{{ number_format((int) data_get($latestFollowingList, 'count', $latestFollowingItems->count())) }} gespeichert</div>
         </div>
         <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Beitraege</div>
@@ -182,7 +205,7 @@
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Followerliste</h3>
                     <p class="mt-1 text-sm text-slate-500">
-                        {{ number_format($latestFollowerItems->count()) }} Eintraege aus der letzten Instagram-Analyse
+                        {{ number_format((int) data_get($latestFollowersList, 'count', $latestFollowerItems->count())) }} Eintraege aus der letzten Instagram-Analyse
                         @if(data_get($latestFollowersList, 'maxItems'))
                             · Limit {{ number_format((int) data_get($latestFollowersList, 'maxItems')) }}
                         @endif
@@ -236,7 +259,7 @@
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Gefolgt-Liste</h3>
                     <p class="mt-1 text-sm text-slate-500">
-                        {{ number_format($latestFollowingItems->count()) }} Eintraege aus der letzten Instagram-Analyse
+                        {{ number_format((int) data_get($latestFollowingList, 'count', $latestFollowingItems->count())) }} Eintraege aus der letzten Instagram-Analyse
                         @if(data_get($latestFollowingList, 'maxItems'))
                             · Limit {{ number_format((int) data_get($latestFollowingList, 'maxItems')) }}
                         @endif
