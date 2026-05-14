@@ -41,7 +41,7 @@ class InstagramScraper
 
         try {
             $result = Process::path(base_path())
-                ->timeout($this->resolveProcessTimeout($operationMode))
+                ->forever()
                 ->run([
                     $this->resolveNodeBinary(),
                     $nodeScript,
@@ -219,18 +219,6 @@ class InstagramScraper
         };
     }
 
-    private function resolveProcessTimeout(string $operationMode): int
-    {
-        $profile = Setting::getValue('scraper', 'instagram_profile');
-        $profile = is_array($profile) ? $profile : [];
-
-        if (in_array($operationMode, ['followers', 'following'], true)) {
-            return max(14400, (int) ($profile['relationship_list_process_timeout_seconds'] ?? 14400));
-        }
-
-        return max(120, (int) ($profile['profile_process_timeout_seconds'] ?? 240));
-    }
-
     private function normalizeOperationMode(string $operationMode): string
     {
         $operationMode = Str::lower(trim($operationMode));
@@ -273,7 +261,8 @@ class InstagramScraper
             'loginPasswordConfigured' => $runtimePassword['configured'],
             'loginPasswordDecryptable' => $runtimePassword['decryptable'],
             'loginPasswordSource' => $runtimePassword['source'],
-            'navigationTimeoutMs' => max(30000, ((int) ($profile['navigation_timeout_seconds'] ?? 120)) * 1000),
+            // 0 deaktiviert Puppeteer-Navigation-Timeouts; der Scraper beendet Phasen ueber eigene DOM-Zustandslogik.
+            'navigationTimeoutMs' => 0,
             'postLoginWaitMs' => max(500, (int) ($profile['post_login_wait_ms'] ?? 2500)),
             'typingDelayMs' => max(0, (int) ($profile['typing_delay_ms'] ?? 35)),
             'followerListMaxItems' => max(0, (int) ($profile['follower_list_max_items'] ?? 0)),

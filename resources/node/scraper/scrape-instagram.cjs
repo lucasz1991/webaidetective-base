@@ -296,7 +296,7 @@ function loadRuntimeConfig(configPath) {
     loginPasswordConfigured: false,
     loginPasswordDecryptable: true,
     loginPasswordSource: null,
-    navigationTimeoutMs: 120000,
+    navigationTimeoutMs: 0,
     postLoginWaitMs: 2500,
     typingDelayMs: 35,
     followerListMaxItems: DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS,
@@ -319,7 +319,7 @@ function loadRuntimeConfig(configPath) {
       persistentProfileEnabled: parsed?.persistentProfileEnabled !== false,
       headlessEnabled: parsed?.headlessEnabled !== false,
       autoLoginEnabled: parsed?.autoLoginEnabled === true,
-      navigationTimeoutMs: Math.max(30000, Number(parsed?.navigationTimeoutMs || defaults.navigationTimeoutMs)),
+      navigationTimeoutMs: 0,
       postLoginWaitMs: Math.max(500, Number(parsed?.postLoginWaitMs || defaults.postLoginWaitMs)),
       typingDelayMs: Math.max(0, Number(parsed?.typingDelayMs || defaults.typingDelayMs)),
       followerListMaxItems: normalizeOptionalPositiveInteger(parsed?.followerListMaxItems, defaults.followerListMaxItems),
@@ -613,7 +613,7 @@ async function primeInstagramSession(page, cookieFilePath) {
   }
 
   await page.goto('https://www.instagram.com/', {
-    timeout: 120000,
+    timeout: 0,
     waitUntil: 'domcontentloaded',
   });
 
@@ -949,61 +949,6 @@ async function collectFollowerEntriesFromDialog(page) {
   }));
 }
 
-async function waitForRelationshipDialogUpdate(page, previousState = {}, timeoutMs = 650) {
-  return page.waitForFunction((state) => {
-    const dialog = document.querySelector('div[role="dialog"]');
-    const root = dialog || document.body;
-    const suggestionHeadingPattern = /^(f[uü]r dich vorgeschlagen|vorschl[aä]ge f[uü]r dich|suggested for you|suggestions for you|suggested)$/i;
-    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
-    const getOwnText = (element) => normalizeElementText(
-      Array.from(element.childNodes || [])
-        .filter((node) => node.nodeType === Node.TEXT_NODE)
-        .map((node) => node.textContent || '')
-        .join(' '),
-    );
-    const suggestionHeading = Array.from(root.querySelectorAll('span, div, h1, h2, h3, h4, p'))
-      .find((element) => {
-        const ownText = getOwnText(element);
-        const fullText = normalizeElementText(element.innerText || element.textContent || '');
-        const text = ownText || fullText;
-
-        return text !== '' && text.length <= 80 && suggestionHeadingPattern.test(text);
-      }) || null;
-    const isAfterSuggestionHeading = (element) => {
-      if (!suggestionHeading) {
-        return false;
-      }
-
-      return Boolean(suggestionHeading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
-    };
-    const candidates = dialog
-      ? Array.from(dialog.querySelectorAll('div, ul, section'))
-        .filter((element) => element.scrollHeight > element.clientHeight + 40)
-      : [];
-    const scrollTarget = candidates
-      .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight))[0];
-    const profileLinkCount = Array.from(root.querySelectorAll('a[href]'))
-      .filter((anchor) => !isAfterSuggestionHeading(anchor))
-      .filter((anchor) => {
-        try {
-          const parts = new URL(anchor.getAttribute('href'), window.location.origin)
-            .pathname
-            .split('/')
-            .filter(Boolean);
-
-          return parts.length === 1;
-        } catch (error) {
-          return false;
-        }
-      })
-      .length;
-    const scrollHeight = scrollTarget?.scrollHeight || document.documentElement.scrollHeight || 0;
-
-    return profileLinkCount > (state.profileLinkCount || 0)
-      || scrollHeight > (state.scrollHeight || 0);
-  }, { timeout: timeoutMs }, previousState).then(() => true).catch(() => false);
-}
-
 async function scrollFollowerDialog(page) {
   return page.evaluate(() => {
     const dialog = document.querySelector('div[role="dialog"]');
@@ -1066,12 +1011,6 @@ async function scrollFollowerDialog(page) {
   }));
 }
 
-async function waitForInstagramRelationshipDialog(page, timeoutMs = 3000) {
-  return page.waitForSelector('div[role="dialog"]', {
-    timeout: timeoutMs,
-  }).then(() => true).catch(() => false);
-}
-
 async function openInstagramRelationshipDialog(page, username, relationship) {
   const normalizedUsername = normalizeInstagramUsername(username);
   const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
@@ -1102,20 +1041,21 @@ async function openInstagramRelationshipDialog(page, username, relationship) {
     return true;
   }, normalizedUsername, normalizedRelationship).catch(() => false);
 
-  if (clicked && await waitForInstagramRelationshipDialog(page, 2800)) {
-    await sleep(250);
+  if (clicked) {
+    await sleep(1800);
+  }
+
+  const hasDialog = await page.evaluate(() => Boolean(document.querySelector('div[role="dialog"]'))).catch(() => false);
+
+  if (hasDialog) {
     return true;
   }
 
   await page.goto(`https://www.instagram.com/${normalizedUsername}/${normalizedRelationship}/`, {
-    timeout: 60000,
+    timeout: 0,
     waitUntil: 'domcontentloaded',
   }).catch(() => null);
-
-  if (await waitForInstagramRelationshipDialog(page, 4500)) {
-    await sleep(250);
-    return true;
-  }
+  await sleep(2200);
 
   return page.evaluate(() => Boolean(document.querySelector('div[role="dialog"]'))).catch(() => false);
 }
@@ -1294,15 +1234,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
         break;
       }
 
-      const updated = await waitForRelationshipDialogUpdate(
-        page,
-        scrollState,
-        scrollState.atBottom ? 900 : 550,
-      );
-
-      if (!updated) {
-        await sleep(scrollState.atBottom ? 350 : 180);
-      }
+      await sleep(scrollState.atBottom ? 1400 : 850);
     }
 
     const passAdded = usersByUsername.size - passStartCount;
@@ -1343,7 +1275,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
       break;
     }
 
-    await sleep(450);
+    await sleep(900);
   }
 
   result.items = hasItemLimit
@@ -1353,9 +1285,10 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   result.available = result.count > 0;
   result.openAttempts = openAttempts;
   result.scrollRounds = totalScrollRounds;
-  result.complete = expectedCount > 0
-    ? result.count >= expectedCount
-    : ((!hasItemLimit || result.count < maxItems) && ['suggestions-section-reached', 'no-new-items-after-reopen', 'pass-bottom-stale', 'pass-scroll-stale'].includes(stopReason));
+  result.complete = stopReason === 'suggestions-section-reached'
+    || (expectedCount > 0
+      ? result.count >= expectedCount
+      : ((!hasItemLimit || result.count < maxItems) && ['no-new-items-after-reopen', 'pass-bottom-stale', 'pass-scroll-stale'].includes(stopReason)));
   result.reason = result.available
     ? (result.complete ? null : (stopReason || `incomplete-${normalizedRelationship}-list`))
     : `no-${normalizedRelationship}-found`;
@@ -2056,12 +1989,6 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       },
     );
 
-    await snapshotPage
-      .waitForFunction(() => Array.from(document.images).every((image) => image.complete), {
-        timeout: 10000,
-      })
-      .catch(() => {});
-
     await sleep(1200);
 
     await snapshotPage.screenshot({
@@ -2174,6 +2101,8 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     }
 
     page = await browser.newPage();
+    page.setDefaultTimeout(0);
+    page.setDefaultNavigationTimeout(0);
 
     page.on('console', (message) => {
       const text = normalizeText(message.text());

@@ -772,7 +772,7 @@ class TrackedPersonInstagramAnalysisService
             $response = Http::withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
                 'Accept-Language' => 'de-DE,de;q=0.9,en;q=0.8',
-            ])->timeout(45)->retry(2, 500)->get($imageUrl);
+            ])->timeout(0)->retry(2, 500)->get($imageUrl);
         } catch (\Throwable $exception) {
             $persistedWarnings[] = 'Bild konnte nicht geladen werden: '.$exception->getMessage();
 
