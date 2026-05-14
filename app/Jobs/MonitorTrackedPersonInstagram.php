@@ -74,7 +74,7 @@ class MonitorTrackedPersonInstagram implements ShouldQueue
         $subject = 'Aenderungen bei '.$trackedPerson->display_name;
 
         Mail::create([
-            'type' => 'both',
+            'type' => $this->resolveNotificationDeliveryType($trackedPerson),
             'from_user_id' => $owner->id,
             'content' => [
                 'subject' => $subject,
@@ -90,6 +90,13 @@ class MonitorTrackedPersonInstagram implements ShouldQueue
                 ],
             ],
         ]);
+    }
+
+    private function resolveNotificationDeliveryType(TrackedPerson $trackedPerson): string
+    {
+        $type = strtolower((string) ($trackedPerson->notification_delivery_type ?: 'both'));
+
+        return in_array($type, ['message', 'mail', 'both'], true) ? $type : 'both';
     }
 
     private function buildNotificationMessage(TrackedPerson $trackedPerson, $snapshot): string

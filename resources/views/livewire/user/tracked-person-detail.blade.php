@@ -71,9 +71,9 @@
         <div class="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl">
             <div class="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-pink-600"></div>
             <div class="mt-4 text-xs font-semibold uppercase tracking-wide text-pink-700" wire:stream="instagram-progress-phase">Start</div>
-            <h3 class="mt-1 text-lg font-bold text-slate-900">Instagram-Analyse wird gestartet</h3>
+            <h3 class="mt-1 text-lg font-bold text-slate-900">Instagram-Analyse laeuft</h3>
             <p class="mt-2 text-sm leading-6 text-slate-600" wire:stream="instagram-progress-message">
-                Der Auftrag wird an die Queue uebergeben. Der Status aktualisiert sich automatisch.
+                Grunddaten, Followerliste und Gefolgt-Liste werden nacheinander abgearbeitet.
             </p>
             <div class="mt-5">
                 <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
@@ -85,7 +85,7 @@
                 </div>
             </div>
             <p class="mt-4 text-xs leading-5 text-slate-500">
-                Die eigentliche Analyse laeuft im Hintergrund wie die automatische Dauerbeobachtung.
+                Die Listen sind nicht nach Eintraegen begrenzt. Instagram kann das Laden bei sehr grossen Profilen trotzdem abbremsen oder blockieren.
             </p>
         </div>
     </div>
@@ -505,6 +505,15 @@
                 <div class="mt-5 border-t border-slate-200 pt-4">
                     <h4 class="text-sm font-bold text-slate-900">Benachrichtigungen</h4>
                     <div class="mt-3 grid gap-3">
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Zustellung</label>
+                            <select wire:model.defer="notification_delivery_type" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                <option value="both">Interne Nachricht und E-Mail</option>
+                                <option value="message">Nur interne Nachricht</option>
+                                <option value="mail">Nur E-Mail</option>
+                            </select>
+                            @error('notification_delivery_type') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        </div>
                         <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                             <input type="checkbox" wire:model.defer="monitoring_enabled" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
                             <span class="font-medium">Dauerbeobachtung aktivieren</span>

@@ -162,6 +162,7 @@ class InstagramScraper
             'relationship-opening' => 2,
             'relationship-dialog-missing' => 100,
             'relationship-complete' => 100,
+            'relationship-rate-limited' => 100,
             'profile-session-check' => 12,
             'profile-opening' => 25,
             'profile-page-loaded' => 45,
@@ -187,6 +188,10 @@ class InstagramScraper
     private function buildProgressMessage(string $phase, string $stage, int $loaded, int $expected, int $openAttempt = 0): string
     {
         if ($phase === 'followers') {
+            if ($stage === 'relationship-rate-limited') {
+                return 'Instagram hat die Followerliste per Rate-Limit blockiert; die Listenphase wird abgebrochen.';
+            }
+
             if ($stage === 'relationship-reopening') {
                 return 'Followerliste wird erneut geoeffnet'.($openAttempt > 0 ? ' (Pass '.$openAttempt.')' : '').': '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
             }
@@ -201,6 +206,10 @@ class InstagramScraper
         }
 
         if ($phase === 'following') {
+            if ($stage === 'relationship-rate-limited') {
+                return 'Instagram hat die Gefolgt-Liste per Rate-Limit blockiert; die Listenphase wird abgebrochen.';
+            }
+
             if ($stage === 'relationship-reopening') {
                 return 'Gefolgt-Liste wird erneut geoeffnet'.($openAttempt > 0 ? ' (Pass '.$openAttempt.')' : '').': '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
             }

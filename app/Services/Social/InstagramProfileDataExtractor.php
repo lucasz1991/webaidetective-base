@@ -71,6 +71,8 @@ class InstagramProfileDataExtractor
             'scrollRounds' => (int) data_get($relationshipList, 'scrollRounds', 0),
             'noProgressReopenLimit' => (int) data_get($relationshipList, 'noProgressReopenLimit', 0),
             'reason' => data_get($relationshipList, 'reason'),
+            'rateLimited' => (bool) data_get($relationshipList, 'rateLimited', false),
+            'rateLimitText' => data_get($relationshipList, 'rateLimitText'),
             'items' => $items,
         ];
     }

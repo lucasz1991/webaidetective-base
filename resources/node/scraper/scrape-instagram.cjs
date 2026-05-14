@@ -820,7 +820,7 @@ function deriveScrapeOutcome({ title, finalUrl, profile, warnings, cookieDiagnos
     `${normalizedTitle} ${normalizedBodyPreview}`,
   );
 
-  const hasAuthOrRateLimitBlock = /status of 401|status of 403|http 401|http 403|require_login|please wait a few minutes|bitte warte einige minuten/.test(
+  const hasAuthOrRateLimitBlock = /status of 401|status of 403|http 401|http 403|require_login|please wait a few minutes|bitte warte einige minuten|instagram-rate-limit/.test(
     normalizedWarnings,
   );
 
@@ -941,6 +941,28 @@ async function closeInstagramDialog(page) {
 
 async function collectFollowerEntriesFromDialog(page) {
   return page.evaluate(() => {
+    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|try again later|we restrict certain activity|we limit how often)/i;
+    const rateLimitDialog = Array.from(document.querySelectorAll('div[role="dialog"]'))
+      .find((dialogElement) => rateLimitPattern.test(
+        normalizeElementText(dialogElement.innerText || dialogElement.textContent || ''),
+      )) || null;
+    const rateLimitContainer = rateLimitDialog || (
+      rateLimitPattern.test(normalizeElementText(document.body?.innerText || document.body?.textContent || ''))
+        ? document.body
+        : null
+    );
+
+    if (rateLimitContainer) {
+      return {
+        entries: [],
+        suggestionsVisible: false,
+        suggestionHeadingText: null,
+        rateLimited: true,
+        rateLimitText: normalizeElementText(rateLimitContainer.innerText || rateLimitContainer.textContent || '').slice(0, 500),
+      };
+    }
+
     const reservedPaths = new Set([
       'accounts',
       'direct',
@@ -953,7 +975,6 @@ async function collectFollowerEntriesFromDialog(page) {
     ]);
     const dialog = document.querySelector('div[role="dialog"]') || document.body;
     const suggestionHeadingPattern = /^(f[uü]r dich vorgeschlagen|vorschl[aä]ge f[uü]r dich|suggested for you|suggestions for you|suggested)$/i;
-    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
     const getOwnText = (element) => normalizeElementText(
       Array.from(element.childNodes || [])
         .filter((node) => node.nodeType === Node.TEXT_NODE)
@@ -1020,11 +1041,15 @@ async function collectFollowerEntriesFromDialog(page) {
       suggestionHeadingText: suggestionHeading
         ? normalizeElementText(suggestionHeading.innerText || suggestionHeading.textContent || '')
         : null,
+      rateLimited: false,
+      rateLimitText: null,
     };
   }).catch(() => ({
     entries: [],
     suggestionsVisible: false,
     suggestionHeadingText: null,
+    rateLimited: false,
+    rateLimitText: null,
   }));
 }
 
@@ -1170,6 +1195,8 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     expectedCount,
     items: [],
     reason: null,
+    rateLimited: false,
+    rateLimitText: null,
     openAttempts: 0,
     scrollRounds: 0,
     noProgressReopenLimit: RELATIONSHIP_NO_PROGRESS_REOPEN_LIMIT,
@@ -1246,6 +1273,29 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
       const collection = await collectFollowerEntriesFromDialog(page);
       const entries = Array.isArray(collection) ? collection : (collection.entries || []);
       const suggestionsVisible = !Array.isArray(collection) && Boolean(collection.suggestionsVisible);
+      const rateLimited = !Array.isArray(collection) && Boolean(collection.rateLimited);
+
+      if (rateLimited) {
+        stopReason = 'instagram-rate-limit';
+        result.rateLimited = true;
+        result.rateLimitText = collection.rateLimitText || null;
+        recordRunDebug('relationship-rate-limit-detected', {
+          relationship: normalizedRelationship,
+          loaded: usersByUsername.size,
+          expectedCount,
+          openAttempt: openAttempts,
+          round: totalScrollRounds,
+          text: collection.rateLimitText || null,
+        });
+        progressLog('relationship-rate-limited', {
+          relationship: normalizedRelationship,
+          loaded: usersByUsername.size,
+          expectedCount,
+          openAttempt: openAttempts,
+          reason: stopReason,
+        });
+        break;
+      }
 
       for (const entry of entries) {
         const relatedUsername = normalizeInstagramUsername(entry.username);
@@ -1336,6 +1386,10 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
 
     await closeInstagramDialog(page);
 
+    if (stopReason === 'instagram-rate-limit') {
+      break;
+    }
+
     if (targetReached()) {
       break;
     }
@@ -1366,11 +1420,13 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   result.available = result.count > 0;
   result.openAttempts = openAttempts;
   result.scrollRounds = totalScrollRounds;
-  result.complete = stopReason === 'suggestions-section-reached'
+  result.complete = stopReason !== 'instagram-rate-limit' && (stopReason === 'suggestions-section-reached'
     || (expectedCount > 0
       ? result.count >= expectedCount
-      : ((!hasItemLimit || result.count < maxItems) && ['no-new-items-after-reopen', 'pass-bottom-stale', 'pass-scroll-stale'].includes(stopReason)));
-  result.reason = result.available
+      : ((!hasItemLimit || result.count < maxItems) && ['no-new-items-after-reopen', 'pass-bottom-stale', 'pass-scroll-stale'].includes(stopReason))));
+  result.reason = stopReason === 'instagram-rate-limit'
+    ? stopReason
+    : result.available
     ? (result.complete ? null : (stopReason || `incomplete-${normalizedRelationship}-list`))
     : `no-${normalizedRelationship}-found`;
 
@@ -1383,6 +1439,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     scrollRounds: totalScrollRounds,
     complete: result.complete,
     reason: result.reason,
+    rateLimited: result.rateLimited,
   });
 
   return result;
@@ -2367,7 +2424,10 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       });
       recordRunDebug('followers-list-collected', initialProfile.followersList);
 
-      if (initialProfile.followersList?.available) {
+      if (initialProfile.followersList?.rateLimited) {
+        notes.push('Instagram hat die Followerliste per Rate-Limit-Meldung blockiert; die Listenphase wurde abgebrochen.');
+        consoleMessages.push('rate-limit: instagram-rate-limit followers');
+      } else if (initialProfile.followersList?.available) {
         notes.push(`Followerliste ausgelesen: ${initialProfile.followersList.count} Eintraege.`);
       } else if (initialProfile.followersList?.attempted) {
         notes.push('Followerliste konnte nicht ausgelesen werden.');
@@ -2388,7 +2448,10 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       });
       recordRunDebug('following-list-collected', initialProfile.followingList);
 
-      if (initialProfile.followingList?.available) {
+      if (initialProfile.followingList?.rateLimited) {
+        notes.push('Instagram hat die Gefolgt-Liste per Rate-Limit-Meldung blockiert; die Listenphase wurde abgebrochen.');
+        consoleMessages.push('rate-limit: instagram-rate-limit following');
+      } else if (initialProfile.followingList?.available) {
         notes.push(`Gefolgt-Liste ausgelesen: ${initialProfile.followingList.count} Eintraege.`);
       } else if (initialProfile.followingList?.attempted) {
         notes.push('Gefolgt-Liste konnte nicht ausgelesen werden.');

@@ -283,7 +283,13 @@ class TrackedPersonInstagramAnalysisService
                     'ok' => (bool) ($phasePayload['ok'] ?? false),
                     'count' => is_array($phaseList) ? (int) ($phaseList['count'] ?? 0) : 0,
                     'available' => is_array($phaseList) ? (bool) ($phaseList['available'] ?? false) : false,
+                    'rateLimited' => is_array($phaseList) ? (bool) ($phaseList['rateLimited'] ?? false) : false,
                 ];
+
+                if (is_array($phaseList) && (bool) ($phaseList['rateLimited'] ?? false)) {
+                    $phaseWarnings[] = $phaseConfig['label'].' wurde durch Instagram Rate-Limit blockiert. Weitere Listenphasen werden fuer diesen Lauf uebersprungen.';
+                    break;
+                }
             } catch (\Throwable $exception) {
                 $phaseWarning = sprintf(
                     'Instagram-%s-Phase fehlgeschlagen: %s',
@@ -423,6 +429,8 @@ class TrackedPersonInstagramAnalysisService
             'scrollRounds' => (int) ($relationshipList['scrollRounds'] ?? 0),
             'noProgressReopenLimit' => (int) ($relationshipList['noProgressReopenLimit'] ?? 0),
             'reason' => $relationshipList['reason'] ?? null,
+            'rateLimited' => (bool) ($relationshipList['rateLimited'] ?? false),
+            'rateLimitText' => $relationshipList['rateLimitText'] ?? null,
             'itemsPath' => $relationshipList['itemsPath'] ?? null,
             'itemsPreview' => array_slice($relationshipList['items'] ?? [], 0, 25),
             'observedPreview' => array_slice($relationshipList['observedItems'] ?? [], 0, 25),
@@ -620,6 +628,8 @@ class TrackedPersonInstagramAnalysisService
                 'scrollRounds' => (int) ($relationshipList['scrollRounds'] ?? 0),
                 'noProgressReopenLimit' => (int) ($relationshipList['noProgressReopenLimit'] ?? 0),
                 'reason' => $relationshipList['reason'] ?? null,
+                'rateLimited' => (bool) ($relationshipList['rateLimited'] ?? false),
+                'rateLimitText' => $relationshipList['rateLimitText'] ?? null,
                 'scrapedAt' => optional($snapshot->analyzed_at)->toIso8601String(),
                 'items' => $activeItems,
                 'activeItems' => $activeItems,

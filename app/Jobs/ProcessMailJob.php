@@ -24,20 +24,16 @@ class ProcessMailJob implements ShouldQueue
 
     public function handle(): void
     {
-        $recipients = is_array($this->mail->recipients) ? $this->mail->recipients : [];
-        $content = is_array($this->mail->content) ? $this->mail->content : [];
-        $type = $this->resolveDeliveryType($this->mail->type ?? null);
+        $this->mail->createInternalMessages();
+        $this->mail->refresh();
 
-        $sendMessage = in_array($type, ['message', 'both'], true);
-        $sendEmail = in_array($type, ['mail', 'email', 'both'], true);
+        $recipients = is_array($this->mail->recipients) ? $this->mail->recipients : [];
+        $sendEmail = $this->mail->shouldSendEmail();
 
         foreach ($recipients as &$recipient) {
             try {
-                $recipient['status'] = false;
-
                 $userId = (int) ($recipient['user_id'] ?? 0);
                 $email = trim((string) ($recipient['email'] ?? ''));
-                $processed = false;
 
                 if ($userId > 0) {
                     $user = User::find($userId);
@@ -50,27 +46,23 @@ class ProcessMailJob implements ShouldQueue
                         continue;
                     }
 
-                    if ($sendMessage) {
-                        $user->receiveMessage(
-                            $content['subject'] ?? 'Nachricht',
-                            $content['body'] ?? '',
-                            $this->resolveSenderId($this->mail->from_user_id, $user),
-                        );
-
-                        $processed = true;
+                    if ($sendEmail && ! (bool) ($recipient['mail_status'] ?? false)) {
+                        $user->notifyNow(new MailNotification($this->mail));
+                        $recipient['mail_status'] = true;
                     }
 
-                    if ($sendEmail) {
-                        $user->notify(new MailNotification($this->mail));
-                        $processed = true;
-                    }
-
-                    $recipient['status'] = $processed;
+                    $recipient['status'] = $this->mail->recipientIsComplete($recipient);
                     continue;
                 }
 
-                if ($sendEmail && filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                    Notification::route('mail', $email)->notify(new MailNotification($this->mail));
+                if ($sendEmail && filter_var($email, FILTER_VALIDATE_EMAIL) && ! (bool) ($recipient['mail_status'] ?? false)) {
+                    Notification::route('mail', $email)->notifyNow(new MailNotification($this->mail));
+                    $recipient['mail_status'] = true;
+                    $recipient['status'] = $this->mail->recipientIsComplete($recipient);
+                    continue;
+                }
+
+                if ($this->mail->recipientIsComplete($recipient)) {
                     $recipient['status'] = true;
                     continue;
                 }
@@ -98,29 +90,5 @@ class ProcessMailJob implements ShouldQueue
                 fn (array $recipient) => (bool) ($recipient['status'] ?? false),
             ),
         ]);
-    }
-
-    private function resolveDeliveryType(mixed $type): string
-    {
-        if (is_bool($type)) {
-            return $type ? 'both' : 'message';
-        }
-
-        $normalized = strtolower(trim((string) $type));
-
-        return $normalized !== '' ? $normalized : 'message';
-    }
-
-    private function resolveSenderId(?int $senderId, User $recipient): int
-    {
-        if ($senderId && User::whereKey($senderId)->exists()) {
-            return $senderId;
-        }
-
-        if (User::whereKey(1)->exists()) {
-            return 1;
-        }
-
-        return $recipient->id;
     }
 }

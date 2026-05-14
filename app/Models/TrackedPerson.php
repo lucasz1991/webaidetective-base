@@ -29,6 +29,7 @@ class TrackedPerson extends Model
         'x_username',
         'youtube_username',
         'snapchat_username',
+        'notification_delivery_type',
         'notify_social_changes',
         'notify_instagram_changes',
         'notify_tiktok_changes',

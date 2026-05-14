@@ -2,7 +2,6 @@
 
 namespace App\Livewire\User;
 
-use App\Jobs\MonitorTrackedPersonInstagram;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
 use Illuminate\Support\Facades\Auth;
@@ -25,6 +24,7 @@ class TrackedPersonDetail extends Component
     public $x_username = '';
     public $youtube_username = '';
     public $snapchat_username = '';
+    public $notification_delivery_type = 'both';
     public $monitoring_enabled = false;
     public $notify_social_changes = false;
     public $notify_instagram_changes = true;
@@ -75,6 +75,7 @@ class TrackedPersonDetail extends Component
             'x_username' => ['nullable', 'string', 'max:255'],
             'youtube_username' => ['nullable', 'string', 'max:255'],
             'snapchat_username' => ['nullable', 'string', 'max:255'],
+            'notification_delivery_type' => ['required', 'string', 'in:message,mail,both'],
             'monitoring_enabled' => ['boolean'],
             'notify_social_changes' => ['boolean'],
             'notify_instagram_changes' => ['boolean'],
@@ -105,6 +106,7 @@ class TrackedPersonDetail extends Component
             'x_username' => $this->normalizeHandle($validated['x_username'] ?? null),
             'youtube_username' => $this->normalizeHandle($validated['youtube_username'] ?? null),
             'snapchat_username' => $this->normalizeHandle($validated['snapchat_username'] ?? null),
+            'notification_delivery_type' => $validated['notification_delivery_type'],
             'monitoring_enabled' => (bool) $this->monitoring_enabled,
             'notify_social_changes' => (bool) $this->notify_social_changes,
             'notify_instagram_changes' => (bool) $this->notify_instagram_changes,
@@ -123,6 +125,9 @@ class TrackedPersonDetail extends Component
 
     public function analyzeInstagram(): void
     {
+        @set_time_limit(0);
+        @ignore_user_abort(true);
+
         $trackedPerson = $this->resolveTrackedPerson();
 
         if (! $trackedPerson->instagram_username) {
@@ -131,21 +136,34 @@ class TrackedPersonDetail extends Component
             return;
         }
 
+        $progress = fn (array $state) => $this->streamInstagramProgress($state);
+
         $trackedPerson->forceFill([
             'last_instagram_status_level' => 'partial',
-            'last_instagram_status_message' => 'Instagram-Analyse wurde in die Queue gestellt.',
+            'last_instagram_status_message' => 'Instagram-Analyse laeuft direkt in der Oberflaeche.',
         ])->save();
 
         try {
-            MonitorTrackedPersonInstagram::dispatch($trackedPerson->id, true, false);
+            $this->streamInstagramProgress([
+                'phase' => 'start',
+                'percent' => 1,
+                'message' => 'Instagram-Analyse wird vorbereitet.',
+            ]);
+
+            $snapshot = $trackedPerson->analyzeInstagram($progress);
         } catch (\Throwable $exception) {
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => 'Instagram-Analyse konnte nicht gestartet werden: '.$exception->getMessage(),
+                'last_instagram_status_message' => 'Instagram-Analyse fehlgeschlagen: '.$exception->getMessage(),
             ])->save();
 
+            $this->streamInstagramProgress([
+                'phase' => 'error',
+                'percent' => 100,
+                'message' => 'Instagram-Analyse fehlgeschlagen.',
+            ]);
             $this->setDetailStatus(
-                'Instagram-Analyse konnte nicht gestartet werden: '.$exception->getMessage(),
+                'Instagram-Analyse fehlgeschlagen: '.$exception->getMessage(),
                 'error',
             );
 
@@ -154,8 +172,8 @@ class TrackedPersonDetail extends Component
 
         $this->fillFormFromModel($trackedPerson->fresh());
         $this->setDetailStatus(
-            'Instagram-Analyse wurde gestartet und laeuft im Hintergrund.',
-            'partial',
+            'Instagram-Analyse abgeschlossen: '.$snapshot->status_message,
+            $snapshot->status_level === 'success' ? 'success' : ($snapshot->status_level === 'partial' ? 'partial' : 'error'),
         );
         $this->dispatch('tracked-person-refresh');
     }
@@ -322,6 +340,9 @@ class TrackedPersonDetail extends Component
         $this->x_username = $trackedPerson->x_username ?? '';
         $this->youtube_username = $trackedPerson->youtube_username ?? '';
         $this->snapchat_username = $trackedPerson->snapchat_username ?? '';
+        $this->notification_delivery_type = in_array($trackedPerson->notification_delivery_type, ['message', 'mail', 'both'], true)
+            ? $trackedPerson->notification_delivery_type
+            : 'both';
         $this->monitoring_enabled = (bool) $trackedPerson->monitoring_enabled;
         $this->notify_social_changes = (bool) $trackedPerson->notify_social_changes;
         $this->notify_instagram_changes = (bool) $trackedPerson->notify_instagram_changes;
