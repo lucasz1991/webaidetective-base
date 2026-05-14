@@ -2,6 +2,7 @@
 
 namespace App\Livewire\User;
 
+use App\Jobs\MonitorTrackedPersonInstagram;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
 use Illuminate\Support\Facades\Auth;
@@ -122,27 +123,29 @@ class TrackedPersonDetail extends Component
 
     public function analyzeInstagram(): void
     {
-        @set_time_limit(0);
-
         $trackedPerson = $this->resolveTrackedPerson();
-        $progress = fn (array $state) => $this->streamInstagramProgress($state);
+
+        if (! $trackedPerson->instagram_username) {
+            $this->setDetailStatus('Fuer diese Person ist kein Instagram-Name hinterlegt.', 'error');
+
+            return;
+        }
+
+        $trackedPerson->forceFill([
+            'last_instagram_status_level' => 'partial',
+            'last_instagram_status_message' => 'Instagram-Analyse wurde in die Queue gestellt.',
+        ])->save();
 
         try {
-            $this->streamInstagramProgress([
-                'phase' => 'start',
-                'percent' => 1,
-                'message' => 'Instagram-Analyse wird vorbereitet.',
-            ]);
-
-            $snapshot = $trackedPerson->analyzeInstagram($progress);
+            MonitorTrackedPersonInstagram::dispatch($trackedPerson->id, true, false);
         } catch (\Throwable $exception) {
-            $this->streamInstagramProgress([
-                'phase' => 'error',
-                'percent' => 100,
-                'message' => 'Instagram-Analyse fehlgeschlagen.',
-            ]);
+            $trackedPerson->forceFill([
+                'last_instagram_status_level' => 'error',
+                'last_instagram_status_message' => 'Instagram-Analyse konnte nicht gestartet werden: '.$exception->getMessage(),
+            ])->save();
+
             $this->setDetailStatus(
-                'Instagram-Analyse fehlgeschlagen: '.$exception->getMessage(),
+                'Instagram-Analyse konnte nicht gestartet werden: '.$exception->getMessage(),
                 'error',
             );
 
@@ -151,8 +154,8 @@ class TrackedPersonDetail extends Component
 
         $this->fillFormFromModel($trackedPerson->fresh());
         $this->setDetailStatus(
-            'Instagram-Analyse abgeschlossen: '.$snapshot->status_message,
-            $snapshot->status_level === 'success' ? 'success' : ($snapshot->status_level === 'partial' ? 'partial' : 'error'),
+            'Instagram-Analyse wurde gestartet und laeuft im Hintergrund.',
+            'partial',
         );
         $this->dispatch('tracked-person-refresh');
     }

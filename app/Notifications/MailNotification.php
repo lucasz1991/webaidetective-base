@@ -2,57 +2,70 @@
 
 namespace App\Notifications;
 
+use App\Models\Mail as MailModel;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Messages\MailMessage;
+use Illuminate\Notifications\Notification;
+use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\HtmlString;
 
 class MailNotification extends Notification implements ShouldQueue
 {
-    use Queueable;
+    use Queueable, SerializesModels;
 
-    protected $content;
-
-    /**
-     * Create a new notification instance.
-     *
-     * @param array $content
-     */
-    public function __construct(array $content)
-    {
-        $this->content = $content;
+    public function __construct(
+        protected MailModel|array $mail,
+    ) {
     }
 
-    /**
-     * Get the notification's delivery channels.
-     *
-     * @param mixed $notifiable
-     * @return array
-     */
-    public function via($notifiable)
+    public function via($notifiable): array
     {
         return ['mail'];
     }
 
-    /**
-     * Get the mail representation of the notification.
-     *
-     * @param mixed $notifiable
-     * @return \Illuminate\Notifications\Messages\MailMessage
-     */
     public function toMail(object $notifiable): MailMessage
     {
-        $mailMessage = (new MailMessage)
-            ->subject($this->content['subject'])
-            ->greeting($this->content['header'])
-            ->line($this->content['body'])
-            ->salutation('Mit freundlichen Grüßen,dein CBW Schulnetz Team'); 
+        $content = $this->content();
+        $subject = $content['subject'] ?? 'Nachricht';
+        $greeting = $content['header'] ?? null;
+        $body = $content['body'] ?? '';
+        $link = $content['link'] ?? null;
 
-        if (!empty($this->content['link'])) {
-            $mailMessage->action('weiter', $this->content['link']);
+        $message = (new MailMessage)
+            ->from(config('mail.from.address'), config('mail.from.name'))
+            ->subject($subject);
+
+        if ($greeting) {
+            $message->greeting($greeting);
         }
 
-        return $mailMessage;
+        if ($body !== '') {
+            $message->line($this->line($body));
+        }
+
+        if (! empty($link)) {
+            $message->action('Weiter', $link);
+        }
+
+        return $message->salutation('Mit freundlichen Gruessen, dein WebAIDetective Team');
     }
 
+    private function content(): array
+    {
+        if ($this->mail instanceof MailModel) {
+            return is_array($this->mail->content) ? $this->mail->content : [];
+        }
+
+        return $this->mail;
+    }
+
+    private function line(string $body): string|HtmlString
+    {
+        if ($body !== strip_tags($body)) {
+            return new HtmlString($body);
+        }
+
+        return $body;
+    }
 }

@@ -121,6 +121,80 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function resolveNavigationWaitMs(runtimeConfig, fallbackMs = 120000) {
+  const configured = Number(runtimeConfig?.navigationTimeoutMs);
+
+  if (Number.isFinite(configured) && configured > 0) {
+    return configured;
+  }
+
+  return fallbackMs;
+}
+
+async function navigateWithSoftTimeout(page, url, runtimeConfig, options = {}) {
+  const timeoutMs = Math.max(15000, Number(options.timeoutMs || resolveNavigationWaitMs(runtimeConfig)));
+  const waitUntil = options.waitUntil || 'domcontentloaded';
+
+  try {
+    const response = await page.goto(url, {
+      timeout: timeoutMs,
+      waitUntil,
+    });
+
+    return {
+      ok: true,
+      status: response?.status?.() ?? null,
+      finalUrl: page.url(),
+      timeoutMs,
+    };
+  } catch (error) {
+    const message = normalizeText(error.message || String(error));
+
+    await page.evaluate(() => window.stop()).catch(() => {});
+    recordRunDebug('navigation-soft-timeout', {
+      url,
+      finalUrl: page.url(),
+      timeoutMs,
+      waitUntil,
+      error: message,
+    });
+
+    return {
+      ok: false,
+      error: message,
+      finalUrl: page.url(),
+      timeoutMs,
+    };
+  }
+}
+
+async function closeBrowserSoftly(browser, timeoutMs = 10000) {
+  if (!browser) {
+    return;
+  }
+
+  try {
+    await Promise.race([
+      browser.close(),
+      sleep(timeoutMs).then(() => {
+        throw new Error(`browser.close soft timeout after ${timeoutMs}ms`);
+      }),
+    ]);
+  } catch (error) {
+    recordRunDebug('browser-close-soft-failed', {
+      error: normalizeText(error.message || String(error)),
+    });
+
+    try {
+      browser.process()?.kill?.('SIGKILL');
+    } catch (killError) {
+      recordRunDebug('browser-kill-failed', {
+        error: normalizeText(killError.message || String(killError)),
+      });
+    }
+  }
+}
+
 function normalizeText(value = '') {
   return value.replace(/\s+/g, ' ').trim();
 }
@@ -286,7 +360,7 @@ function normalizeOptionalPositiveInteger(value, fallback = 0) {
 function loadRuntimeConfig(configPath) {
   const defaults = {
     profileLabel: 'instagram-default',
-    persistentProfileEnabled: true,
+    persistentProfileEnabled: isLoginSessionMode,
     browserProfilePath: path.resolve(__dirname, '../../../storage/app/browser-profiles/instagram/default'),
     cookieFilePath: path.resolve(__dirname, '../../../storage/app/cookies/instagram-cookies.json'),
     headlessEnabled: true,
@@ -296,7 +370,7 @@ function loadRuntimeConfig(configPath) {
     loginPasswordConfigured: false,
     loginPasswordDecryptable: true,
     loginPasswordSource: null,
-    navigationTimeoutMs: 0,
+    navigationTimeoutMs: 120000,
     postLoginWaitMs: 2500,
     typingDelayMs: 35,
     followerListMaxItems: DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS,
@@ -316,10 +390,10 @@ function loadRuntimeConfig(configPath) {
     return {
       ...defaults,
       ...parsed,
-      persistentProfileEnabled: parsed?.persistentProfileEnabled !== false,
+      persistentProfileEnabled: isLoginSessionMode && parsed?.persistentProfileEnabled !== false,
       headlessEnabled: parsed?.headlessEnabled !== false,
       autoLoginEnabled: parsed?.autoLoginEnabled === true,
-      navigationTimeoutMs: 0,
+      navigationTimeoutMs: Math.max(30000, Number(parsed?.navigationTimeoutMs || defaults.navigationTimeoutMs)),
       postLoginWaitMs: Math.max(500, Number(parsed?.postLoginWaitMs || defaults.postLoginWaitMs)),
       typingDelayMs: Math.max(0, Number(parsed?.typingDelayMs || defaults.typingDelayMs)),
       followerListMaxItems: normalizeOptionalPositiveInteger(parsed?.followerListMaxItems, defaults.followerListMaxItems),
@@ -596,7 +670,7 @@ async function loadCookiesFromFileWithDiagnostics(page, cookieFilePath) {
   }
 }
 
-async function primeInstagramSession(page, cookieFilePath) {
+async function primeInstagramSession(page, cookieFilePath, runtimeConfig = {}) {
   const diagnostics = {
     ...await loadCookiesFromFileWithDiagnostics(page, cookieFilePath),
     sessionCookieRetained: false,
@@ -612,10 +686,15 @@ async function primeInstagramSession(page, cookieFilePath) {
     return diagnostics;
   }
 
-  await page.goto('https://www.instagram.com/', {
-    timeout: 0,
-    waitUntil: 'domcontentloaded',
-  });
+  const navigation = await navigateWithSoftTimeout(
+    page,
+    'https://www.instagram.com/',
+    runtimeConfig,
+  );
+
+  if (!navigation.ok) {
+    diagnostics.warnings.push(`Instagram-Session-Vorabtest konnte nicht stabil geladen werden: ${navigation.error}`);
+  }
 
   await sleep(1000);
 
@@ -1011,7 +1090,7 @@ async function scrollFollowerDialog(page) {
   }));
 }
 
-async function openInstagramRelationshipDialog(page, username, relationship) {
+async function openInstagramRelationshipDialog(page, username, relationship, runtimeConfig = {}) {
   const normalizedUsername = normalizeInstagramUsername(username);
   const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
   const clicked = await page.evaluate((targetUsername, targetRelationship) => {
@@ -1051,26 +1130,28 @@ async function openInstagramRelationshipDialog(page, username, relationship) {
     return true;
   }
 
-  await page.goto(`https://www.instagram.com/${normalizedUsername}/${normalizedRelationship}/`, {
-    timeout: 0,
-    waitUntil: 'domcontentloaded',
-  }).catch(() => null);
+  await navigateWithSoftTimeout(
+    page,
+    `https://www.instagram.com/${normalizedUsername}/${normalizedRelationship}/`,
+    runtimeConfig,
+  );
   await sleep(2200);
 
   return page.evaluate(() => Boolean(document.querySelector('div[role="dialog"]'))).catch(() => false);
 }
 
-async function openFollowersDialog(page, username) {
-  return openInstagramRelationshipDialog(page, username, 'followers');
+async function openFollowersDialog(page, username, runtimeConfig = {}) {
+  return openInstagramRelationshipDialog(page, username, 'followers', runtimeConfig);
 }
 
-async function openFollowingDialog(page, username) {
-  return openInstagramRelationshipDialog(page, username, 'following');
+async function openFollowingDialog(page, username, runtimeConfig = {}) {
+  return openInstagramRelationshipDialog(page, username, 'following', runtimeConfig);
 }
 
 async function collectPublicRelationshipList(page, username, profile, relationship, options = {}) {
   const maxItems = normalizeOptionalPositiveInteger(options.maxItems, DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS);
   const expectedCount = normalizeOptionalPositiveInteger(options.expectedCount, 0);
+  const runtimeConfig = options.runtimeConfig || {};
   const maxScrollRounds = Math.max(
     20,
     normalizeOptionalPositiveInteger(
@@ -1134,8 +1215,8 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     });
 
     const opened = normalizedRelationship === 'following'
-      ? await openFollowingDialog(page, username)
-      : await openFollowersDialog(page, username);
+      ? await openFollowingDialog(page, username, runtimeConfig)
+      : await openFollowersDialog(page, username, runtimeConfig);
 
     if (!opened) {
       stopReason = `${normalizedRelationship}-dialog-not-found`;
@@ -1474,10 +1555,15 @@ async function performInstagramLogin(page, runtimeConfig) {
     'form button',
   ];
 
-  await page.goto('https://www.instagram.com/accounts/login/', {
-    timeout: runtimeConfig.navigationTimeoutMs,
-    waitUntil: 'domcontentloaded',
-  });
+  const loginNavigation = await navigateWithSoftTimeout(
+    page,
+    'https://www.instagram.com/accounts/login/',
+    runtimeConfig,
+  );
+
+  if (!loginNavigation.ok) {
+    diagnostics.warnings.push(`Instagram-Login-Seite konnte nicht stabil geladen werden: ${loginNavigation.error}`);
+  }
 
   await dismissCookieConsentIfPresent(page);
 
@@ -1583,10 +1669,7 @@ async function performInstagramLogin(page, runtimeConfig) {
     !/log into instagram|melde dich an|password|passwort/.test(normalizedBody);
 
   if (diagnostics.success) {
-    await page.goto('https://www.instagram.com/', {
-      timeout: runtimeConfig.navigationTimeoutMs,
-      waitUntil: 'domcontentloaded',
-    }).catch(() => {});
+    await navigateWithSoftTimeout(page, 'https://www.instagram.com/', runtimeConfig);
     await sleep(1200);
 
     pageDiagnostics = await collectPageDiagnostics(page, { includeCookies: true });
@@ -1680,7 +1763,7 @@ async function waitForInteractiveLoginCompletion(page, runtimeConfig) {
 }
 
 async function establishInstagramSession(page, runtimeConfig, notes) {
-  const cookieDiagnostics = await primeInstagramSession(page, buildCookiePath(runtimeConfig));
+  const cookieDiagnostics = await primeInstagramSession(page, buildCookiePath(runtimeConfig), runtimeConfig);
   let loginDiagnostics = {
     attempted: false,
     success: false,
@@ -2063,6 +2146,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     const launchOptions = {
       headless: resolvedHeadlessMode,
       userDataDir: activeBrowserUserDataDir,
+      protocolTimeout: Math.max(300000, resolveNavigationWaitMs(runtimeConfig, 300000)),
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -2185,6 +2269,10 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     }
     recordRunDebug('page-ready', await collectPageDiagnostics(page, { includeCookies: true }));
 
+    progressLog('profile-session-check', {
+      relationship: null,
+    });
+
     const { cookieDiagnostics, loginDiagnostics: sessionLoginDiagnostics, sessionEstablished } = await establishInstagramSession(
       page,
       runtimeConfig,
@@ -2240,10 +2328,16 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       return;
     }
 
-    await page.goto(profileUrl, {
-      timeout: runtimeConfig.navigationTimeoutMs,
-      waitUntil: 'domcontentloaded',
+    progressLog('profile-opening', {
+      relationship: null,
+      url: profileUrl,
     });
+
+    const profileNavigation = await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
+
+    if (!profileNavigation.ok) {
+      notes.push(`Profilseite konnte nicht stabil geladen werden: ${profileNavigation.error}`);
+    }
 
     progressLog('profile-page-loaded', {
       relationship: null,
@@ -2269,6 +2363,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
         maxItems: runtimeConfig.followerListMaxItems,
         maxScrollRounds: runtimeConfig.relationshipListMaxScrollRounds,
         expectedCount: runtimeConfig.expectedFollowerCount,
+        runtimeConfig,
       });
       recordRunDebug('followers-list-collected', initialProfile.followersList);
 
@@ -2279,10 +2374,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       }
 
       if (page.url().includes('/followers')) {
-        await page.goto(profileUrl, {
-          timeout: runtimeConfig.navigationTimeoutMs,
-          waitUntil: 'domcontentloaded',
-        }).catch(() => null);
+        await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
         await sleep(900);
       }
     }
@@ -2292,6 +2384,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
         maxItems: runtimeConfig.followingListMaxItems,
         maxScrollRounds: runtimeConfig.relationshipListMaxScrollRounds,
         expectedCount: runtimeConfig.expectedFollowingCount,
+        runtimeConfig,
       });
       recordRunDebug('following-list-collected', initialProfile.followingList);
 
@@ -2302,10 +2395,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       }
 
       if (page.url().includes('/followers') || page.url().includes('/following')) {
-        await page.goto(profileUrl, {
-          timeout: runtimeConfig.navigationTimeoutMs,
-          waitUntil: 'domcontentloaded',
-        }).catch(() => null);
+        await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
         await sleep(900);
       }
     }
@@ -2421,7 +2511,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     process.exitCode = 1;
   } finally {
     if (browser) {
-      await browser.close();
+      await closeBrowserSoftly(browser);
     }
 
     if (cleanupBrowserProfileOnExit) {

@@ -1,4 +1,4 @@
-<div class="space-y-6" wire:poll.visible.10000ms x-data="{ instagramListModal: null }" @keydown.escape.window="instagramListModal = null">
+<div class="space-y-4" wire:poll.visible.10000ms x-data="{ instagramListModal: null, settingsModal: false }" @keydown.escape.window="instagramListModal = null; settingsModal = false">
     @php
         $detailStatusClass = match ($detailStatusLevel ?? 'neutral') {
             'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
@@ -14,8 +14,8 @@
         $latestLoginDiagnostics = data_get($latestSnapshot?->raw_payload, 'loginDiagnostics', []);
         $latestFollowersList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followersList', []);
         $latestFollowingList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followingList', []);
-        $loadRelationshipItems = function (array $relationshipList) {
-            $items = collect(data_get($relationshipList, 'items', []));
+        $loadRelationshipItems = function (array $relationshipList, string $key = 'items') {
+            $items = collect(data_get($relationshipList, $key, []));
             $itemsPath = data_get($relationshipList, 'itemsPath');
 
             if ($items->isNotEmpty() || ! is_string($itemsPath) || $itemsPath === '') {
@@ -32,13 +32,26 @@
                     true,
                 );
 
-                return collect(data_get($decoded, 'items', []));
+                return collect(data_get($decoded, $key, []));
             } catch (\Throwable) {
                 return collect();
             }
         };
         $latestFollowerItems = $loadRelationshipItems($latestFollowersList);
         $latestFollowingItems = $loadRelationshipItems($latestFollowingList);
+        $latestFollowerRemovedItems = $loadRelationshipItems($latestFollowersList, 'currentlyRemovedItems');
+        $latestFollowingRemovedItems = $loadRelationshipItems($latestFollowingList, 'currentlyRemovedItems');
+        $relationshipStats = function (array $relationshipList, \Illuminate\Support\Collection $items) {
+            return [
+                'activeCount' => (int) data_get($relationshipList, 'activeCount', data_get($relationshipList, 'count', $items->count())),
+                'observedCount' => (int) data_get($relationshipList, 'observedCount', $items->count()),
+                'allKnownCount' => (int) data_get($relationshipList, 'allKnownCount', data_get($relationshipList, 'knownCount', $items->count())),
+                'currentlyRemovedCount' => (int) data_get($relationshipList, 'currentlyRemovedCount', 0),
+                'removedHistoryCount' => (int) data_get($relationshipList, 'removedHistoryCount', 0),
+            ];
+        };
+        $latestFollowerStats = $relationshipStats($latestFollowersList, $latestFollowerItems);
+        $latestFollowingStats = $relationshipStats($latestFollowingList, $latestFollowingItems);
         $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
         $countSourceLabels = [
             'body_text_preview' => 'sichtbarer Profiltext',
@@ -58,9 +71,9 @@
         <div class="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl">
             <div class="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-pink-600"></div>
             <div class="mt-4 text-xs font-semibold uppercase tracking-wide text-pink-700" wire:stream="instagram-progress-phase">Start</div>
-            <h3 class="mt-1 text-lg font-bold text-slate-900">Instagram-Analyse laeuft</h3>
+            <h3 class="mt-1 text-lg font-bold text-slate-900">Instagram-Analyse wird gestartet</h3>
             <p class="mt-2 text-sm leading-6 text-slate-600" wire:stream="instagram-progress-message">
-                Grunddaten, Followerliste und Gefolgt-Liste werden nacheinander abgearbeitet.
+                Der Auftrag wird an die Queue uebergeben. Der Status aktualisiert sich automatisch.
             </p>
             <div class="mt-5">
                 <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
@@ -72,15 +85,15 @@
                 </div>
             </div>
             <p class="mt-4 text-xs leading-5 text-slate-500">
-                Die Listen sind nicht nach Eintraegen begrenzt. Instagram kann das Laden bei sehr grossen Profilen trotzdem abbremsen oder blockieren.
+                Die eigentliche Analyse laeuft im Hintergrund wie die automatische Dauerbeobachtung.
             </p>
         </div>
     </div>
 
-    <section class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div class="flex flex-wrap items-start justify-between gap-4">
-            <div class="flex items-start gap-4">
-                <div class="h-24 w-24 overflow-hidden rounded-3xl bg-slate-100">
+    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start">
+                <div class="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-slate-100 sm:h-24 sm:w-24">
                     @if($trackedPerson->profile_image_url)
                         <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full object-cover">
                     @else
@@ -89,15 +102,15 @@
                         </div>
                     @endif
                 </div>
-                <div>
-                    <h2 class="text-2xl font-bold text-slate-900">{{ $trackedPerson->display_name }}</h2>
-                    <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600">
+                <div class="min-w-0">
+                    <h2 class="break-words text-xl font-bold text-slate-900 sm:text-2xl">{{ $trackedPerson->display_name }}</h2>
+                    <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600 sm:text-sm">
                         <span>Alias: {{ $trackedPerson->alias ?: '—' }}</span>
                         <span>Ort: {{ $trackedPerson->city ?: '—' }}</span>
                         <span>Land: {{ $trackedPerson->country ?: '—' }}</span>
                         <span>Geburt: {{ optional($trackedPerson->date_of_birth)->format('d.m.Y') ?: '—' }}</span>
                     </div>
-                    <div class="mt-3 flex flex-wrap gap-2 text-xs">
+                    <div class="mt-3 flex flex-wrap gap-1.5 text-xs">
                         @if($trackedPerson->instagram_username)
                             <span class="rounded-full bg-pink-100 px-3 py-1 font-semibold text-pink-700">
                                 Instagram: {{ '@'.$trackedPerson->instagram_username }}
@@ -122,34 +135,35 @@
                 </div>
             </div>
 
-            <div class="flex flex-wrap gap-2">
+            <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
                 <button
                     wire:click="analyzeInstagram"
                     wire:loading.attr="disabled"
                     wire:target="analyzeInstagram"
-                    class="rounded-xl bg-pink-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-pink-700"
+                    class="inline-flex justify-center rounded-xl bg-pink-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-pink-700"
                 >
                     <span wire:loading.remove wire:target="analyzeInstagram">Instagram analysieren</span>
                     <span wire:loading wire:target="analyzeInstagram">Analyse laeuft...</span>
                 </button>
                 <button
-                    wire:click="saveTrackedPerson"
-                    class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800"
+                    type="button"
+                    @click="settingsModal = true"
+                    class="inline-flex justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
-                    Person speichern
-                </button> 
+                    Einstellungen
+                </button>
             </div> 
         </div>
 
         @if($detailStatus)
-            <div class="mt-5 rounded-2xl border p-4 text-sm {{ $detailStatusClass }}">
+            <div class="mt-4 rounded-xl border p-3 text-sm {{ $detailStatusClass }}">
                 {{ $detailStatus }}
             </div> 
         @endif
     </section>
 
-    <section class="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <section class="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-5">
+        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <div class="flex items-center justify-between gap-3">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
                 <button
@@ -161,10 +175,16 @@
                     Liste
                 </button>
             </div>
-            <div class="mt-2 text-2xl font-bold text-slate-900">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '—' }}</div>
-            <div class="mt-1 text-xs text-slate-500">{{ number_format((int) data_get($latestFollowersList, 'count', $latestFollowerItems->count())) }} gespeichert</div>
+            <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '—' }}</div>
+            <div class="mt-1 text-xs text-slate-500">{{ number_format($latestFollowerStats['activeCount']) }} bekannt aktiv/ungeklaert</div>
+            <div class="mt-0.5 text-xs text-slate-500">
+                {{ number_format($latestFollowerStats['observedCount']) }} zuletzt gesehen
+                @if($latestFollowerStats['currentlyRemovedCount'] > 0)
+                    &middot; {{ number_format($latestFollowerStats['currentlyRemovedCount']) }} entfernt archiviert
+                @endif
+            </div>
         </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <div class="flex items-center justify-between gap-3">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gefolgt</div>
                 <button
@@ -176,20 +196,26 @@
                     Liste
                 </button>
             </div>
-            <div class="mt-2 text-2xl font-bold text-slate-900">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '—' }}</div>
-            <div class="mt-1 text-xs text-slate-500">{{ number_format((int) data_get($latestFollowingList, 'count', $latestFollowingItems->count())) }} gespeichert</div>
+            <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '—' }}</div>
+            <div class="mt-1 text-xs text-slate-500">{{ number_format($latestFollowingStats['activeCount']) }} bekannt aktiv/ungeklaert</div>
+            <div class="mt-0.5 text-xs text-slate-500">
+                {{ number_format($latestFollowingStats['observedCount']) }} zuletzt gesehen
+                @if($latestFollowingStats['currentlyRemovedCount'] > 0)
+                    &middot; {{ number_format($latestFollowingStats['currentlyRemovedCount']) }} entfernt archiviert
+                @endif
+            </div>
         </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Beitraege</div>
-            <div class="mt-2 text-2xl font-bold text-slate-900">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '—' }}</div>
+            <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '—' }}</div>
         </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Bekannte Daten</div>
-            <div class="mt-2 text-2xl font-bold text-slate-900">{{ number_format($trackedPerson->knownFacts->count()) }}</div>
+            <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ number_format($trackedPerson->knownFacts->count()) }}</div>
         </div>
-        <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Oeffentliche Profile</div>
-            <div class="mt-2 text-2xl font-bold text-slate-900">{{ number_format($trackedPerson->publicProfiles->count()) }}</div>
+            <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ number_format($trackedPerson->publicProfiles->count()) }}</div>
         </div>
     </section>
 
@@ -197,17 +223,21 @@
         x-cloak
         x-show="instagramListModal === 'followers'"
         x-transition.opacity
-        class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6"
+        class="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 px-3 py-4 sm:items-center sm:px-4 sm:py-6"
         @click.self="instagramListModal = null"
     >
-        <div class="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+        <div class="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[85vh]">
+            <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Followerliste</h3>
                     <p class="mt-1 text-sm text-slate-500">
-                        {{ number_format((int) data_get($latestFollowersList, 'count', $latestFollowerItems->count())) }} Eintraege aus der letzten Instagram-Analyse
+                        {{ number_format($latestFollowerStats['activeCount']) }} bekannt aktiv/ungeklaert
+                        &middot; {{ number_format($latestFollowerStats['observedCount']) }} zuletzt gesehen
                         @if(data_get($latestFollowersList, 'maxItems'))
-                            · Limit {{ number_format((int) data_get($latestFollowersList, 'maxItems')) }}
+                            &middot; Limit {{ number_format((int) data_get($latestFollowersList, 'maxItems')) }}
+                        @endif
+                        @if($latestFollowerStats['currentlyRemovedCount'] > 0)
+                            &middot; {{ number_format($latestFollowerStats['currentlyRemovedCount']) }} entfernt archiviert
                         @endif
                     </p>
                 </div>
@@ -216,7 +246,7 @@
                 </button>
             </div>
 
-            <div class="overflow-y-auto p-5">
+            <div class="overflow-y-auto p-4 sm:p-5">
                 @if((int) data_get($latestFollowersList, 'addedCount', 0) > 0 || (int) data_get($latestFollowersList, 'removedCount', 0) > 0)
                     <div class="mb-4 grid gap-3 md:grid-cols-2">
                         <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
@@ -234,24 +264,50 @@
                     </div>
                 @endif
 
-                @if($latestFollowerItems->isNotEmpty())
-                    <div class="space-y-2">
-                        @foreach($latestFollowerItems as $follower)
-                            <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-                                <div class="min-w-0">
-                                    <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($follower, 'username') }}</div>
-                                    @if(data_get($follower, 'displayName'))
-                                        <div class="mt-0.5 truncate text-slate-500">{{ data_get($follower, 'displayName') }}</div>
+                @if($latestFollowerItems->isNotEmpty() || $latestFollowerRemovedItems->isNotEmpty())
+                    @if($latestFollowerItems->isNotEmpty())
+                        <div class="space-y-2">
+                            @foreach($latestFollowerItems as $follower)
+                                <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+                                    <div class="min-w-0">
+                                        <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($follower, 'username') }}</div>
+                                        @if(data_get($follower, 'displayName'))
+                                            <div class="mt-0.5 truncate text-slate-500">{{ data_get($follower, 'displayName') }}</div>
+                                        @endif
+                                    </div>
+                                    @if(data_get($follower, 'profileUrl'))
+                                        <a href="{{ data_get($follower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white">
+                                            Oeffnen
+                                        </a>
                                     @endif
                                 </div>
-                                @if(data_get($follower, 'profileUrl'))
-                                    <a href="{{ data_get($follower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white">
-                                        Oeffnen
-                                    </a>
-                                @endif
+                            @endforeach
+                        </div>
+                    @endif
+                    @if($latestFollowerRemovedItems->isNotEmpty())
+                        <details class="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950">
+                            <summary class="cursor-pointer font-semibold">
+                                {{ number_format($latestFollowerRemovedItems->count()) }} entfernt archiviert
+                            </summary>
+                            <div class="mt-3 space-y-2">
+                                @foreach($latestFollowerRemovedItems as $removedFollower)
+                                    <div class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm">
+                                        <div class="min-w-0">
+                                            <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedFollower, 'username') }}</div>
+                                            @if(data_get($removedFollower, 'displayName'))
+                                                <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedFollower, 'displayName') }}</div>
+                                            @endif
+                                        </div>
+                                        @if(data_get($removedFollower, 'profileUrl'))
+                                            <a href="{{ data_get($removedFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
+                                                Oeffnen
+                                            </a>
+                                        @endif
+                                    </div>
+                                @endforeach
                             </div>
-                        @endforeach
-                    </div>
+                        </details>
+                    @endif
                 @else
                     <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                         Keine Followerliste gespeichert.
@@ -268,17 +324,21 @@
         x-cloak
         x-show="instagramListModal === 'following'"
         x-transition.opacity
-        class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 px-4 py-6"
+        class="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 px-3 py-4 sm:items-center sm:px-4 sm:py-6"
         @click.self="instagramListModal = null"
     >
-        <div class="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+        <div class="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[85vh]">
+            <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Gefolgt-Liste</h3>
                     <p class="mt-1 text-sm text-slate-500">
-                        {{ number_format((int) data_get($latestFollowingList, 'count', $latestFollowingItems->count())) }} Eintraege aus der letzten Instagram-Analyse
+                        {{ number_format($latestFollowingStats['activeCount']) }} bekannt aktiv/ungeklaert
+                        &middot; {{ number_format($latestFollowingStats['observedCount']) }} zuletzt gesehen
                         @if(data_get($latestFollowingList, 'maxItems'))
-                            · Limit {{ number_format((int) data_get($latestFollowingList, 'maxItems')) }}
+                            &middot; Limit {{ number_format((int) data_get($latestFollowingList, 'maxItems')) }}
+                        @endif
+                        @if($latestFollowingStats['currentlyRemovedCount'] > 0)
+                            &middot; {{ number_format($latestFollowingStats['currentlyRemovedCount']) }} entfernt archiviert
                         @endif
                     </p>
                 </div>
@@ -287,7 +347,7 @@
                 </button>
             </div>
 
-            <div class="overflow-y-auto p-5">
+            <div class="overflow-y-auto p-4 sm:p-5">
                 @if((int) data_get($latestFollowingList, 'addedCount', 0) > 0 || (int) data_get($latestFollowingList, 'removedCount', 0) > 0)
                     <div class="mb-4 grid gap-3 md:grid-cols-2">
                         <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
@@ -305,24 +365,50 @@
                     </div>
                 @endif
 
-                @if($latestFollowingItems->isNotEmpty())
-                    <div class="space-y-2">
-                        @foreach($latestFollowingItems as $followedProfile)
-                            <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
-                                <div class="min-w-0">
-                                    <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($followedProfile, 'username') }}</div>
-                                    @if(data_get($followedProfile, 'displayName'))
-                                        <div class="mt-0.5 truncate text-slate-500">{{ data_get($followedProfile, 'displayName') }}</div>
+                @if($latestFollowingItems->isNotEmpty() || $latestFollowingRemovedItems->isNotEmpty())
+                    @if($latestFollowingItems->isNotEmpty())
+                        <div class="space-y-2">
+                            @foreach($latestFollowingItems as $followedProfile)
+                                <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+                                    <div class="min-w-0">
+                                        <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($followedProfile, 'username') }}</div>
+                                        @if(data_get($followedProfile, 'displayName'))
+                                            <div class="mt-0.5 truncate text-slate-500">{{ data_get($followedProfile, 'displayName') }}</div>
+                                        @endif
+                                    </div>
+                                    @if(data_get($followedProfile, 'profileUrl'))
+                                        <a href="{{ data_get($followedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white">
+                                            Oeffnen
+                                        </a>
                                     @endif
                                 </div>
-                                @if(data_get($followedProfile, 'profileUrl'))
-                                    <a href="{{ data_get($followedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white">
-                                        Oeffnen
-                                    </a>
-                                @endif
+                            @endforeach
+                        </div>
+                    @endif
+                    @if($latestFollowingRemovedItems->isNotEmpty())
+                        <details class="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950">
+                            <summary class="cursor-pointer font-semibold">
+                                {{ number_format($latestFollowingRemovedItems->count()) }} entfernt archiviert
+                            </summary>
+                            <div class="mt-3 space-y-2">
+                                @foreach($latestFollowingRemovedItems as $removedProfile)
+                                    <div class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm">
+                                        <div class="min-w-0">
+                                            <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedProfile, 'username') }}</div>
+                                            @if(data_get($removedProfile, 'displayName'))
+                                                <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedProfile, 'displayName') }}</div>
+                                            @endif
+                                        </div>
+                                        @if(data_get($removedProfile, 'profileUrl'))
+                                            <a href="{{ data_get($removedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
+                                                Oeffnen
+                                            </a>
+                                        @endif
+                                    </div>
+                                @endforeach
                             </div>
-                        @endforeach
-                    </div>
+                        </details>
+                    @endif
                 @else
                     <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                         Keine Gefolgt-Liste gespeichert.
@@ -335,73 +421,157 @@
         </div>
     </div>
 
-    <section class="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-        <div class="space-y-6">
-            <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-                <h3 class="text-lg font-bold text-slate-900">Personendaten</h3>
-                <div class="mt-4 grid gap-4 lg:grid-cols-2">
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Vorname</label>
-                        <input type="text" wire:model.defer="first_name" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        @error('first_name') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+    <div
+        x-cloak
+        x-show="settingsModal"
+        x-transition.opacity
+        class="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 px-3 py-4 sm:items-center sm:px-4"
+        @click.self="settingsModal = false"
+    >
+        <div class="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
+                <div>
+                    <h3 class="text-lg font-bold text-slate-900">Einstellungen</h3>
+                    <p class="mt-1 text-sm text-slate-500">
+                        Personendaten, Dauerbeobachtung und Social-Media-Benachrichtigungen.
+                    </p>
+                </div>
+                <button type="button" @click="settingsModal = false" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Schliessen
+                </button>
+            </div>
+
+            <div class="overflow-y-auto p-4 sm:p-5">
+                <div>
+                    <h4 class="text-sm font-bold text-slate-900">Personendaten</h4>
+                    <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Vorname</label>
+                            <input type="text" wire:model.defer="first_name" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            @error('first_name') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Nachname</label>
+                            <input type="text" wire:model.defer="last_name" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            @error('last_name') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Alias</label>
+                            <input type="text" wire:model.defer="alias" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Geburtsdatum</label>
+                            <input type="date" wire:model.defer="date_of_birth" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Ort</label>
+                            <input type="text" wire:model.defer="city" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Land</label>
+                            <input type="text" wire:model.defer="country" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Instagram</label>
+                            <input type="text" wire:model.defer="instagram_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">TikTok</label>
+                            <input type="text" wire:model.defer="tiktok_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Facebook</label>
+                            <input type="text" wire:model.defer="facebook_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">X / Twitter</label>
+                            <input type="text" wire:model.defer="x_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">YouTube</label>
+                            <input type="text" wire:model.defer="youtube_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Snapchat</label>
+                            <input type="text" wire:model.defer="snapchat_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                        <div class="sm:col-span-2">
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Notizen</label>
+                            <textarea wire:model.defer="notes" rows="3" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"></textarea>
+                        </div>
                     </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Nachname</label>
-                        <input type="text" wire:model.defer="last_name" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        @error('last_name') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                </div>
+
+                <div class="mt-5 border-t border-slate-200 pt-4">
+                    <h4 class="text-sm font-bold text-slate-900">Benachrichtigungen</h4>
+                    <div class="mt-3 grid gap-3">
+                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                            <input type="checkbox" wire:model.defer="monitoring_enabled" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span class="font-medium">Dauerbeobachtung aktivieren</span>
+                        </label>
+                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                            <input type="checkbox" wire:model.defer="notify_social_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span class="font-medium">Benachrichtigungen fuer Social-Media-Aenderungen aktivieren</span>
+                        </label>
                     </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Alias</label>
-                        <input type="text" wire:model.defer="alias" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Geburtsdatum</label>
-                        <input type="date" wire:model.defer="date_of_birth" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Ort</label>
-                        <input type="text" wire:model.defer="city" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Land</label>
-                        <input type="text" wire:model.defer="country" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Instagram</label>
-                        <input type="text" wire:model.defer="instagram_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">TikTok</label>
-                        <input type="text" wire:model.defer="tiktok_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Facebook</label>
-                        <input type="text" wire:model.defer="facebook_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">X / Twitter</label>
-                        <input type="text" wire:model.defer="x_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">YouTube</label>
-                        <input type="text" wire:model.defer="youtube_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Snapchat</label>
-                        <input type="text" wire:model.defer="snapchat_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                    </div>
-                    <div class="lg:col-span-2">
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Notizen</label>
-                        <textarea wire:model.defer="notes" rows="4" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"></textarea>
+                </div>
+
+                <div class="mt-4">
+                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Kanaele</div>
+                    <div class="mt-2 grid gap-2 sm:grid-cols-2">
+                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                            <input type="checkbox" wire:model.defer="notify_instagram_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span>Instagram</span>
+                        </label>
+                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                            <input type="checkbox" wire:model.defer="notify_tiktok_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span>TikTok</span>
+                        </label>
+                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                            <input type="checkbox" wire:model.defer="notify_facebook_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span>Facebook</span>
+                        </label>
+                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                            <input type="checkbox" wire:model.defer="notify_x_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span>X / Twitter</span>
+                        </label>
+                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                            <input type="checkbox" wire:model.defer="notify_youtube_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span>YouTube</span>
+                        </label>
+                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+                            <input type="checkbox" wire:model.defer="notify_snapchat_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                            <span>Snapchat</span>
+                        </label>
                     </div>
                 </div>
             </div>
 
-            <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="flex flex-col-reverse gap-2 border-t border-slate-200 px-4 py-3 sm:flex-row sm:justify-end sm:px-5">
+                <button type="button" @click="settingsModal = false" class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Abbrechen
+                </button>
+                <button
+                    type="button"
+                    wire:click="saveTrackedPerson"
+                    wire:loading.attr="disabled"
+                    wire:target="saveTrackedPerson"
+                    @click="settingsModal = false"
+                    class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    Einstellungen speichern
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <section class="grid gap-4 2xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.8fr)]">
+        <div class="space-y-4">
+            <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Bekannte Daten</h3>
-                <div class="mt-4 space-y-3">
+                <div class="mt-3 space-y-2">
                     @forelse($trackedPerson->knownFacts as $knownFact)
-                        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                        <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                             <div class="flex items-center justify-between gap-3">
                                 <div class="font-semibold text-slate-900">{{ $knownFact->label }}</div>
                                 @if($knownFact->source)
@@ -418,7 +588,7 @@
                     @endforelse
                 </div>
 
-                <div class="mt-5 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div class="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <div>
                         <label class="mb-1 block text-sm font-medium text-slate-700">Bezeichnung</label>
                         <input type="text" wire:model.defer="knownFactLabel" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="z. B. Wohnort">
@@ -447,15 +617,15 @@
                 </div>
             </div>
 
-            <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Bekannte oeffentliche Profile</h3>
                 <p class="mt-1 text-sm text-slate-600">
                     Hier speicherst du oeffentlich sichtbare Profile, die nachweisbar mit dieser Person verbunden sind.
                 </p>
 
-                <div class="mt-4 space-y-3">
+                <div class="mt-3 space-y-2">
                     @forelse($trackedPerson->publicProfiles as $publicProfile)
-                        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                        <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                             <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div>
                                     <div class="flex flex-wrap items-center gap-2">
@@ -496,7 +666,7 @@
                     @endforelse
                 </div>
 
-                <div class="mt-5 grid gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div class="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <div class="grid gap-3 md:grid-cols-2">
                         <div>
                             <label class="mb-1 block text-sm font-medium text-slate-700">Plattform</label>
@@ -557,52 +727,8 @@
             </div>
         </div>
 
-        <div class="space-y-6">
-            <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-                <h3 class="text-lg font-bold text-slate-900">Benachrichtigungen</h3>
-                <p class="mt-1 text-sm text-slate-600">
-                    Benachrichtigungen sind nur sinnvoll, wenn die Person dauerhaft beobachtet werden soll und oeffentlich sichtbare Aenderungen regelmaessig neu analysiert werden.
-                </p>
-
-                <div class="mt-4 space-y-3">
-                    <label class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                        <input type="checkbox" wire:model.defer="monitoring_enabled" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                        <span class="font-medium">Dauerbeobachtung fuer diese Person aktivieren</span>
-                    </label>
-                    <label class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                        <input type="checkbox" wire:model.defer="notify_social_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                        <span class="font-medium">Benachrichtigungen fuer Social-Media-Aenderungen aktivieren</span>
-                    </label>
-                    <div class="grid gap-3 sm:grid-cols-2">
-                        <label class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_instagram_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>Instagram</span>
-                        </label>
-                        <label class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_tiktok_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>TikTok</span>
-                        </label>
-                        <label class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_facebook_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>Facebook</span>
-                        </label>
-                        <label class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_x_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>X / Twitter</span>
-                        </label>
-                        <label class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_youtube_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>YouTube</span>
-                        </label>
-                        <label class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_snapchat_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>Snapchat</span>
-                        </label>
-                    </div>
-                </div>
-            </div>
-
-            <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <div class="space-y-4">
+            <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Letzte Instagram-Analyse</h3>
 
                 @if($latestSnapshot)
@@ -615,7 +741,7 @@
                         };
                     @endphp
 
-                    <div class="mt-4 rounded-2xl border p-4 text-sm {{ $snapshotStatusClass }}">
+                    <div class="mt-3 rounded-xl border p-3 text-sm {{ $snapshotStatusClass }}">
                         <p class="font-semibold">{{ $latestSnapshot->status_message }}</p>
                         <p class="mt-1 text-xs">{{ optional($latestSnapshot->analyzed_at)->format('d.m.Y H:i') ?: '—' }}</p>
                         @if($latestSnapshot->screenshot_url)
@@ -625,7 +751,7 @@
                         @endif
                     </div>
 
-                    <div class="mt-4 grid gap-3 text-sm text-slate-700">
+                    <div class="mt-3 grid gap-2 text-sm text-slate-700">
                         <p><span class="font-semibold">Profilname:</span> {{ $latestSnapshot->full_name ?: '—' }}</p>
                         <p><span class="font-semibold">Bio:</span> {{ $latestSnapshot->biography ?: '—' }}</p>
                         <p><span class="font-semibold">Follower-Quelle:</span> {{ $resolveCountSourceLabel($latestCountSources['followers'] ?? null) }}</p>
@@ -635,9 +761,9 @@
                     </div>
 
                     @if($latestScrapePhases->isNotEmpty())
-                        <div class="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
+                        <div class="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
                             <h4 class="font-semibold text-slate-900">Scrape-Phasen</h4>
-                            <div class="mt-3 grid gap-2">
+                            <div class="mt-2 grid gap-2">
                                 @foreach($latestScrapePhases as $phase)
                                     <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white px-3 py-2">
                                         <span class="font-semibold">
@@ -661,20 +787,20 @@
                     @endif
 
                     @if($latestDebugLogPath)
-                        <p class="mt-4 break-all text-sm text-slate-700">
+                        <p class="mt-3 break-all text-sm text-slate-700">
                             <span class="font-semibold">Debug-Log:</span> {{ $latestDebugLogPath }}
                         </p>
                     @endif
 
                     @if($latestCookieDiagnostics || $latestLoginDiagnostics)
-                        <div class="mt-4 grid gap-3 md:grid-cols-2">
-                            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
+                        <div class="mt-3 grid gap-3 md:grid-cols-2">
+                            <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
                                 <h4 class="font-semibold text-slate-900">Cookie-Diagnose</h4>
                                 <p class="mt-2">sessionid in Datei: {{ data_get($latestCookieDiagnostics, 'sessionCookieProvided') ? 'Ja' : 'Nein' }}</p>
                                 <p>sessionid akzeptiert: {{ data_get($latestCookieDiagnostics, 'sessionCookieAccepted') ? 'Ja' : 'Nein' }}</p>
                                 <p>sessionid nach Reload noch da: {{ data_get($latestCookieDiagnostics, 'sessionCookieRetained') ? 'Ja' : 'Nein' }}</p>
                             </div>
-                            <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-700">
+                            <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
                                 <h4 class="font-semibold text-slate-900">Login-Diagnose</h4>
                                 <p class="mt-2">Auto-Login versucht: {{ data_get($latestLoginDiagnostics, 'attempted') ? 'Ja' : 'Nein' }}</p>
                                 <p>Formular gefunden: {{ data_get($latestLoginDiagnostics, 'formDetected') ? 'Ja' : 'Nein' }}</p>
@@ -685,7 +811,7 @@
                     @endif
 
                     @if($latestCountWarnings)
-                        <div class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                        <div class="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
                             <h4 class="font-semibold">Metrik-Hinweise</h4>
                             <ul class="mt-2 list-disc space-y-1 pl-5">
                                 @foreach($latestCountWarnings as $warning)
@@ -696,7 +822,7 @@
                     @endif
 
                     @if($latestSnapshot->has_changes && $latestSnapshot->detected_changes)
-                        <div class="mt-4 rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">
+                        <div class="mt-3 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
                             <h4 class="font-semibold">Erkannte Aenderungen</h4>
                             <ul class="mt-2 space-y-2">
                                 @foreach($latestSnapshot->detected_changes as $change)
@@ -712,31 +838,31 @@
                     @endif
 
                     @if($latestSnapshot->profile_image_storage_url)
-                        <div class="mt-4">
+                        <div class="mt-3">
                             <h4 class="text-sm font-semibold text-slate-900">Gespeichertes Profilbild der letzten Analyse</h4>
-                            <div class="mt-3">
-                                <a href="{{ $latestSnapshot->profile_image_storage_url }}" target="_blank" class="block overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
-                                    <img src="{{ $latestSnapshot->profile_image_storage_url }}" alt="Gespeichertes Profilbild" class="h-40 w-full object-cover">
+                            <div class="mt-2">
+                                <a href="{{ $latestSnapshot->profile_image_storage_url }}" target="_blank" class="block overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+                                    <img src="{{ $latestSnapshot->profile_image_storage_url }}" alt="Gespeichertes Profilbild" class="h-32 w-full object-cover">
                                 </a>
                             </div>
                         </div>
                     @endif
                 @else
-                    <p class="mt-4 text-sm text-slate-500">Bisher wurde noch keine Instagram-Analyse gespeichert.</p>
+                    <p class="mt-3 text-sm text-slate-500">Bisher wurde noch keine Instagram-Analyse gespeichert.</p>
                 @endif
             </div>
 
-            <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Profilbild-Historie</h3>
                 <p class="mt-1 text-sm text-slate-600">
                     Gespeichert werden nur eindeutig dem analysierten Profil zuordenbare Profilbilder, keine Vorschlagsbilder oder Bilder des eingeloggten Such-Profils.
                 </p>
 
                 @if($profileImageHistory->isNotEmpty())
-                    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    <div class="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                         @foreach($profileImageHistory as $profileImage)
-                            <a href="{{ $profileImage->storage_url }}" target="_blank" class="overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-sm">
-                                <img src="{{ $profileImage->storage_url }}" alt="Gespeichertes Profilbild" class="h-44 w-full object-cover">
+                            <a href="{{ $profileImage->storage_url }}" target="_blank" class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm">
+                                <img src="{{ $profileImage->storage_url }}" alt="Gespeichertes Profilbild" class="h-32 w-full object-cover">
                                 <div class="border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
                                     {{ optional($profileImage->snapshot?->analyzed_at)->format('d.m.Y H:i') ?: 'Unbekanntes Datum' }}
                                 </div>
@@ -744,15 +870,15 @@
                         @endforeach
                     </div>
                 @else
-                    <p class="mt-4 text-sm text-slate-500">Bisher wurden noch keine Profilbilder in der Historie gespeichert.</p>
+                    <p class="mt-3 text-sm text-slate-500">Bisher wurden noch keine Profilbilder in der Historie gespeichert.</p>
                 @endif
             </div>
 
-            <div class="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Analyse-Historie</h3>
-                <div class="mt-4 space-y-3">
+                <div class="mt-3 space-y-2">
                     @forelse($trackedPerson->instagramSnapshots as $snapshot)
-                        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                        <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                             <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div>
                                     <div class="font-semibold text-slate-900">{{ optional($snapshot->analyzed_at)->format('d.m.Y H:i') ?: '—' }}</div>

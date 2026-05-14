@@ -107,6 +107,32 @@ class User extends Authenticatable
         ]);
     }
 
+    public function receiveMessage($subject, $message, $fromUserId = null)
+    {
+        return Message::create([
+            'subject' => $subject,
+            'message' => $message,
+            'from_user' => $this->resolveMessageSenderId($fromUserId),
+            'to_user' => $this->id,
+            'status' => '1',
+        ]);
+    }
+
+    private function resolveMessageSenderId($fromUserId = null): int
+    {
+        $fromUserId = (int) $fromUserId;
+
+        if ($fromUserId > 0 && self::whereKey($fromUserId)->exists()) {
+            return $fromUserId;
+        }
+
+        if (self::whereKey(1)->exists()) {
+            return 1;
+        }
+
+        return $this->id;
+    }
+
     public function isAdmin(): bool
     {
         return $this->role === 'admin';

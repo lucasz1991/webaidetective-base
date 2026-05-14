@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\Mail;
 use App\Models\TrackedPerson;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -19,6 +20,8 @@ class MonitorTrackedPersonInstagram implements ShouldQueue
 
     public function __construct(
         public readonly int $trackedPersonId,
+        public readonly bool $force = false,
+        public readonly bool $sendNotifications = true,
     ) {
     }
 
@@ -28,11 +31,20 @@ class MonitorTrackedPersonInstagram implements ShouldQueue
             ->with('user')
             ->find($this->trackedPersonId);
 
-        if (! $trackedPerson || ! $trackedPerson->monitoring_enabled || ! $trackedPerson->instagram_username) {
+        if (! $trackedPerson || ! $trackedPerson->instagram_username) {
+            return;
+        }
+
+        if (! $this->force && ! $trackedPerson->monitoring_enabled) {
             return;
         }
 
         try {
+            $trackedPerson->forceFill([
+                'last_instagram_status_level' => 'partial',
+                'last_instagram_status_message' => 'Instagram-Analyse laeuft im Hintergrund.',
+            ])->save();
+
             $snapshot = $trackedPerson->analyzeInstagram();
         } catch (\Throwable $exception) {
             Log::warning('Monitoring fuer getrackte Person fehlgeschlagen.', [
@@ -41,10 +53,15 @@ class MonitorTrackedPersonInstagram implements ShouldQueue
                 'error' => $exception->getMessage(),
             ]);
 
+            $trackedPerson->forceFill([
+                'last_instagram_status_level' => 'error',
+                'last_instagram_status_message' => 'Instagram-Analyse fehlgeschlagen: '.$exception->getMessage(),
+            ])->save();
+
             return;
         }
 
-        if (! $trackedPerson->notify_social_changes || ! $snapshot->has_changes) {
+        if (! $this->sendNotifications || ! $trackedPerson->notify_social_changes || ! $snapshot->has_changes) {
             return;
         }
 
@@ -54,11 +71,25 @@ class MonitorTrackedPersonInstagram implements ShouldQueue
             return;
         }
 
-        $owner->sendMessage(
-            $owner->id,
-            'Aenderungen bei '.$trackedPerson->display_name,
-            $this->buildNotificationMessage($trackedPerson, $snapshot),
-        );
+        $subject = 'Aenderungen bei '.$trackedPerson->display_name;
+
+        Mail::create([
+            'type' => 'both',
+            'from_user_id' => $owner->id,
+            'content' => [
+                'subject' => $subject,
+                'header' => 'Automatische Beobachtung',
+                'body' => $this->buildNotificationMessage($trackedPerson, $snapshot),
+                'link' => route('messages'),
+            ],
+            'recipients' => [
+                [
+                    'user_id' => $owner->id,
+                    'email' => $owner->email,
+                    'status' => false,
+                ],
+            ],
+        ]);
     }
 
     private function buildNotificationMessage(TrackedPerson $trackedPerson, $snapshot): string

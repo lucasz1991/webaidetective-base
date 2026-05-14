@@ -162,6 +162,8 @@ class InstagramScraper
             'relationship-opening' => 2,
             'relationship-dialog-missing' => 100,
             'relationship-complete' => 100,
+            'profile-session-check' => 12,
+            'profile-opening' => 25,
             'profile-page-loaded' => 45,
             'profile-collected' => 100,
             default => $expected > 0
@@ -213,6 +215,8 @@ class InstagramScraper
         }
 
         return match ($stage) {
+            'profile-session-check' => 'Instagram-Session wird geprueft.',
+            'profile-opening' => 'Instagram-Profilseite wird geoeffnet.',
             'profile-page-loaded' => 'Profilseite geladen, Grunddaten werden ausgelesen.',
             'profile-collected' => 'Grunddaten wurden ausgelesen.',
             default => 'Instagram-Grunddaten werden geladen.',
@@ -250,7 +254,9 @@ class InstagramScraper
 
         return [
             'profileLabel' => (string) ($profile['profile_label'] ?? 'instagram-default'),
-            'persistentProfileEnabled' => (bool) ($profile['persistent_profile_enabled'] ?? true),
+            // Reguläre Analysen verwenden ein frisches Browser-Profil und laden die Session aus der Cookie-Datei.
+            // Ein geteiltes persistentes Chrome-Profil blockiert bei parallelen Scans schnell DevTools/Puppeteer.
+            'persistentProfileEnabled' => false,
             'browserProfilePath' => $this->resolveStorageAwarePath($profile['browser_profile_path'] ?? 'browser-profiles/instagram/default'),
             'cookieFilePath' => $this->resolveStorageAwarePath($profile['cookie_file_path'] ?? 'cookies/instagram-cookies.json'),
             // Reguläre Analysen laufen immer unsichtbar im Hintergrund.
@@ -261,8 +267,8 @@ class InstagramScraper
             'loginPasswordConfigured' => $runtimePassword['configured'],
             'loginPasswordDecryptable' => $runtimePassword['decryptable'],
             'loginPasswordSource' => $runtimePassword['source'],
-            // 0 deaktiviert Puppeteer-Navigation-Timeouts; der Scraper beendet Phasen ueber eigene DOM-Zustandslogik.
-            'navigationTimeoutMs' => 0,
+            // Softes Wartefenster fuer einzelne Instagram-Navigationen; der PHP-Prozess selbst laeuft ohne Timeout.
+            'navigationTimeoutMs' => max(30000, ((int) ($profile['navigation_timeout_seconds'] ?? 120)) * 1000),
             'postLoginWaitMs' => max(500, (int) ($profile['post_login_wait_ms'] ?? 2500)),
             'typingDelayMs' => max(0, (int) ($profile['typing_delay_ms'] ?? 35)),
             'followerListMaxItems' => max(0, (int) ($profile['follower_list_max_items'] ?? 0)),
