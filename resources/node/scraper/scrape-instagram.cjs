@@ -357,8 +357,102 @@ function normalizeOptionalPositiveInteger(value, fallback = 0) {
   return Math.floor(normalizedValue);
 }
 
+function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
+  const input = config && typeof config === 'object' ? config : {};
+  const merged = {
+    ...defaults,
+    ...input,
+  };
+
+  return {
+    ...merged,
+    profileId: normalizeText(String(input.profileId || input.profile_id || merged.profileId || '')),
+    profileLabel: normalizeText(String(input.profileLabel || input.profile_label || merged.profileLabel || 'instagram-default')) || 'instagram-default',
+    persistentProfileEnabled: isLoginSessionMode && input?.persistentProfileEnabled !== false,
+    headlessEnabled: input?.headlessEnabled !== false,
+    autoLoginEnabled: input?.autoLoginEnabled === true,
+    navigationTimeoutMs: Math.max(30000, Number(input?.navigationTimeoutMs || merged.navigationTimeoutMs || 120000)),
+    postLoginWaitMs: Math.max(500, Number(input?.postLoginWaitMs || merged.postLoginWaitMs || 2500)),
+    typingDelayMs: Math.max(0, Number(input?.typingDelayMs || merged.typingDelayMs || 0)),
+    followerListMaxItems: normalizeOptionalPositiveInteger(input?.followerListMaxItems, merged.followerListMaxItems),
+    followingListMaxItems: normalizeOptionalPositiveInteger(input?.followingListMaxItems, merged.followingListMaxItems),
+    relationshipListMaxScrollRounds: Math.max(
+      20,
+      normalizeOptionalPositiveInteger(
+        input?.relationshipListMaxScrollRounds,
+        merged.relationshipListMaxScrollRounds,
+      ) || merged.relationshipListMaxScrollRounds || DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS,
+    ),
+    expectedFollowerCount: normalizeOptionalPositiveInteger(input?.expectedFollowerCount, merged.expectedFollowerCount),
+    expectedFollowingCount: normalizeOptionalPositiveInteger(input?.expectedFollowingCount, merged.expectedFollowingCount),
+    accountPool: Array.isArray(input.accountPool) ? input.accountPool : [],
+  };
+}
+
+function normalizeRuntimeAccountConfig(account, baseConfig) {
+  const input = account && typeof account === 'object' ? account : {};
+
+  return normalizeRuntimeConfigShape({
+    ...baseConfig,
+    autoLoginEnabled: false,
+    loginUsername: '',
+    loginPassword: '',
+    loginPasswordConfigured: false,
+    loginPasswordDecryptable: true,
+    loginPasswordSource: null,
+    ...input,
+    accountPool: [],
+  }, baseConfig);
+}
+
+function getScraperAccountKey(runtimeConfig = {}) {
+  const candidates = [
+    runtimeConfig.profileId,
+    runtimeConfig.cookieFilePath,
+    runtimeConfig.loginUsername,
+    runtimeConfig.profileLabel,
+  ];
+
+  for (const candidate of candidates) {
+    const normalized = normalizeText(String(candidate || ''));
+
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return '';
+}
+
+function normalizeRuntimeAccountPool(accountPool, runtimeConfig) {
+  const rawAccounts = Array.isArray(accountPool) ? accountPool : [];
+  const normalizedAccounts = [
+    { ...runtimeConfig, accountPool: [] },
+    ...rawAccounts.map((account) => normalizeRuntimeAccountConfig(account, runtimeConfig)),
+  ];
+  const seenAccountKeys = new Set();
+  const pool = [];
+
+  for (const account of normalizedAccounts) {
+    const accountKey = getScraperAccountKey(account);
+
+    if (!accountKey || seenAccountKeys.has(accountKey)) {
+      continue;
+    }
+
+    seenAccountKeys.add(accountKey);
+    pool.push({
+      ...account,
+      accountPool: [],
+    });
+  }
+
+  return pool;
+}
+
 function loadRuntimeConfig(configPath) {
   const defaults = {
+    profileId: '',
     profileLabel: 'instagram-default',
     persistentProfileEnabled: isLoginSessionMode,
     browserProfilePath: path.resolve(__dirname, '../../../storage/app/browser-profiles/instagram/default'),
@@ -378,39 +472,28 @@ function loadRuntimeConfig(configPath) {
     relationshipListMaxScrollRounds: DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS,
     expectedFollowerCount: 0,
     expectedFollowingCount: 0,
+    accountPool: [],
   };
 
   if (!configPath || !fs.existsSync(configPath)) {
-    return defaults;
+    const runtimeConfig = normalizeRuntimeConfigShape({}, defaults);
+    runtimeConfig.accountPool = normalizeRuntimeAccountPool([], runtimeConfig);
+
+    return runtimeConfig;
   }
 
   try {
     const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const runtimeConfig = normalizeRuntimeConfigShape(parsed, defaults);
+    runtimeConfig.accountPool = normalizeRuntimeAccountPool(parsed?.accountPool, runtimeConfig);
 
-    return {
-      ...defaults,
-      ...parsed,
-      persistentProfileEnabled: isLoginSessionMode && parsed?.persistentProfileEnabled !== false,
-      headlessEnabled: parsed?.headlessEnabled !== false,
-      autoLoginEnabled: parsed?.autoLoginEnabled === true,
-      navigationTimeoutMs: Math.max(30000, Number(parsed?.navigationTimeoutMs || defaults.navigationTimeoutMs)),
-      postLoginWaitMs: Math.max(500, Number(parsed?.postLoginWaitMs || defaults.postLoginWaitMs)),
-      typingDelayMs: Math.max(0, Number(parsed?.typingDelayMs || defaults.typingDelayMs)),
-      followerListMaxItems: normalizeOptionalPositiveInteger(parsed?.followerListMaxItems, defaults.followerListMaxItems),
-      followingListMaxItems: normalizeOptionalPositiveInteger(parsed?.followingListMaxItems, defaults.followingListMaxItems),
-      relationshipListMaxScrollRounds: Math.max(
-        20,
-        normalizeOptionalPositiveInteger(
-          parsed?.relationshipListMaxScrollRounds,
-          defaults.relationshipListMaxScrollRounds,
-        ) || defaults.relationshipListMaxScrollRounds,
-      ),
-      expectedFollowerCount: normalizeOptionalPositiveInteger(parsed?.expectedFollowerCount, defaults.expectedFollowerCount),
-      expectedFollowingCount: normalizeOptionalPositiveInteger(parsed?.expectedFollowingCount, defaults.expectedFollowingCount),
-    };
+    return runtimeConfig;
   } catch (error) {
     debugLog('Fehler beim Laden der Runtime-Konfiguration:', error.message);
-    return defaults;
+    const runtimeConfig = normalizeRuntimeConfigShape({}, defaults);
+    runtimeConfig.accountPool = normalizeRuntimeAccountPool([], runtimeConfig);
+
+    return runtimeConfig;
   }
 }
 
@@ -1900,6 +1983,375 @@ async function establishInstagramSession(page, runtimeConfig, notes) {
   };
 }
 
+function getRuntimeAccountPool(runtimeConfig = {}) {
+  const pool = Array.isArray(runtimeConfig.accountPool) ? runtimeConfig.accountPool : [];
+
+  if (pool.length > 0) {
+    return pool;
+  }
+
+  return [{
+    ...runtimeConfig,
+    accountPool: [],
+  }];
+}
+
+function selectNextRuntimeAccount(runtimeConfig, usedAccountKeys) {
+  const accountPool = getRuntimeAccountPool(runtimeConfig);
+
+  for (const account of accountPool) {
+    const candidate = {
+      ...runtimeConfig,
+      ...account,
+      accountPool,
+    };
+    const accountKey = getScraperAccountKey(candidate);
+
+    if (!accountKey || usedAccountKeys.has(accountKey)) {
+      continue;
+    }
+
+    return candidate;
+  }
+
+  return null;
+}
+
+async function clearInstagramSessionState(page) {
+  await closeInstagramDialog(page).catch(() => {});
+
+  const cookies = await page
+    .cookies(
+      'https://www.instagram.com/',
+      'https://instagram.com/',
+      'https://www.facebook.com/',
+      'https://facebook.com/',
+    )
+    .catch(() => []);
+
+  if (cookies.length > 0) {
+    await page.deleteCookie(...cookies.map((cookie) => ({
+      name: cookie.name,
+      domain: cookie.domain,
+      path: cookie.path || '/',
+    }))).catch((error) => {
+      recordRunDebug('account-switch-cookie-clear-failed', {
+        error: normalizeText(error.message || String(error)),
+      });
+    });
+  }
+
+  await page.evaluate(() => {
+    try {
+      window.localStorage?.clear();
+      window.sessionStorage?.clear();
+    } catch (error) {
+      // Storage can be inaccessible on transient browser pages.
+    }
+  }).catch(() => {});
+
+  recordRunDebug('account-switch-state-cleared', {
+    clearedCookieCount: cookies.length,
+  });
+}
+
+async function switchScraperAccountAfterRateLimit(page, runtimeConfig, notes, relationship, rateLimitText, usedAccountKeys) {
+  const accountPool = getRuntimeAccountPool(runtimeConfig);
+  const currentKey = getScraperAccountKey(runtimeConfig);
+  let lastFailure = null;
+
+  if (currentKey) {
+    usedAccountKeys.add(currentKey);
+  }
+
+  if (accountPool.length <= 1) {
+    recordRunDebug('account-switch-skipped', {
+      relationship,
+      reason: 'no-alternate-account',
+      accountPoolSize: accountPool.length,
+      rateLimitText,
+    });
+    return null;
+  }
+
+  while (true) {
+    const nextRuntimeConfig = selectNextRuntimeAccount(runtimeConfig, usedAccountKeys);
+
+    if (!nextRuntimeConfig) {
+      recordRunDebug('account-switch-exhausted', {
+        relationship,
+        accountPoolSize: accountPool.length,
+        usedAccountCount: usedAccountKeys.size,
+        rateLimitText,
+      });
+      return lastFailure
+        ? {
+          ...lastFailure,
+          sessionEstablished: false,
+          failed: true,
+        }
+        : null;
+    }
+
+    const nextKey = getScraperAccountKey(nextRuntimeConfig);
+    const fromLabel = runtimeConfig.profileLabel || currentKey || 'instagram-default';
+    const toLabel = nextRuntimeConfig.profileLabel || nextKey || 'instagram-default';
+
+    if (nextKey) {
+      usedAccountKeys.add(nextKey);
+    }
+
+    progressLog('account-switching', {
+      relationship,
+      fromProfileLabel: fromLabel,
+      toProfileLabel: toLabel,
+      accountPoolSize: accountPool.length,
+    });
+    notes.push(`Rate-Limit erkannt; Scraper-Account wird gewechselt (${fromLabel} -> ${toLabel}).`);
+    recordRunDebug('account-switch-start', {
+      relationship,
+      fromProfileLabel: fromLabel,
+      toProfileLabel: toLabel,
+      fromAccountKey: currentKey,
+      toAccountKey: nextKey,
+      rateLimitText,
+    });
+
+    await clearInstagramSessionState(page);
+
+    const sessionResult = await establishInstagramSession(page, nextRuntimeConfig, notes);
+
+    if (sessionResult.sessionEstablished) {
+      const switchCookiePath = buildCookiePath(nextRuntimeConfig);
+      const cookiesSavedAfterSwitch = await saveCookiesToFile(page, switchCookiePath);
+
+      if (cookiesSavedAfterSwitch.saved) {
+        notes.push(`Sessiondaten fuer ${toLabel} wurden gespeichert.`);
+      }
+
+      notes.push(`Scraper-Account aktiv: ${toLabel}.`);
+      recordRunDebug('account-switch-success', {
+        relationship,
+        toProfileLabel: toLabel,
+        cookieFilePath: switchCookiePath,
+        cookiesSaved: cookiesSavedAfterSwitch,
+      });
+
+      return {
+        runtimeConfig: nextRuntimeConfig,
+        cookieDiagnostics: sessionResult.cookieDiagnostics,
+        loginDiagnostics: sessionResult.loginDiagnostics,
+        sessionEstablished: true,
+        failed: false,
+      };
+    }
+
+    notes.push(`Scraper-Account ${toLabel} konnte keine stabile Instagram-Session herstellen.`);
+    lastFailure = {
+      runtimeConfig: nextRuntimeConfig,
+      cookieDiagnostics: sessionResult.cookieDiagnostics,
+      loginDiagnostics: sessionResult.loginDiagnostics,
+    };
+    recordRunDebug('account-switch-session-failed', {
+      relationship,
+      toProfileLabel: toLabel,
+      cookieDiagnostics: sessionResult.cookieDiagnostics,
+      loginDiagnostics: sessionResult.loginDiagnostics,
+    });
+  }
+}
+
+function buildRelationshipCollectionOptions(runtimeConfig, relationship) {
+  const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
+
+  return {
+    maxItems: normalizedRelationship === 'following'
+      ? runtimeConfig.followingListMaxItems
+      : runtimeConfig.followerListMaxItems,
+    maxScrollRounds: runtimeConfig.relationshipListMaxScrollRounds,
+    expectedCount: normalizedRelationship === 'following'
+      ? runtimeConfig.expectedFollowingCount
+      : runtimeConfig.expectedFollowerCount,
+    runtimeConfig,
+  };
+}
+
+async function collectRelationshipListForRuntime(page, username, profile, relationship, runtimeConfig) {
+  const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
+  const options = buildRelationshipCollectionOptions(runtimeConfig, normalizedRelationship);
+
+  return normalizedRelationship === 'following'
+    ? collectPublicFollowingList(page, username, profile, options)
+    : collectPublicFollowersList(page, username, profile, options);
+}
+
+function mergeRelationshipLists(previousList, nextList) {
+  if (!previousList) {
+    return nextList;
+  }
+
+  if (!nextList) {
+    return previousList;
+  }
+
+  const itemsByUsername = new Map();
+
+  for (const item of [
+    ...(Array.isArray(previousList.items) ? previousList.items : []),
+    ...(Array.isArray(nextList.items) ? nextList.items : []),
+  ]) {
+    const relatedUsername = normalizeInstagramUsername(item?.username || '');
+
+    if (!relatedUsername || itemsByUsername.has(relatedUsername)) {
+      continue;
+    }
+
+    itemsByUsername.set(relatedUsername, {
+      ...item,
+      username: relatedUsername,
+    });
+  }
+
+  const maxItems = normalizeOptionalPositiveInteger(nextList.maxItems, previousList.maxItems);
+  const mergedItems = Array.from(itemsByUsername.values());
+  const limitedItems = maxItems > 0 ? mergedItems.slice(0, maxItems) : mergedItems;
+  const recoveredFromRateLimit = Boolean(
+    (previousList.rateLimited || previousList.rateLimitRecovered) && !nextList.rateLimited,
+  );
+
+  return {
+    ...previousList,
+    ...nextList,
+    items: limitedItems,
+    count: limitedItems.length,
+    available: limitedItems.length > 0 || Boolean(previousList.available) || Boolean(nextList.available),
+    attempted: Boolean(previousList.attempted || nextList.attempted),
+    rateLimited: Boolean(nextList.rateLimited),
+    rateLimitText: nextList.rateLimited ? (nextList.rateLimitText || previousList.rateLimitText || null) : null,
+    rateLimitRecovered: recoveredFromRateLimit,
+    previousRateLimitText: previousList.rateLimitText || previousList.previousRateLimitText || null,
+  };
+}
+
+async function refreshProfileAfterAccountSwitch(page, username, profileUrl, runtimeConfig, notes) {
+  progressLog('profile-opening', {
+    relationship: null,
+    url: profileUrl,
+    accountSwitch: true,
+    profileLabel: runtimeConfig.profileLabel || null,
+  });
+
+  const profileNavigation = await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
+
+  if (!profileNavigation.ok) {
+    notes.push(`Profilseite konnte nach Account-Wechsel nicht stabil geladen werden: ${profileNavigation.error}`);
+  }
+
+  await sleep(1800);
+
+  const profile = await collectProfileInfo(page, username);
+  const html = await page.content().catch(() => null);
+  const title = await page.title().catch(() => null);
+  const finalUrl = page.url();
+
+  progressLog('profile-collected', {
+    usernameSeen: Boolean(profile.usernameSeen),
+    isPrivate: Boolean(profile.isPrivate),
+    requiresLogin: Boolean(profile.requiresLogin),
+    imageCount: profile.imageCount || 0,
+    accountSwitch: true,
+    profileLabel: runtimeConfig.profileLabel || null,
+  });
+
+  return {
+    profile,
+    html,
+    title,
+    finalUrl,
+  };
+}
+
+async function collectRelationshipListWithAccountSwitches(page, username, profile, relationship, runtimeState, notes, profileUrl) {
+  const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
+  const maxPasses = Math.max(1, getRuntimeAccountPool(runtimeState.runtimeConfig).length);
+  let currentProfile = profile;
+  let latestHtml = null;
+  let latestTitle = null;
+  let latestFinalUrl = page.url();
+  let switched = false;
+  let list = null;
+
+  for (let pass = 0; pass < maxPasses; pass++) {
+    const collectedList = await collectRelationshipListForRuntime(
+      page,
+      username,
+      currentProfile,
+      normalizedRelationship,
+      runtimeState.runtimeConfig,
+    );
+    list = mergeRelationshipLists(list, collectedList);
+    recordRunDebug(
+      `${normalizedRelationship}-list-collected${switched ? '-after-account-switch' : ''}`,
+      list,
+    );
+
+    if (!list?.rateLimited) {
+      break;
+    }
+
+    const switchResult = await switchScraperAccountAfterRateLimit(
+      page,
+      runtimeState.runtimeConfig,
+      notes,
+      normalizedRelationship,
+      list.rateLimitText || null,
+      runtimeState.usedAccountKeys,
+    );
+
+    if (!switchResult) {
+      break;
+    }
+
+    runtimeState.runtimeConfig = switchResult.runtimeConfig;
+    runtimeState.cookieFilePath = buildCookiePath(switchResult.runtimeConfig);
+    runtimeState.cookieDiagnostics = switchResult.cookieDiagnostics;
+    runtimeState.loginDiagnostics = switchResult.loginDiagnostics;
+
+    if (!switchResult.sessionEstablished) {
+      runtimeState.cookieSaveDisabled = true;
+      latestFinalUrl = page.url();
+      break;
+    }
+
+    switched = true;
+
+    const refreshed = await refreshProfileAfterAccountSwitch(
+      page,
+      username,
+      profileUrl,
+      runtimeState.runtimeConfig,
+      notes,
+    );
+
+    currentProfile = {
+      ...currentProfile,
+      ...refreshed.profile,
+    };
+    latestHtml = refreshed.html;
+    latestTitle = refreshed.title;
+    latestFinalUrl = refreshed.finalUrl;
+  }
+
+  return {
+    list,
+    profile: currentProfile,
+    html: latestHtml,
+    title: latestTitle,
+    finalUrl: latestFinalUrl,
+    switched,
+  };
+}
+
 async function renderProfileSnapshot(browser, screenshotPath, username, profileUrl, title, profile, notes) {
   const snapshotPage = await browser.newPage();
 
@@ -2153,13 +2605,13 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
   const startedAt = Date.now();
   const notes = [];
   const consoleMessages = [];
-  const runtimeConfig = loadRuntimeConfig(runtimeConfigPath);
+  let runtimeConfig = loadRuntimeConfig(runtimeConfigPath);
   const debugLogPath = initializeRunDebug(operationMode, username, runtimeConfig);
   const profileUrl = isLoginSessionMode
     ? 'https://www.instagram.com/'
     : `https://www.instagram.com/${username}/`;
   const artifacts = buildArtifactPaths(isLoginSessionMode ? '__session__' : username);
-  const cookieFilePath = buildCookiePath(runtimeConfig);
+  let cookieFilePath = buildCookiePath(runtimeConfig);
   const browserUserDataDir = buildBrowserUserDataDir(runtimeConfig);
   let activeBrowserUserDataDir = browserUserDataDir;
   let cleanupBrowserProfileOnExit = shouldCleanupBrowserProfile(runtimeConfig, browserUserDataDir);
@@ -2182,6 +2634,10 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
   let loginDiagnostics = {
     attempted: false,
     success: false,
+    warnings: [],
+  };
+  let cookieDiagnostics = {
+    loaded: false,
     warnings: [],
   };
   recordRunDebug('run-start', {
@@ -2330,12 +2786,14 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       relationship: null,
     });
 
-    const { cookieDiagnostics, loginDiagnostics: sessionLoginDiagnostics, sessionEstablished } = await establishInstagramSession(
+    const sessionResult = await establishInstagramSession(
       page,
       runtimeConfig,
       notes,
     );
-    loginDiagnostics = sessionLoginDiagnostics;
+    cookieDiagnostics = sessionResult.cookieDiagnostics;
+    loginDiagnostics = sessionResult.loginDiagnostics;
+    const sessionEstablished = sessionResult.sessionEstablished;
 
     if (sessionEstablished) {
       const cookiesSavedAfterSession = await saveCookiesToFile(page, cookieFilePath);
@@ -2385,6 +2843,15 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       return;
     }
 
+    const runtimeState = {
+      runtimeConfig,
+      cookieFilePath,
+      cookieDiagnostics,
+      loginDiagnostics,
+      usedAccountKeys: new Set([getScraperAccountKey(runtimeConfig)].filter(Boolean)),
+      cookieSaveDisabled: false,
+    };
+
     progressLog('profile-opening', {
       relationship: null,
       url: profileUrl,
@@ -2416,13 +2883,32 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     });
 
     if (shouldCollectFollowers) {
-      initialProfile.followersList = await collectPublicFollowersList(page, username, initialProfile, {
-        maxItems: runtimeConfig.followerListMaxItems,
-        maxScrollRounds: runtimeConfig.relationshipListMaxScrollRounds,
-        expectedCount: runtimeConfig.expectedFollowerCount,
-        runtimeConfig,
-      });
-      recordRunDebug('followers-list-collected', initialProfile.followersList);
+      const followersResult = await collectRelationshipListWithAccountSwitches(
+        page,
+        username,
+        initialProfile,
+        'followers',
+        runtimeState,
+        notes,
+        profileUrl,
+      );
+
+      initialProfile = followersResult.profile;
+      initialProfile.followersList = followersResult.list;
+      runtimeConfig = runtimeState.runtimeConfig;
+      cookieFilePath = runtimeState.cookieFilePath;
+      cookieDiagnostics = runtimeState.cookieDiagnostics;
+      loginDiagnostics = runtimeState.loginDiagnostics;
+
+      if (followersResult.html !== null) {
+        initialHtml = followersResult.html;
+      }
+
+      if (followersResult.title !== null) {
+        title = followersResult.title;
+      }
+
+      finalUrl = followersResult.finalUrl || page.url();
 
       if (initialProfile.followersList?.rateLimited) {
         notes.push('Instagram hat die Followerliste per Rate-Limit-Meldung blockiert; die Listenphase wurde abgebrochen.');
@@ -2440,13 +2926,32 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     }
 
     if (shouldCollectFollowing) {
-      initialProfile.followingList = await collectPublicFollowingList(page, username, initialProfile, {
-        maxItems: runtimeConfig.followingListMaxItems,
-        maxScrollRounds: runtimeConfig.relationshipListMaxScrollRounds,
-        expectedCount: runtimeConfig.expectedFollowingCount,
-        runtimeConfig,
-      });
-      recordRunDebug('following-list-collected', initialProfile.followingList);
+      const followingResult = await collectRelationshipListWithAccountSwitches(
+        page,
+        username,
+        initialProfile,
+        'following',
+        runtimeState,
+        notes,
+        profileUrl,
+      );
+
+      initialProfile = followingResult.profile;
+      initialProfile.followingList = followingResult.list;
+      runtimeConfig = runtimeState.runtimeConfig;
+      cookieFilePath = runtimeState.cookieFilePath;
+      cookieDiagnostics = runtimeState.cookieDiagnostics;
+      loginDiagnostics = runtimeState.loginDiagnostics;
+
+      if (followingResult.html !== null) {
+        initialHtml = followingResult.html;
+      }
+
+      if (followingResult.title !== null) {
+        title = followingResult.title;
+      }
+
+      finalUrl = followingResult.finalUrl || page.url();
 
       if (initialProfile.followingList?.rateLimited) {
         notes.push('Instagram hat die Gefolgt-Liste per Rate-Limit-Meldung blockiert; die Listenphase wurde abgebrochen.');
@@ -2497,7 +3002,9 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
 
     fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
 
-    if (shouldSaveCookies(finalUrl, initialProfile)) {
+    if (runtimeState.cookieSaveDisabled) {
+      notes.push('Cookies wurden nicht gespeichert, weil der Account-Wechsel keine stabile Session herstellen konnte.');
+    } else if (shouldSaveCookies(finalUrl, initialProfile)) {
       const cookiesSaved = await saveCookiesToFile(page, cookieFilePath);
       if (cookiesSaved.saved) {
         notes.push('Aktualisierte Instagram-Cookies gespeichert.');

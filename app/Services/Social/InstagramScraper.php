@@ -163,6 +163,7 @@ class InstagramScraper
             'relationship-dialog-missing' => 100,
             'relationship-complete' => 100,
             'relationship-rate-limited' => 100,
+            'account-switching' => 8,
             'profile-session-check' => 12,
             'profile-opening' => 25,
             'profile-page-loaded' => 45,
@@ -192,6 +193,10 @@ class InstagramScraper
                 return 'Instagram hat die Followerliste per Rate-Limit blockiert; die Listenphase wird abgebrochen.';
             }
 
+            if ($stage === 'account-switching') {
+                return 'Rate-Limit erkannt; Scraper-Account wird fuer die Followerliste gewechselt.';
+            }
+
             if ($stage === 'relationship-reopening') {
                 return 'Followerliste wird erneut geoeffnet'.($openAttempt > 0 ? ' (Pass '.$openAttempt.')' : '').': '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
             }
@@ -208,6 +213,10 @@ class InstagramScraper
         if ($phase === 'following') {
             if ($stage === 'relationship-rate-limited') {
                 return 'Instagram hat die Gefolgt-Liste per Rate-Limit blockiert; die Listenphase wird abgebrochen.';
+            }
+
+            if ($stage === 'account-switching') {
+                return 'Rate-Limit erkannt; Scraper-Account wird fuer die Gefolgt-Liste gewechselt.';
             }
 
             if ($stage === 'relationship-reopening') {
@@ -257,11 +266,12 @@ class InstagramScraper
 
     private function buildRuntimeConfig(): array
     {
-        $profile = Setting::getValue('scraper', 'instagram_profile');
-        $profile = is_array($profile) ? $profile : [];
+        $settings = Setting::getValue('scraper', 'instagram_profile');
+        $profile = $this->resolveActiveScraperProfile($settings);
         $runtimePassword = $this->resolveRuntimePassword($profile);
 
         return [
+            'profileId' => trim((string) ($profile['id'] ?? '')),
             'profileLabel' => (string) ($profile['profile_label'] ?? 'instagram-default'),
             // Reguläre Analysen verwenden ein frisches Browser-Profil und laden die Session aus der Cookie-Datei.
             // Ein geteiltes persistentes Chrome-Profil blockiert bei parallelen Scans schnell DevTools/Puppeteer.
@@ -283,7 +293,174 @@ class InstagramScraper
             'followerListMaxItems' => max(0, (int) ($profile['follower_list_max_items'] ?? 0)),
             'followingListMaxItems' => max(0, (int) ($profile['following_list_max_items'] ?? 0)),
             'relationshipListMaxScrollRounds' => max(20, (int) ($profile['relationship_list_max_scroll_rounds'] ?? 100000)),
+            'accountPool' => $this->buildRuntimeAccountPool($settings, $profile),
         ];
+    }
+
+    private function buildRuntimeAccountPool(mixed $settings, array $selectedProfile): array
+    {
+        $profiles = $this->resolveScraperProfiles($settings);
+
+        if ($profiles === []) {
+            return [$this->buildRuntimeAccountConfig($selectedProfile)];
+        }
+
+        $activeProfileIds = $this->normalizeActiveProfileIds(
+            is_array($settings) ? ($settings['active_profile_ids'] ?? null) : null,
+        );
+        $activeProfiles = $activeProfileIds !== []
+            ? array_values(array_filter(
+                $profiles,
+                static fn (array $profile): bool => in_array(trim((string) ($profile['id'] ?? '')), $activeProfileIds, true),
+            ))
+            : [];
+
+        if ($activeProfiles === []) {
+            $activeProfileId = trim((string) (is_array($settings) ? ($settings['active_profile_id'] ?? '') : ''));
+
+            if ($activeProfileId !== '') {
+                $activeProfiles = array_values(array_filter(
+                    $profiles,
+                    static fn (array $profile): bool => trim((string) ($profile['id'] ?? '')) === $activeProfileId,
+                ));
+            }
+        }
+
+        if ($activeProfiles === []) {
+            $activeProfiles = [$selectedProfile];
+        }
+
+        $pool = [];
+
+        foreach ([$selectedProfile, ...$activeProfiles] as $profile) {
+            $key = $this->runtimeProfileKey($profile);
+
+            if ($key === '' || isset($pool[$key])) {
+                continue;
+            }
+
+            $pool[$key] = $this->buildRuntimeAccountConfig($profile);
+        }
+
+        return array_values($pool) ?: [$this->buildRuntimeAccountConfig($selectedProfile)];
+    }
+
+    private function buildRuntimeAccountConfig(array $profile): array
+    {
+        $runtimePassword = $this->resolveRuntimePassword($profile);
+
+        return [
+            'profileId' => trim((string) ($profile['id'] ?? '')),
+            'profileLabel' => (string) ($profile['profile_label'] ?? 'instagram-default'),
+            'persistentProfileEnabled' => false,
+            'browserProfilePath' => $this->resolveStorageAwarePath($profile['browser_profile_path'] ?? 'browser-profiles/instagram/default'),
+            'cookieFilePath' => $this->resolveStorageAwarePath($profile['cookie_file_path'] ?? 'cookies/instagram-cookies.json'),
+            'headlessEnabled' => true,
+            'autoLoginEnabled' => (bool) ($profile['auto_login_enabled'] ?? false),
+            'loginUsername' => trim((string) ($profile['login_username'] ?? '')),
+            'loginPassword' => $runtimePassword['password'],
+            'loginPasswordConfigured' => $runtimePassword['configured'],
+            'loginPasswordDecryptable' => $runtimePassword['decryptable'],
+            'loginPasswordSource' => $runtimePassword['source'],
+            'navigationTimeoutMs' => max(30000, ((int) ($profile['navigation_timeout_seconds'] ?? 120)) * 1000),
+            'postLoginWaitMs' => max(500, (int) ($profile['post_login_wait_ms'] ?? 2500)),
+            'typingDelayMs' => max(0, (int) ($profile['typing_delay_ms'] ?? 35)),
+            'followerListMaxItems' => max(0, (int) ($profile['follower_list_max_items'] ?? 0)),
+            'followingListMaxItems' => max(0, (int) ($profile['following_list_max_items'] ?? 0)),
+            'relationshipListMaxScrollRounds' => max(20, (int) ($profile['relationship_list_max_scroll_rounds'] ?? 100000)),
+        ];
+    }
+
+    private function resolveScraperProfiles(mixed $settings): array
+    {
+        if (! is_array($settings)) {
+            return [];
+        }
+
+        if (! isset($settings['profiles']) || ! is_array($settings['profiles'])) {
+            return $settings === [] ? [] : [$settings];
+        }
+
+        $profiles = [];
+
+        foreach ($settings['profiles'] as $key => $profile) {
+            if (! is_array($profile)) {
+                continue;
+            }
+
+            if (! isset($profile['id']) && is_string($key)) {
+                $profile['id'] = $key;
+            }
+
+            $profiles[] = $profile;
+        }
+
+        return $profiles;
+    }
+
+    private function runtimeProfileKey(array $profile): string
+    {
+        foreach (['id', 'cookie_file_path', 'login_username', 'profile_label'] as $field) {
+            $value = trim((string) ($profile[$field] ?? ''));
+
+            if ($value !== '') {
+                return $field.':'.$value;
+            }
+        }
+
+        return '';
+    }
+
+    private function resolveActiveScraperProfile(mixed $settings): array
+    {
+        $profiles = $this->resolveScraperProfiles($settings);
+
+        if ($profiles === []) {
+            return [];
+        }
+
+        $activeProfileIds = $this->normalizeActiveProfileIds(
+            is_array($settings) ? ($settings['active_profile_ids'] ?? null) : null,
+        );
+        $activeProfiles = array_values(array_filter(
+            $profiles,
+            static fn (array $profile): bool => in_array(trim((string) ($profile['id'] ?? '')), $activeProfileIds, true),
+        ));
+
+        if ($activeProfiles !== []) {
+            return $activeProfiles[random_int(0, count($activeProfiles) - 1)];
+        }
+
+        $activeProfileId = trim((string) (is_array($settings) ? ($settings['active_profile_id'] ?? '') : ''));
+
+        foreach ($profiles as $profile) {
+            if (trim((string) ($profile['id'] ?? '')) === $activeProfileId) {
+                return $profile;
+            }
+        }
+
+        return $profiles[0];
+    }
+
+    private function normalizeActiveProfileIds(mixed $activeProfileIds): array
+    {
+        if (! is_array($activeProfileIds)) {
+            return [];
+        }
+
+        $normalizedIds = [];
+
+        foreach ($activeProfileIds as $activeProfileId) {
+            $activeProfileId = trim((string) $activeProfileId);
+
+            if ($activeProfileId === '') {
+                continue;
+            }
+
+            $normalizedIds[] = $activeProfileId;
+        }
+
+        return array_values(array_unique($normalizedIds));
     }
 
     private function resolveRuntimePassword(array $profile): array
