@@ -1627,6 +1627,122 @@ async function findFirstExistingSelector(page, selectors) {
   return null;
 }
 
+async function fillLoginInput(page, selector, value, runtimeConfig, fieldName) {
+  const timeout = Math.min(resolveNavigationWaitMs(runtimeConfig, 120000), 20000);
+
+  await page.waitForSelector(selector, {
+    timeout,
+    visible: true,
+  });
+  await page.focus(selector);
+  await page.click(selector, {
+    clickCount: 3,
+  }).catch(() => {});
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A').catch(() => {});
+  await page.keyboard.press('Backspace').catch(() => {});
+  await page.type(selector, value, {
+    delay: runtimeConfig.typingDelayMs,
+  });
+
+  let currentValue = await page.$eval(selector, (element) => element.value || '').catch(() => '');
+
+  if (currentValue !== value) {
+    await page.$eval(selector, (element, nextValue) => {
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+
+      if (valueSetter) {
+        valueSetter.call(element, nextValue);
+      } else {
+        element.value = nextValue;
+      }
+
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      element.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+    }, value).catch(() => {});
+
+    currentValue = await page.$eval(selector, (element) => element.value || '').catch(() => '');
+  }
+
+  recordRunDebug('auto-login-input-filled', {
+    fieldName,
+    selector,
+    expectedLength: String(value || '').length,
+    actualLength: String(currentValue || '').length,
+    matched: currentValue === value,
+  });
+
+  return currentValue === value;
+}
+
+async function waitForLoginSubmitAttempt(page, runtimeConfig, action, label) {
+  const timeout = Math.min(resolveNavigationWaitMs(runtimeConfig, 120000), 45000);
+
+  await Promise.allSettled([
+    page.waitForNavigation({
+      timeout,
+      waitUntil: 'domcontentloaded',
+    }),
+    action(),
+  ]);
+  await sleep(1200);
+
+  recordRunDebug('auto-login-submit-attempt', {
+    label,
+    url: page.url(),
+    cookies: summarizeCookieCollection(
+      await page.cookies('https://www.instagram.com/').catch(() => []),
+    ),
+  });
+}
+
+async function submitInstagramLoginForm(page, submitSelector, passwordSelector, runtimeConfig) {
+  await waitForLoginSubmitAttempt(
+    page,
+    runtimeConfig,
+    () => page.click(submitSelector),
+    'submit-button-click',
+  );
+
+  let activeCookies = await page.cookies('https://www.instagram.com/').catch(() => []);
+
+  if (activeCookies.some((cookie) => cookie.name === 'sessionid')) {
+    return;
+  }
+
+  await page.focus(passwordSelector).catch(() => {});
+  await waitForLoginSubmitAttempt(
+    page,
+    runtimeConfig,
+    () => page.keyboard.press('Enter'),
+    'password-enter',
+  );
+
+  activeCookies = await page.cookies('https://www.instagram.com/').catch(() => []);
+
+  if (activeCookies.some((cookie) => cookie.name === 'sessionid')) {
+    return;
+  }
+
+  await waitForLoginSubmitAttempt(
+    page,
+    runtimeConfig,
+    () => page.evaluate(() => {
+      const buttons = Array.from(document.querySelectorAll('button[type="submit"], form button'));
+      const clickableButton = buttons.find((button) =>
+        !button.disabled &&
+        button.getAttribute('aria-disabled') !== 'true' &&
+        button.offsetParent !== null
+      ) || buttons.find((button) => !button.disabled) || buttons[0] || null;
+
+      if (clickableButton) {
+        clickableButton.click();
+      }
+    }),
+    'dom-submit-button-click',
+  );
+}
+
 async function performInstagramLogin(page, runtimeConfig) {
   const diagnostics = {
     attempted: false,
@@ -1764,29 +1880,14 @@ async function performInstagramLogin(page, runtimeConfig) {
 
   await sleep(1200);
 
-  await page.$eval(usernameSelector, (element) => {
-    element.focus();
-    element.value = '';
-  });
-  await page.type(usernameSelector, loginUsername, {
-    delay: runtimeConfig.typingDelayMs,
-  });
+  const usernameFilled = await fillLoginInput(page, usernameSelector, loginUsername, runtimeConfig, 'username');
+  const passwordFilled = await fillLoginInput(page, passwordSelector, loginPassword, runtimeConfig, 'password');
 
-  await page.$eval(passwordSelector, (element) => {
-    element.focus();
-    element.value = '';
-  });
-  await page.type(passwordSelector, loginPassword, {
-    delay: runtimeConfig.typingDelayMs,
-  });
+  if (!usernameFilled || !passwordFilled) {
+    diagnostics.warnings.push('Die Instagram-Login-Felder konnten nicht stabil befuellt werden.');
+  }
 
-  await Promise.allSettled([
-    page.waitForNavigation({
-      timeout: runtimeConfig.navigationTimeoutMs,
-      waitUntil: 'domcontentloaded',
-    }),
-    page.click(submitSelector),
-  ]);
+  await submitInstagramLoginForm(page, submitSelector, passwordSelector, runtimeConfig);
 
   await sleep(runtimeConfig.postLoginWaitMs);
   await dismissPostLoginPrompts(page);
@@ -2678,14 +2779,18 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     try {
       browser = await puppeteer.launch(launchOptions);
     } catch (launchError) {
-      if (!isLoginSessionMode && runtimeConfig.persistentProfileEnabled) {
-        notes.push('Das persistente Browser-Profil konnte nicht gestartet werden; die Analyse nutzt ein temporaeres Hintergrundprofil.');
+      const launchErrorMessage = normalizeText(launchError.message || String(launchError));
+      const browserProfileLocked = /already running|processsingleton|userdatadir|user data dir|user data directory/i.test(launchErrorMessage);
+
+      if (runtimeConfig.persistentProfileEnabled && browserProfileLocked) {
+        notes.push('Das persistente Browser-Profil ist bereits durch Chrome belegt; diese Sitzung nutzt ein temporaeres Profil und speichert die Cookies separat.');
         activeBrowserUserDataDir = fs.mkdtempSync(
           path.join(runtimeTempDirectory, 'puppeteer-profile-fallback-'),
         );
         cleanupBrowserProfileOnExit = true;
+        runtimeConfig.persistentProfileEnabled = false;
         recordRunDebug('browser-launch-fallback', {
-          previousError: normalizeText(launchError.message),
+          previousError: launchErrorMessage,
           fallbackUserDataDir: activeBrowserUserDataDir,
         });
         browser = await puppeteer.launch({
