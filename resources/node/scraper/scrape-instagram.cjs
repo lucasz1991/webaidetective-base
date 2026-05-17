@@ -773,6 +773,9 @@ async function primeInstagramSession(page, cookieFilePath, runtimeConfig = {}) {
     page,
     'https://www.instagram.com/',
     runtimeConfig,
+    isLoginSessionMode
+      ? { timeoutMs: Math.min(resolveNavigationWaitMs(runtimeConfig, 120000), 20000) }
+      : {},
   );
 
   if (!navigation.ok) {
@@ -1628,7 +1631,7 @@ async function findFirstExistingSelector(page, selectors) {
 }
 
 async function fillLoginInput(page, selector, value, runtimeConfig, fieldName) {
-  const timeout = Math.min(resolveNavigationWaitMs(runtimeConfig, 120000), 20000);
+  const timeout = Math.min(resolveNavigationWaitMs(runtimeConfig, 120000), isLoginSessionMode ? 10000 : 20000);
 
   await page.waitForSelector(selector, {
     timeout,
@@ -1676,7 +1679,7 @@ async function fillLoginInput(page, selector, value, runtimeConfig, fieldName) {
 }
 
 async function waitForLoginSubmitAttempt(page, runtimeConfig, action, label) {
-  const timeout = Math.min(resolveNavigationWaitMs(runtimeConfig, 120000), 45000);
+  const timeout = Math.min(resolveNavigationWaitMs(runtimeConfig, 120000), isLoginSessionMode ? 8000 : 12000);
 
   await Promise.allSettled([
     page.waitForNavigation({
@@ -1815,6 +1818,7 @@ async function performInstagramLogin(page, runtimeConfig) {
     page,
     'https://www.instagram.com/accounts/login/',
     runtimeConfig,
+    { timeoutMs: Math.min(resolveNavigationWaitMs(runtimeConfig, 120000), isLoginSessionMode ? 15000 : 20000) },
   );
 
   if (!loginNavigation.ok) {
@@ -1827,6 +1831,8 @@ async function performInstagramLogin(page, runtimeConfig) {
   let passwordSelector = await findFirstExistingSelector(page, passwordSelectors);
   let submitSelector = await findFirstExistingSelector(page, submitSelectors);
 
+  const loginFormTimeout = Math.min(runtimeConfig.navigationTimeoutMs, isLoginSessionMode ? 10000 : 20000);
+
   try {
     if (!usernameSelector || !passwordSelector || !submitSelector) {
       await page.waitForFunction(() => {
@@ -1836,7 +1842,7 @@ async function performInstagramLogin(page, runtimeConfig) {
 
         return Boolean(textLikeInput && passwordInput && submitButton);
       }, {
-        timeout: Math.min(runtimeConfig.navigationTimeoutMs, 20000),
+        timeout: loginFormTimeout,
       });
     }
 
@@ -1844,7 +1850,7 @@ async function performInstagramLogin(page, runtimeConfig) {
     passwordSelector = await findFirstExistingSelector(page, passwordSelectors);
     submitSelector = await findFirstExistingSelector(page, submitSelectors);
     await page.waitForSelector(usernameSelector, {
-      timeout: Math.min(runtimeConfig.navigationTimeoutMs, 20000),
+      timeout: loginFormTimeout,
     });
   } catch (error) {
     const switchedAccount = await clickButtonByText(page, [
@@ -2061,7 +2067,7 @@ async function establishInstagramSession(page, runtimeConfig, notes) {
     notes.push('Auto-Login konnte keinen stabilen angemeldeten Zustand herstellen.');
   }
 
-  if (isLoginSessionMode) {
+  if (isLoginSessionMode && resolvePuppeteerHeadlessMode(runtimeConfig) === false) {
     notes.push('Warte auf eine manuelle Anmeldung im sichtbaren Browserfenster.');
     loginDiagnostics = await waitForInteractiveLoginCompletion(page, runtimeConfig);
 
@@ -2070,6 +2076,19 @@ async function establishInstagramSession(page, runtimeConfig, notes) {
       recordRunDebug('session-established-via-manual-login', loginDiagnostics);
       return { cookieDiagnostics, loginDiagnostics, sessionEstablished: true };
     }
+  } else if (isLoginSessionMode) {
+    const headlessWarning = 'Manuelle Instagram-Anmeldung wurde uebersprungen, weil auf dem Server kein sichtbarer Browser/Display-Server verfuegbar ist.';
+    notes.push(`${headlessWarning} Der Session-Aufbau nutzt nur gespeicherte Cookies oder Auto-Login.`);
+    loginDiagnostics = {
+      ...loginDiagnostics,
+      success: false,
+      manualLoginAttempted: false,
+      warnings: [
+        ...(Array.isArray(loginDiagnostics.warnings) ? loginDiagnostics.warnings : []),
+        headlessWarning,
+      ],
+    };
+    recordRunDebug('manual-login-skipped-headless', loginDiagnostics);
   }
 
   recordRunDebug('session-establish-failed', {

@@ -550,17 +550,20 @@ class InstagramScraper
 
     public function resolveNodeBinary(): string
     {
-        $configuredBinary = config('services.node.binary');
+        $environmentCandidates = array_filter([
+            config('services.node.binary'),
+            env('SCRAPER_NODE_BINARY'),
+            env('NODE_BINARY'),
+            getenv('SCRAPER_NODE_BINARY') ?: null,
+            getenv('NODE_BINARY') ?: null,
+        ], static fn (mixed $candidate): bool => is_string($candidate) && trim($candidate) !== '');
 
-        if (is_string($configuredBinary) && $configuredBinary !== '') {
-            $configuredBinary = trim($configuredBinary, " \t\n\r\0\x0B\"'");
+        $candidates = array_map(
+            static fn (string $candidate): string => trim($candidate, " \t\n\r\0\x0B\"'"),
+            $environmentCandidates,
+        );
 
-            if (File::exists($configuredBinary)) {
-                return $configuredBinary;
-            }
-        }
-
-        $candidates = PHP_OS_FAMILY === 'Windows'
+        $candidates = array_merge($candidates, PHP_OS_FAMILY === 'Windows'
             ? [
                 'C:\\Program Files\\nodejs\\node.exe',
                 'C:\\Program Files (x86)\\nodejs\\node.exe',
@@ -568,18 +571,50 @@ class InstagramScraper
             : [
                 '/usr/bin/node',
                 '/usr/local/bin/node',
-            ];
+                '/bin/node',
+                '/snap/bin/node',
+                '/usr/bin/nodejs',
+                '/usr/local/bin/nodejs',
+            ]);
+
+        foreach (glob('/opt/plesk/node/*/bin/node') ?: [] as $pleskCandidate) {
+            $candidates[] = $pleskCandidate;
+        }
+
+        $homeDirectory = getenv('HOME') ?: null;
+
+        if (is_string($homeDirectory) && trim($homeDirectory) !== '') {
+            foreach (glob($homeDirectory.'/.nvm/versions/node/*/bin/node') ?: [] as $nvmCandidate) {
+                $candidates[] = $nvmCandidate;
+            }
+        }
 
         foreach ($candidates as $candidate) {
-            if (File::exists($candidate)) {
+            if (is_string($candidate) && trim($candidate) !== '' && File::exists($candidate)) {
                 return $candidate;
+            }
+        }
+
+        if (PHP_OS_FAMILY !== 'Windows') {
+            foreach (['node', 'nodejs'] as $binaryName) {
+                $resolvedBinary = Process::run(['sh', '-lc', sprintf('command -v %s 2>/dev/null', $binaryName)]);
+
+                if (! $resolvedBinary->successful()) {
+                    continue;
+                }
+
+                $candidate = trim($resolvedBinary->output());
+
+                if ($candidate !== '' && File::exists($candidate)) {
+                    return $candidate;
+                }
             }
         }
 
         throw new \RuntimeException(
             PHP_OS_FAMILY === 'Windows'
                 ? 'Node.js wurde nicht gefunden. Bitte in der .env z. B. NODE_BINARY="C:\\Program Files\\nodejs\\node.exe" setzen.'
-                : 'Node.js wurde nicht gefunden. Bitte in der .env z. B. NODE_BINARY="/usr/bin/node" setzen.'
+                : 'Node.js wurde nicht gefunden. Bitte in der .env z. B. NODE_BINARY="/usr/bin/node" oder SCRAPER_NODE_BINARY="/opt/plesk/node/<version>/bin/node" setzen.'
         );
     }
 
