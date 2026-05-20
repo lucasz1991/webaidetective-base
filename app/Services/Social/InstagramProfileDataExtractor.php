@@ -93,11 +93,12 @@ class InstagramProfileDataExtractor
     {
         $visibleCounts = $this->extractCountsFromSource($texts['body_text_preview'] ?? null);
         $metaCounts = $this->extractCountsFromSource($texts['description_meta'] ?? null);
-        $htmlCounts = $this->extractCountsFromSource($texts['html_document'] ?? null);
+        $htmlCounts = $this->extractCountsFromHtmlDocument($texts['html_document'] ?? null);
         $selectedCounts = $visibleCounts;
         $sources = collect($selectedCounts)
             ->map(fn ($value) => $value !== null ? 'body_text_preview' : null)
             ->all();
+        $metadataBlockedMetrics = ['followers', 'following'];
 
         if ($allowFallbackCounts) {
             foreach (array_keys($selectedCounts) as $metric) {
@@ -105,7 +106,7 @@ class InstagramProfileDataExtractor
                     continue;
                 }
 
-                if (($metaCounts[$metric] ?? null) !== null) {
+                if (! in_array($metric, $metadataBlockedMetrics, true) && ($metaCounts[$metric] ?? null) !== null) {
                     $selectedCounts[$metric] = $metaCounts[$metric];
                     $sources[$metric] = 'description_meta';
 
@@ -162,6 +163,29 @@ class InstagramProfileDataExtractor
         return $values;
     }
 
+    private function extractCountsFromHtmlDocument(?string $html): array
+    {
+        if (! is_string($html) || trim($html) === '') {
+            return $this->extractCountsFromSource(null);
+        }
+
+        $body = $html;
+
+        if (preg_match('/<body\b[^>]*>(.*?)<\/body>/is', $html, $matches)) {
+            $body = $matches[1];
+        } else {
+            $body = preg_replace('/<head\b[^>]*>.*?<\/head>/is', ' ', $body) ?? $body;
+        }
+
+        $body = preg_replace('/<script\b[^>]*>.*?<\/script>/is', ' ', $body) ?? $body;
+        $body = preg_replace('/<style\b[^>]*>.*?<\/style>/is', ' ', $body) ?? $body;
+        $body = preg_replace('/<noscript\b[^>]*>.*?<\/noscript>/is', ' ', $body) ?? $body;
+        $body = preg_replace('/<meta\b[^>]*>/i', ' ', $body) ?? $body;
+        $body = strip_tags($body);
+
+        return $this->extractCountsFromSource($body);
+    }
+
     private function normalizeSourceText(?string $value): string
     {
         if (! is_string($value) || trim($value) === '') {
@@ -211,8 +235,12 @@ class InstagramProfileDataExtractor
         }
 
         $hasVisibleCounts = collect($visibleCounts)->contains(fn ($value) => $value !== null);
-        $hasFallbackCounts = collect($metaCounts)->contains(fn ($value) => $value !== null)
-            || collect($htmlCounts)->contains(fn ($value) => $value !== null);
+        $hasFallbackCounts = $allowFallbackCounts
+            ? collect($selectedSources)->contains(fn ($source) => in_array($source, ['description_meta', 'html_document'], true))
+            : (
+                collect($metaCounts)->contains(fn ($value) => $value !== null)
+                || collect($htmlCounts)->contains(fn ($value) => $value !== null)
+            );
 
         if (! $hasVisibleCounts && $hasFallbackCounts) {
             $warnings[] = $allowFallbackCounts
