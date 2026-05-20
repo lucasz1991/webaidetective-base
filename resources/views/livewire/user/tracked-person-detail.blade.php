@@ -57,6 +57,7 @@
             'body_text_preview' => 'sichtbarer Profiltext',
             'description_meta' => 'Meta-Beschreibung',
             'html_document' => 'HTML-Fallback',
+            'html_profile_data' => 'Profil-Daten im HTML',
         ];
         $resolveCountSourceLabel = function ($source) use ($countSourceLabels) {
             return $source ? ($countSourceLabels[$source] ?? $source) : 'keine sichtbaren Werte';
