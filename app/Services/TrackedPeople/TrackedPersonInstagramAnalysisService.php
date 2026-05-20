@@ -65,6 +65,7 @@ class TrackedPersonInstagramAnalysisService
         ) {
             $snapshot = $trackedPerson->instagramSnapshots()->create([
                 'instagram_username' => $trackedPerson->instagram_username,
+                'instagram_profile_id' => $extracted['profile_id'],
                 'full_name' => $extracted['full_name'],
                 'biography' => $extracted['biography'],
                 'posts_count' => $extracted['posts_count'],
@@ -137,6 +138,7 @@ class TrackedPersonInstagramAnalysisService
             }
 
             foreach ([
+                'instagram_profile_id' => $extracted['profile_id'],
                 'instagram_followers_count' => $extracted['followers_count'],
                 'instagram_following_count' => $extracted['following_count'],
                 'instagram_posts_count' => $extracted['posts_count'],
@@ -434,6 +436,7 @@ class TrackedPersonInstagramAnalysisService
 
         $payload['warnings'] = array_values(array_unique($existingWarnings));
         $payload['extractedProfile'] = [
+            'profileId' => $extracted['profile_id'] ?? null,
             'fullName' => $extracted['full_name'] ?? null,
             'biography' => $extracted['biography'] ?? null,
             'postsCount' => $extracted['posts_count'] ?? null,
@@ -450,7 +453,7 @@ class TrackedPersonInstagramAnalysisService
         $payload['analysisPolicy'] = [
             'scanMode' => $attemptInfo['scan_mode'] ?? 'full',
             'counts' => ($attemptInfo['scan_mode'] ?? 'full') === 'mini'
-                ? 'public-visible-or-meta-fallback'
+                ? 'public-visible-or-html-profile-data'
                 : 'visible-only',
             'retryAttempts' => $attemptInfo['attempts'] ?? [],
             'scrapePhases' => $attemptInfo['phases'] ?? [],
@@ -537,6 +540,7 @@ class TrackedPersonInstagramAnalysisService
         }
 
         $labels = [
+            'profile_id' => 'Instagram-Profil-ID',
             'full_name' => 'Name',
             'biography' => 'Bio',
             'posts_count' => 'Beitraege',
@@ -546,7 +550,9 @@ class TrackedPersonInstagramAnalysisService
         $changes = [];
 
         foreach ($labels as $field => $label) {
-            $before = $previousSnapshot->{$field};
+            $before = $field === 'profile_id'
+                ? $previousSnapshot->instagram_profile_id
+                : $previousSnapshot->{$field};
             $after = $extracted[$field] ?? null;
 
             if ($after === null || ! $this->valuesDiffer($before, $after)) {

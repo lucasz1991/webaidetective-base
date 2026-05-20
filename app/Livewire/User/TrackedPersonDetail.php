@@ -123,7 +123,17 @@ class TrackedPersonDetail extends Component
         $this->dispatch('tracked-person-refresh');
     }
 
+    public function analyzeInstagramMini(): void
+    {
+        $this->runInstagramAnalysis(false);
+    }
+
     public function analyzeInstagram(): void
+    {
+        $this->runInstagramAnalysis(true);
+    }
+
+    private function runInstagramAnalysis(bool $fullScan): void
     {
         @set_time_limit(0);
         @ignore_user_abort(true);
@@ -140,30 +150,34 @@ class TrackedPersonDetail extends Component
 
         $trackedPerson->forceFill([
             'last_instagram_status_level' => 'partial',
-            'last_instagram_status_message' => 'Vollstaendige Instagram-Analyse laeuft direkt in der Oberflaeche.',
+            'last_instagram_status_message' => $fullScan
+                ? 'Vollstaendige Instagram-Analyse laeuft direkt in der Oberflaeche.'
+                : 'Instagram-Mini-Scan laeuft direkt in der Oberflaeche.',
         ])->save();
 
         try {
             $this->streamInstagramProgress([
                 'phase' => 'start',
                 'percent' => 1,
-                'message' => 'Instagram-Analyse wird vorbereitet.',
+                'message' => $fullScan
+                    ? 'Vollstaendige Instagram-Analyse wird vorbereitet.'
+                    : 'Instagram-Mini-Scan wird vorbereitet.',
             ]);
 
-            $snapshot = $trackedPerson->analyzeInstagram($progress, true);
+            $snapshot = $trackedPerson->analyzeInstagram($progress, $fullScan);
         } catch (\Throwable $exception) {
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => 'Instagram-Analyse fehlgeschlagen: '.$exception->getMessage(),
+                'last_instagram_status_message' => ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
             ])->save();
 
             $this->streamInstagramProgress([
                 'phase' => 'error',
                 'percent' => 100,
-                'message' => 'Instagram-Analyse fehlgeschlagen.',
+                'message' => ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' fehlgeschlagen.',
             ]);
             $this->setDetailStatus(
-                'Instagram-Analyse fehlgeschlagen: '.$exception->getMessage(),
+                ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
                 'error',
             );
 
@@ -172,7 +186,7 @@ class TrackedPersonDetail extends Component
 
         $this->fillFormFromModel($trackedPerson->fresh());
         $this->setDetailStatus(
-            'Instagram-Analyse abgeschlossen: '.$snapshot->status_message,
+            ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' abgeschlossen: '.$snapshot->status_message,
             $snapshot->status_level === 'success' ? 'success' : ($snapshot->status_level === 'partial' ? 'partial' : 'error'),
         );
         $this->dispatch('tracked-person-refresh');

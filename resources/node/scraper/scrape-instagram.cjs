@@ -988,6 +988,114 @@ async function collectProfileInfo(page, username) {
   const bodyText = normalizeText(
     await page.evaluate(() => document.body?.innerText || '').catch(() => ''),
   );
+  const counts = await page.evaluate(() => {
+    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const normalizeCountValue = (rawValue = '') => {
+      const value = normalizeElementText(rawValue).toLowerCase();
+
+      if (!value) {
+        return null;
+      }
+
+      let multiplier = 1;
+
+      if (/\bmio\b|\bm\b/.test(value)) {
+        multiplier = 1000000;
+      } else if (/\bk\b|\btsd\b/.test(value)) {
+        multiplier = 1000;
+      }
+
+      const numericPart = value.replace(/[^\d.,]/g, '');
+
+      if (!numericPart) {
+        return null;
+      }
+
+      if (multiplier === 1) {
+        const digits = numericPart.replace(/[^\d]/g, '');
+
+        return digits ? Number.parseInt(digits, 10) : null;
+      }
+
+      const decimalValue = Number.parseFloat(numericPart.replace(',', '.'));
+
+      return Number.isFinite(decimalValue) ? Math.round(decimalValue * multiplier) : null;
+    };
+    const patterns = {
+      posts: [
+        /([\d., ]+(?:\s*(?:k|m|mio|tsd))?)\s*(?:beitr(?:ag|aege|äge)|posts?)/iu,
+      ],
+      followers: [
+        /([\d., ]+(?:\s*(?:k|m|mio|tsd))?)\s*(?:follower|followers)/iu,
+      ],
+      following: [
+        /([\d., ]+(?:\s*(?:k|m|mio|tsd))?)\s*(?:gefolgt|following)/iu,
+      ],
+    };
+    const values = {
+      posts: null,
+      followers: null,
+      following: null,
+    };
+    const sources = {
+      posts: null,
+      followers: null,
+      following: null,
+    };
+    const textSources = [
+      ['body_text_preview', document.body?.innerText || ''],
+      ...Array.from(document.querySelectorAll('header, main, section, ul, li, a[href*="/followers"], a[href*="/following"]'))
+        .flatMap((element) => ([
+          ['profile_dom', element.innerText || element.textContent || ''],
+          ['profile_dom', element.getAttribute('aria-label') || ''],
+          ['profile_dom', element.getAttribute('title') || ''],
+        ])),
+    ];
+
+    for (const [source, text] of textSources) {
+      const normalizedText = normalizeElementText(text);
+
+      if (!normalizedText) {
+        continue;
+      }
+
+      for (const [metric, metricPatterns] of Object.entries(patterns)) {
+        if (values[metric] !== null) {
+          continue;
+        }
+
+        for (const pattern of metricPatterns) {
+          const match = normalizedText.match(pattern);
+
+          if (!match) {
+            continue;
+          }
+
+          const count = normalizeCountValue(match[1] || '');
+
+          if (count !== null) {
+            values[metric] = count;
+            sources[metric] = source;
+            break;
+          }
+        }
+      }
+    }
+
+    return {
+      ...values,
+      sources,
+    };
+  }).catch(() => ({
+    posts: null,
+    followers: null,
+    following: null,
+    sources: {
+      posts: null,
+      followers: null,
+      following: null,
+    },
+  }));
 
   const description = await page
     .$eval('meta[name="description"]', (element) => element.content)
@@ -1009,6 +1117,7 @@ async function collectProfileInfo(page, username) {
 
   return {
     bodyTextPreview: bodyText.slice(0, 1200),
+    counts,
     description,
     imageCount,
     isPrivate: /dieses profil ist privat|this account is private/i.test(bodyText + ' ' + (description || '')),
@@ -3145,6 +3254,10 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       cookieDiagnostics,
       loginDiagnostics,
     });
+
+    if (isMiniScanMode && /metadaten|snapshot/i.test(outcome.statusMessage || '')) {
+      outcome.statusMessage = 'Instagram hat keine stabile oeffentliche Profilansicht geliefert; der Mini-Scan speichert nur sichtbare DOM- oder eingebettete HTML-Profildaten.';
+    }
 
     fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
 

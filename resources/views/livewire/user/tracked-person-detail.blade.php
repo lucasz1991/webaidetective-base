@@ -55,6 +55,7 @@
         $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
         $countSourceLabels = [
             'body_text_preview' => 'sichtbarer Profiltext',
+            'profile_dom' => 'sichtbarer Profil-DOM',
             'description_meta' => 'Meta-Beschreibung',
             'html_document' => 'HTML-Fallback',
             'html_profile_data' => 'Profil-Daten im HTML',
@@ -66,7 +67,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram"
+        wire:target="analyzeInstagram,analyzeInstagramMini"
         class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/60 px-4"
     >
         <div class="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl">
@@ -137,6 +138,15 @@
             </div>
 
             <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
+                <button
+                    wire:click="analyzeInstagramMini"
+                    wire:loading.attr="disabled"
+                    wire:target="analyzeInstagramMini"
+                    class="inline-flex justify-center rounded-xl border border-pink-200 bg-white px-4 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-50"
+                >
+                    <span wire:loading.remove wire:target="analyzeInstagramMini">Mini-Scan</span>
+                    <span wire:loading wire:target="analyzeInstagramMini">Mini-Scan laeuft...</span>
+                </button>
                 <button
                     wire:click="analyzeInstagram"
                     wire:loading.attr="disabled"
@@ -762,6 +772,7 @@
                     </div>
 
                     <div class="mt-3 grid gap-2 text-sm text-slate-700">
+                        <p><span class="font-semibold">Profil-ID:</span> {{ $latestSnapshot->instagram_profile_id ?: data_get($latestSnapshot->raw_payload, 'extractedProfile.profileId', '—') }}</p>
                         <p><span class="font-semibold">Profilname:</span> {{ $latestSnapshot->full_name ?: '—' }}</p>
                         <p><span class="font-semibold">Bio:</span> {{ $latestSnapshot->biography ?: '—' }}</p>
                         <p><span class="font-semibold">Follower-Quelle:</span> {{ $resolveCountSourceLabel($latestCountSources['followers'] ?? null) }}</p>

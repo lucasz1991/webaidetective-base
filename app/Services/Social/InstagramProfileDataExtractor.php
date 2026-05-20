@@ -15,13 +15,16 @@ class InstagramProfileDataExtractor
         $bodyTextPreview = (string) data_get($payload, 'profile.bodyTextPreview', '');
         $profileImageUrl = data_get($payload, 'profile.ogImage');
         $operationMode = Str::lower((string) ($payload['operationMode'] ?? ''));
+        $profileId = $this->extractProfileId($payload, $html);
         $counts = $this->extractCounts([
             'body_text_preview' => $bodyTextPreview,
             'description_meta' => $description,
             'html_document' => $html,
+            'profile_counts' => data_get($payload, 'profile.counts', []),
         ], in_array($operationMode, ['mini', 'mini-scan', 'public', 'public-profile'], true));
 
         return [
+            'profile_id' => $profileId,
             'full_name' => $this->extractFullName($ogTitle),
             'biography' => $this->extractBiography($description),
             'posts_count' => $counts['posts'],
@@ -92,7 +95,10 @@ class InstagramProfileDataExtractor
     private function extractCounts(array $texts, bool $allowFallbackCounts = false): array
     {
         $visibleCounts = $this->extractCountsFromSource($texts['body_text_preview'] ?? null);
-        $metaCounts = $this->extractCountsFromSource($texts['description_meta'] ?? null);
+        $profileCounts = $this->extractCountsFromProfilePayload($texts['profile_counts'] ?? []);
+        $metaCounts = $allowFallbackCounts
+            ? $this->emptyCounts()
+            : $this->extractCountsFromSource($texts['description_meta'] ?? null);
         $htmlBodyCounts = $this->extractCountsFromHtmlDocument($texts['html_document'] ?? null);
         $htmlProfileDataCounts = $this->extractCountsFromEmbeddedProfileData($texts['html_document'] ?? null);
         $htmlCounts = $this->mergeCountSets($htmlBodyCounts, $htmlProfileDataCounts);
@@ -100,7 +106,6 @@ class InstagramProfileDataExtractor
         $sources = collect($selectedCounts)
             ->map(fn ($value) => $value !== null ? 'body_text_preview' : null)
             ->all();
-        $metadataBlockedMetrics = ['followers', 'following'];
 
         if ($allowFallbackCounts) {
             foreach (array_keys($selectedCounts) as $metric) {
@@ -108,9 +113,9 @@ class InstagramProfileDataExtractor
                     continue;
                 }
 
-                if (! in_array($metric, $metadataBlockedMetrics, true) && ($metaCounts[$metric] ?? null) !== null) {
-                    $selectedCounts[$metric] = $metaCounts[$metric];
-                    $sources[$metric] = 'description_meta';
+                if (($profileCounts['values'][$metric] ?? null) !== null) {
+                    $selectedCounts[$metric] = $profileCounts['values'][$metric];
+                    $sources[$metric] = $profileCounts['sources'][$metric] ?? 'profile_dom';
 
                     continue;
                 }
@@ -195,6 +200,47 @@ class InstagramProfileDataExtractor
         return $this->extractCountsFromSource($body);
     }
 
+    private function extractCountsFromProfilePayload(mixed $payloadCounts): array
+    {
+        $values = $this->emptyCounts();
+        $sources = [
+            'posts' => null,
+            'followers' => null,
+            'following' => null,
+        ];
+
+        if (! is_array($payloadCounts)) {
+            return [
+                'values' => $values,
+                'sources' => $sources,
+            ];
+        }
+
+        foreach (array_keys($values) as $metric) {
+            $value = $payloadCounts[$metric] ?? null;
+
+            if (! is_numeric($value)) {
+                continue;
+            }
+
+            $source = data_get($payloadCounts, 'sources.'.$metric);
+
+            if ($source === 'description_meta') {
+                continue;
+            }
+
+            $values[$metric] = (int) $value;
+            $sources[$metric] = is_string($source) && trim($source) !== ''
+                ? trim($source)
+                : 'profile_dom';
+        }
+
+        return [
+            'values' => $values,
+            'sources' => $sources,
+        ];
+    }
+
     private function extractCountsFromEmbeddedProfileData(?string $html): array
     {
         $values = $this->emptyCounts();
@@ -204,6 +250,12 @@ class InstagramProfileDataExtractor
         }
 
         $normalizedHtml = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $htmlVariants = array_values(array_unique(array_filter([
+            $normalizedHtml,
+            stripcslashes($normalizedHtml),
+            str_replace(['\\"', '\\u0022'], '"', $normalizedHtml),
+            stripcslashes(str_replace(['\\"', '\\u0022'], '"', $normalizedHtml)),
+        ], static fn (string $variant): bool => trim($variant) !== '')));
         $patterns = [
             'posts' => [
                 '/"edge_owner_to_timeline_media"\s*:\s*\{\s*"count"\s*:\s*(\d+)/i',
@@ -212,27 +264,41 @@ class InstagramProfileDataExtractor
             ],
             'followers' => [
                 '/"edge_followed_by"\s*:\s*\{\s*"count"\s*:\s*(\d+)/i',
+                '/"edge_followed_by"\\?\s*:\\?\s*\{\\?\s*"count"\\?\s*:\\?\s*(\d+)/i',
                 '/"follower_count"\s*:\s*(\d+)/i',
                 '/"followers_count"\s*:\s*(\d+)/i',
+                '/"followerCount"\s*:\s*(\d+)/i',
+                '/"followersCount"\s*:\s*(\d+)/i',
+                '/"followers"\s*:\s*\{\s*"count"\s*:\s*(\d+)/i',
             ],
             'following' => [
                 '/"edge_follow"\s*:\s*\{\s*"count"\s*:\s*(\d+)/i',
+                '/"edge_follow"\\?\s*:\\?\s*\{\\?\s*"count"\\?\s*:\\?\s*(\d+)/i',
                 '/"following_count"\s*:\s*(\d+)/i',
                 '/"follows_count"\s*:\s*(\d+)/i',
+                '/"followingCount"\s*:\s*(\d+)/i',
+                '/"followsCount"\s*:\s*(\d+)/i',
+                '/"following"\s*:\s*\{\s*"count"\s*:\s*(\d+)/i',
             ],
         ];
 
-        foreach ($patterns as $metric => $metricPatterns) {
-            foreach ($metricPatterns as $pattern) {
-                if (! preg_match($pattern, $normalizedHtml, $matches)) {
+        foreach ($htmlVariants as $htmlVariant) {
+            foreach ($patterns as $metric => $metricPatterns) {
+                if ($values[$metric] !== null) {
                     continue;
                 }
 
-                $value = (int) ($matches[1] ?? 0);
+                foreach ($metricPatterns as $pattern) {
+                    if (! preg_match($pattern, $htmlVariant, $matches)) {
+                        continue;
+                    }
 
-                if ($value >= 0) {
-                    $values[$metric] = $value;
-                    break;
+                    $value = (int) ($matches[1] ?? 0);
+
+                    if ($value >= 0) {
+                        $values[$metric] = $value;
+                        break;
+                    }
                 }
             }
         }
@@ -265,6 +331,78 @@ class InstagramProfileDataExtractor
         }
 
         return $merged;
+    }
+
+    private function extractProfileId(array $payload, string $html): ?string
+    {
+        foreach ([
+            data_get($payload, 'profile.profileId'),
+            data_get($payload, 'profile.instagramProfileId'),
+            data_get($payload, 'profile.id'),
+            data_get($payload, 'profile.pk'),
+        ] as $candidate) {
+            $normalized = $this->normalizeProfileId($candidate);
+
+            if ($normalized !== null) {
+                return $normalized;
+            }
+        }
+
+        if (trim($html) === '') {
+            return null;
+        }
+
+        $username = Str::lower((string) ($payload['username'] ?? ''));
+        $normalizedHtml = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $htmlVariants = array_values(array_unique(array_filter([
+            $normalizedHtml,
+            stripcslashes($normalizedHtml),
+            str_replace(['\\"', '\\u0022'], '"', $normalizedHtml),
+            stripcslashes(str_replace(['\\"', '\\u0022'], '"', $normalizedHtml)),
+        ], static fn (string $variant): bool => trim($variant) !== '')));
+        $globalPatterns = [
+            '/"profile_id"\s*:\s*"?(\d+)"?/i',
+            '/"user_id"\s*:\s*"?(\d+)"?/i',
+            '/"instagram_user_id"\s*:\s*"?(\d+)"?/i',
+            '/profilePage_(\d+)/i',
+        ];
+
+        foreach ($htmlVariants as $htmlVariant) {
+            if ($username !== '') {
+                $quotedUsername = preg_quote($username, '/');
+                $usernamePatterns = [
+                    '/"id"\s*:\s*"?(\d+)"?[^{}]{0,1200}"username"\s*:\s*"'.$quotedUsername.'"/is',
+                    '/"username"\s*:\s*"'.$quotedUsername.'"[^{}]{0,1200}"id"\s*:\s*"?(\d+)"?/is',
+                    '/"pk"\s*:\s*"?(\d+)"?[^{}]{0,1200}"username"\s*:\s*"'.$quotedUsername.'"/is',
+                    '/"username"\s*:\s*"'.$quotedUsername.'"[^{}]{0,1200}"pk"\s*:\s*"?(\d+)"?/is',
+                ];
+
+                foreach ($usernamePatterns as $pattern) {
+                    if (preg_match($pattern, $htmlVariant, $matches)) {
+                        return $this->normalizeProfileId($matches[1] ?? null);
+                    }
+                }
+            }
+
+            foreach ($globalPatterns as $pattern) {
+                if (preg_match($pattern, $htmlVariant, $matches)) {
+                    return $this->normalizeProfileId($matches[1] ?? null);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private function normalizeProfileId(mixed $candidate): ?string
+    {
+        $candidate = trim((string) $candidate);
+
+        if ($candidate === '' || ! preg_match('/^\d{3,30}$/', $candidate)) {
+            return null;
+        }
+
+        return $candidate;
     }
 
     private function normalizeSourceText(?string $value): string
@@ -325,7 +463,7 @@ class InstagramProfileDataExtractor
 
         if (! $hasVisibleCounts && $hasFallbackCounts) {
             $warnings[] = $allowFallbackCounts
-                ? 'Mini-Scan hat keine sichtbaren Kennzahlen gefunden; gespeicherte Zahlen stammen aus Meta- oder HTML-Fallbacks.'
+                ? 'Mini-Scan hat keine sichtbaren Kennzahlen gefunden; gespeicherte Zahlen stammen ausschliesslich aus oeffentlichen Profil- oder HTML-Daten. Meta-Daten werden im Mini-Scan nicht als Zaehlwerte verwendet.'
                 : 'Instagram hat keine sichtbaren Kennzahlen geliefert; Meta- und HTML-Werte werden bewusst nicht als offizielle Zahlen gespeichert.';
         }
 
@@ -333,9 +471,11 @@ class InstagramProfileDataExtractor
             foreach ($metricLabels as $metric => $label) {
                 $source = $selectedSources[$metric] ?? null;
 
-                if (in_array($source, ['description_meta', 'html_document', 'html_profile_data'], true)) {
+                if (in_array($source, ['description_meta', 'html_document', 'html_profile_data', 'profile_dom', 'body_text_preview'], true)) {
                     $sourceLabel = match ($source) {
                         'description_meta' => 'der Meta-Beschreibung',
+                        'profile_dom' => 'dem sichtbaren Profil-DOM',
+                        'body_text_preview' => 'dem sichtbaren Profiltext',
                         'html_profile_data' => 'eingebetteten Profil-Daten im HTML',
                         default => 'dem HTML-Fallback',
                     };

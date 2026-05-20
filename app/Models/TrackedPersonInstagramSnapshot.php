@@ -15,6 +15,7 @@ class TrackedPersonInstagramSnapshot extends Model
     protected $fillable = [
         'tracked_person_id',
         'instagram_username',
+        'instagram_profile_id',
         'full_name',
         'biography',
         'posts_count',
