@@ -107,7 +107,8 @@ const username = rawUsername.replace(/^@/, '').trim();
 const runtimeConfigPath = process.argv[3] || '';
 const operationMode = normalizeText(process.argv[4] || 'analyze').toLowerCase();
 const isLoginSessionMode = operationMode === 'login-session';
-const isProfileOnlyMode = ['profile', 'basic', 'grunddaten'].includes(operationMode);
+const isMiniScanMode = ['mini', 'mini-scan', 'public', 'public-profile'].includes(operationMode);
+const isProfileOnlyMode = isMiniScanMode || ['profile', 'basic', 'grunddaten'].includes(operationMode);
 const isFollowersOnlyMode = operationMode === 'followers';
 const isFollowingOnlyMode = operationMode === 'following';
 const isRelationshipOnlyMode = isFollowersOnlyMode || isFollowingOnlyMode;
@@ -2906,65 +2907,86 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
     }
     recordRunDebug('page-ready', await collectPageDiagnostics(page, { includeCookies: true }));
 
-    progressLog('profile-session-check', {
-      relationship: null,
-    });
+    let sessionEstablished = false;
 
-    const sessionResult = await establishInstagramSession(
-      page,
-      runtimeConfig,
-      notes,
-    );
-    cookieDiagnostics = sessionResult.cookieDiagnostics;
-    loginDiagnostics = sessionResult.loginDiagnostics;
-    const sessionEstablished = sessionResult.sessionEstablished;
+    if (isMiniScanMode) {
+      notes.push('Mini-Scan aktiv: oeffentliche Profildaten werden ohne Instagram-Anmeldung ausgelesen.');
+      cookieDiagnostics = {
+        loaded: false,
+        skipped: true,
+        warnings: [],
+      };
+      loginDiagnostics = {
+        attempted: false,
+        success: false,
+        skipped: true,
+        warnings: [],
+      };
+      progressLog('profile-session-check', {
+        relationship: null,
+        skipped: true,
+      });
+    } else {
+      progressLog('profile-session-check', {
+        relationship: null,
+      });
 
-    if (sessionEstablished) {
-      const cookiesSavedAfterSession = await saveCookiesToFile(page, cookieFilePath);
+      const sessionResult = await establishInstagramSession(
+        page,
+        runtimeConfig,
+        notes,
+      );
+      cookieDiagnostics = sessionResult.cookieDiagnostics;
+      loginDiagnostics = sessionResult.loginDiagnostics;
+      sessionEstablished = sessionResult.sessionEstablished;
 
-      if (cookiesSavedAfterSession.saved) {
-        notes.push('Sessiondaten wurden gespeichert.');
+      if (sessionEstablished) {
+        const cookiesSavedAfterSession = await saveCookiesToFile(page, cookieFilePath);
 
-        if (!cookiesSavedAfterSession.sessionCookieSaved) {
-          notes.push('Es wurden zwar Cookies gespeichert, aber keine sessionid.');
+        if (cookiesSavedAfterSession.saved) {
+          notes.push('Sessiondaten wurden gespeichert.');
+
+          if (!cookiesSavedAfterSession.sessionCookieSaved) {
+            notes.push('Es wurden zwar Cookies gespeichert, aber keine sessionid.');
+          }
         }
       }
-    }
 
-    if (isLoginSessionMode) {
-      const responsePayload = {
-        ok: sessionEstablished,
-        statusLevel: sessionEstablished ? 'success' : 'error',
-        statusMessage: sessionEstablished
-          ? 'Instagram-Session wurde erfolgreich aufgebaut und gespeichert.'
-          : 'Instagram-Session konnte nicht stabil aufgebaut werden.',
-        username: null,
-        finalUrl: page.url(),
-        htmlBytes: 0,
-        htmlPath: null,
-        htmlPreview: '',
-        notes: dedupe(notes),
-        cookieDiagnostics,
-        loginDiagnostics,
-        profile: null,
-        profileUrl,
-        screenshotPath: null,
-        scrapedAt: new Date().toISOString(),
-        screenshotMode: null,
-        title: await page.title().catch(() => null),
-        warnings: dedupe([
-          ...consoleMessages,
-          ...(cookieDiagnostics.warnings || []),
-          ...(loginDiagnostics.warnings || []),
-        ]),
-        durationMs: Date.now() - startedAt,
-        operationMode,
-        debugLogPath,
-      };
-      flushRunDebug(responsePayload);
-      console.log(JSON.stringify(responsePayload));
+      if (isLoginSessionMode) {
+        const responsePayload = {
+          ok: sessionEstablished,
+          statusLevel: sessionEstablished ? 'success' : 'error',
+          statusMessage: sessionEstablished
+            ? 'Instagram-Session wurde erfolgreich aufgebaut und gespeichert.'
+            : 'Instagram-Session konnte nicht stabil aufgebaut werden.',
+          username: null,
+          finalUrl: page.url(),
+          htmlBytes: 0,
+          htmlPath: null,
+          htmlPreview: '',
+          notes: dedupe(notes),
+          cookieDiagnostics,
+          loginDiagnostics,
+          profile: null,
+          profileUrl,
+          screenshotPath: null,
+          scrapedAt: new Date().toISOString(),
+          screenshotMode: null,
+          title: await page.title().catch(() => null),
+          warnings: dedupe([
+            ...consoleMessages,
+            ...(cookieDiagnostics.warnings || []),
+            ...(loginDiagnostics.warnings || []),
+          ]),
+          durationMs: Date.now() - startedAt,
+          operationMode,
+          debugLogPath,
+        };
+        flushRunDebug(responsePayload);
+        console.log(JSON.stringify(responsePayload));
 
-      return;
+        return;
+      }
     }
 
     const runtimeState = {
@@ -3126,7 +3148,9 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
 
     fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
 
-    if (runtimeState.cookieSaveDisabled) {
+    if (isMiniScanMode) {
+      notes.push('Cookies wurden im Mini-Scan nicht geladen oder gespeichert.');
+    } else if (runtimeState.cookieSaveDisabled) {
       notes.push('Cookies wurden nicht gespeichert, weil der Account-Wechsel keine stabile Session herstellen konnte.');
     } else if (shouldSaveCookies(finalUrl, initialProfile)) {
       const cookiesSaved = await saveCookiesToFile(page, cookieFilePath);
@@ -3142,7 +3166,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       notes.push('Cookies wurden nicht gespeichert, weil die Session offenbar nicht gueltig war.');
     }
 
-    if (!isRelationshipOnlyMode) {
+    if (!isRelationshipOnlyMode && !isMiniScanMode) {
       await renderProfileSnapshot(
         browser,
         artifacts.screenshotPath,
@@ -3168,9 +3192,9 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       loginDiagnostics,
       profile: initialProfile,
       profileUrl,
-      screenshotPath: isRelationshipOnlyMode ? null : artifacts.screenshotPath,
+      screenshotPath: isRelationshipOnlyMode || isMiniScanMode ? null : artifacts.screenshotPath,
       scrapedAt: new Date().toISOString(),
-      screenshotMode: isRelationshipOnlyMode ? null : 'generated-card',
+      screenshotMode: isRelationshipOnlyMode || isMiniScanMode ? null : 'generated-card',
       title,
       warnings: dedupedWarnings,
       durationMs: Date.now() - startedAt,

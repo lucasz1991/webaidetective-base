@@ -14,11 +14,12 @@ class InstagramProfileDataExtractor
         $ogTitle = (string) data_get($payload, 'profile.ogTitle', '');
         $bodyTextPreview = (string) data_get($payload, 'profile.bodyTextPreview', '');
         $profileImageUrl = data_get($payload, 'profile.ogImage');
+        $operationMode = Str::lower((string) ($payload['operationMode'] ?? ''));
         $counts = $this->extractCounts([
             'body_text_preview' => $bodyTextPreview,
             'description_meta' => $description,
             'html_document' => $html,
-        ]);
+        ], in_array($operationMode, ['mini', 'mini-scan', 'public', 'public-profile'], true));
 
         return [
             'full_name' => $this->extractFullName($ogTitle),
@@ -88,24 +89,45 @@ class InstagramProfileDataExtractor
         return (string) ($payload['htmlPreview'] ?? '');
     }
 
-    private function extractCounts(array $texts): array
+    private function extractCounts(array $texts, bool $allowFallbackCounts = false): array
     {
         $visibleCounts = $this->extractCountsFromSource($texts['body_text_preview'] ?? null);
         $metaCounts = $this->extractCountsFromSource($texts['description_meta'] ?? null);
         $htmlCounts = $this->extractCountsFromSource($texts['html_document'] ?? null);
-        $sources = collect($visibleCounts)
+        $selectedCounts = $visibleCounts;
+        $sources = collect($selectedCounts)
             ->map(fn ($value) => $value !== null ? 'body_text_preview' : null)
             ->all();
 
+        if ($allowFallbackCounts) {
+            foreach (array_keys($selectedCounts) as $metric) {
+                if ($selectedCounts[$metric] !== null) {
+                    continue;
+                }
+
+                if (($metaCounts[$metric] ?? null) !== null) {
+                    $selectedCounts[$metric] = $metaCounts[$metric];
+                    $sources[$metric] = 'description_meta';
+
+                    continue;
+                }
+
+                if (($htmlCounts[$metric] ?? null) !== null) {
+                    $selectedCounts[$metric] = $htmlCounts[$metric];
+                    $sources[$metric] = 'html_document';
+                }
+            }
+        }
+
         return [
-            'posts' => $visibleCounts['posts'],
-            'followers' => $visibleCounts['followers'],
-            'following' => $visibleCounts['following'],
+            'posts' => $selectedCounts['posts'],
+            'followers' => $selectedCounts['followers'],
+            'following' => $selectedCounts['following'],
             'sources' => $sources,
-            'warnings' => $this->buildCountWarnings($visibleCounts, $metaCounts, $htmlCounts),
-            'visible_complete' => $visibleCounts['posts'] !== null
-                && $visibleCounts['followers'] !== null
-                && $visibleCounts['following'] !== null,
+            'warnings' => $this->buildCountWarnings($visibleCounts, $metaCounts, $htmlCounts, $allowFallbackCounts, $sources),
+            'visible_complete' => $selectedCounts['posts'] !== null
+                && $selectedCounts['followers'] !== null
+                && $selectedCounts['following'] !== null,
         ];
     }
 
@@ -149,7 +171,13 @@ class InstagramProfileDataExtractor
         return html_entity_decode($value, ENT_QUOTES | ENT_HTML5, 'UTF-8');
     }
 
-    private function buildCountWarnings(array $visibleCounts, array $metaCounts, array $htmlCounts): array
+    private function buildCountWarnings(
+        array $visibleCounts,
+        array $metaCounts,
+        array $htmlCounts,
+        bool $allowFallbackCounts = false,
+        array $selectedSources = [],
+    ): array
     {
         $warnings = [];
         $metricLabels = [
@@ -187,7 +215,19 @@ class InstagramProfileDataExtractor
             || collect($htmlCounts)->contains(fn ($value) => $value !== null);
 
         if (! $hasVisibleCounts && $hasFallbackCounts) {
-            $warnings[] = 'Instagram hat keine sichtbaren Kennzahlen geliefert; Meta- und HTML-Werte werden bewusst nicht als offizielle Zahlen gespeichert.';
+            $warnings[] = $allowFallbackCounts
+                ? 'Mini-Scan hat keine sichtbaren Kennzahlen gefunden; gespeicherte Zahlen stammen aus Meta- oder HTML-Fallbacks.'
+                : 'Instagram hat keine sichtbaren Kennzahlen geliefert; Meta- und HTML-Werte werden bewusst nicht als offizielle Zahlen gespeichert.';
+        }
+
+        if ($allowFallbackCounts) {
+            foreach ($metricLabels as $metric => $label) {
+                $source = $selectedSources[$metric] ?? null;
+
+                if (in_array($source, ['description_meta', 'html_document'], true)) {
+                    $warnings[] = $label.' wurde im Mini-Scan aus '.($source === 'description_meta' ? 'der Meta-Beschreibung' : 'dem HTML-Fallback').' gelesen.';
+                }
+            }
         }
 
         return array_values(array_unique($warnings));

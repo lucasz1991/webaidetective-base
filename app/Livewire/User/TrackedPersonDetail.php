@@ -140,7 +140,7 @@ class TrackedPersonDetail extends Component
 
         $trackedPerson->forceFill([
             'last_instagram_status_level' => 'partial',
-            'last_instagram_status_message' => 'Instagram-Analyse laeuft direkt in der Oberflaeche.',
+            'last_instagram_status_message' => 'Vollstaendige Instagram-Analyse laeuft direkt in der Oberflaeche.',
         ])->save();
 
         try {
@@ -150,7 +150,7 @@ class TrackedPersonDetail extends Component
                 'message' => 'Instagram-Analyse wird vorbereitet.',
             ]);
 
-            $snapshot = $trackedPerson->analyzeInstagram($progress);
+            $snapshot = $trackedPerson->analyzeInstagram($progress, true);
         } catch (\Throwable $exception) {
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'error',

@@ -42,7 +42,7 @@ class MonitorTrackedPersonInstagram implements ShouldQueue
         try {
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'partial',
-                'last_instagram_status_message' => 'Instagram-Analyse laeuft im Hintergrund.',
+                'last_instagram_status_message' => 'Instagram-Mini-Scan laeuft im Hintergrund.',
             ])->save();
 
             $snapshot = $trackedPerson->analyzeInstagram();

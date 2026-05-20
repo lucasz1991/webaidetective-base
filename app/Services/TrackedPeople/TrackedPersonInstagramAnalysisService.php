@@ -21,7 +21,11 @@ class TrackedPersonInstagramAnalysisService
     ) {
     }
 
-    public function analyze(TrackedPerson $trackedPerson, ?callable $progress = null): TrackedPersonInstagramSnapshot
+    public function analyze(
+        TrackedPerson $trackedPerson,
+        ?callable $progress = null,
+        bool $fullScan = false,
+    ): TrackedPersonInstagramSnapshot
     {
         if (! $trackedPerson->instagram_username) {
             throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');
@@ -30,10 +34,14 @@ class TrackedPersonInstagramAnalysisService
         $this->reportProgress($progress, [
             'phase' => 'start',
             'percent' => 1,
-            'message' => 'Instagram-Analyse wird vorbereitet.',
+            'message' => $fullScan
+                ? 'Vollstaendige Instagram-Analyse wird vorbereitet.'
+                : 'Instagram-Mini-Scan wird vorbereitet.',
         ]);
 
-        [$payload, $extracted, $attemptInfo] = $this->scrapePortioned($trackedPerson->instagram_username, $progress);
+        [$payload, $extracted, $attemptInfo] = $fullScan
+            ? $this->scrapePortioned($trackedPerson->instagram_username, $progress)
+            : $this->scrapeMini($trackedPerson->instagram_username, $progress);
         $analyzedAt = now();
         $persistedWarnings = [];
         $previousSnapshot = $trackedPerson->instagramSnapshots()
@@ -146,10 +154,73 @@ class TrackedPersonInstagramAnalysisService
         $this->reportProgress($progress, [
             'phase' => 'done',
             'percent' => 100,
-            'message' => 'Instagram-Analyse abgeschlossen.',
+            'message' => $fullScan
+                ? 'Instagram-Analyse abgeschlossen.'
+                : 'Instagram-Mini-Scan abgeschlossen.',
         ]);
 
         return $snapshot->fresh('media');
+    }
+
+    private function scrapeMini(string $username, ?callable $progress = null): array
+    {
+        $this->reportProgress($progress, [
+            'phase' => 'profile',
+            'percent' => 4,
+            'message' => 'Oeffentliche Instagram-Grunddaten werden ohne Anmeldung geladen.',
+        ]);
+
+        $payload = $this->scraper->scrape(
+            $username,
+            'mini',
+            $progress,
+            [
+                'autoLoginEnabled' => false,
+                'accountPool' => [],
+            ],
+            4,
+            92,
+        );
+        $extracted = $this->extractor->extract($payload);
+        $phaseResults = [
+            [
+                'phase' => 'profile',
+                'mode' => 'mini',
+                'statusLevel' => $payload['statusLevel'] ?? 'unknown',
+                'statusMessage' => $payload['statusMessage'] ?? null,
+                'ok' => (bool) ($payload['ok'] ?? false),
+            ],
+        ];
+
+        $this->reportProgress($progress, [
+            'phase' => 'profile',
+            'percent' => 93,
+            'message' => 'Mini-Scan-Grunddaten wurden ausgelesen.',
+        ]);
+
+        return [
+            $payload,
+            $extracted,
+            [
+                'scan_mode' => 'mini',
+                'used_attempt' => 1,
+                'max_attempts' => 1,
+                'visible_counts_complete' => (bool) ($extracted['visible_counts_complete'] ?? false),
+                'attempts' => [
+                    [
+                        'attempt' => 1,
+                        'mode' => 'mini',
+                        'statusLevel' => $payload['statusLevel'] ?? 'unknown',
+                        'statusMessage' => $payload['statusMessage'] ?? null,
+                        'followersSource' => $extracted['count_sources']['followers'] ?? null,
+                        'followingSource' => $extracted['count_sources']['following'] ?? null,
+                        'postsSource' => $extracted['count_sources']['posts'] ?? null,
+                        'visibleCountsComplete' => (bool) ($extracted['visible_counts_complete'] ?? false),
+                    ],
+                ],
+                'phases' => $phaseResults,
+            ],
+        ];
     }
 
     private function scrapeUntilVisibleCounts(string $username, ?callable $progress = null): array
@@ -312,6 +383,7 @@ class TrackedPersonInstagramAnalysisService
         ))));
         $payload['scrapePhases'] = $phaseResults;
         $extracted = $this->extractor->extract($payload);
+        $attemptInfo['scan_mode'] = 'full';
         $attemptInfo['phases'] = $phaseResults;
 
         return [$payload, $extracted, $attemptInfo];
@@ -376,7 +448,10 @@ class TrackedPersonInstagramAnalysisService
             'detectedChanges' => $detectedChanges,
         ];
         $payload['analysisPolicy'] = [
-            'counts' => 'visible-only',
+            'scanMode' => $attemptInfo['scan_mode'] ?? 'full',
+            'counts' => ($attemptInfo['scan_mode'] ?? 'full') === 'mini'
+                ? 'public-visible-or-meta-fallback'
+                : 'visible-only',
             'retryAttempts' => $attemptInfo['attempts'] ?? [],
             'scrapePhases' => $attemptInfo['phases'] ?? [],
             'usedAttempt' => $attemptInfo['used_attempt'] ?? 1,

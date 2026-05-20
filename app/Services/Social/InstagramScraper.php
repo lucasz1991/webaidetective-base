@@ -245,7 +245,7 @@ class InstagramScraper
     {
         $operationMode = Str::lower(trim($operationMode));
 
-        return in_array($operationMode, ['analyze', 'profile', 'followers', 'following', 'login-session'], true)
+        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'login-session'], true)
             ? $operationMode
             : 'analyze';
     }

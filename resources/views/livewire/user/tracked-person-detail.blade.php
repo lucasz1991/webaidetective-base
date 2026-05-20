@@ -142,8 +142,8 @@
                     wire:target="analyzeInstagram"
                     class="inline-flex justify-center rounded-xl bg-pink-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-pink-700"
                 >
-                    <span wire:loading.remove wire:target="analyzeInstagram">Instagram analysieren</span>
-                    <span wire:loading wire:target="analyzeInstagram">Analyse laeuft...</span>
+                    <span wire:loading.remove wire:target="analyzeInstagram">Instagram voll analysieren</span>
+                    <span wire:loading wire:target="analyzeInstagram">Vollanalyse laeuft...</span>
                 </button>
                 <button
                     type="button"
