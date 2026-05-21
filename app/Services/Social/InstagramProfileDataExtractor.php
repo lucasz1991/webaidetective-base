@@ -15,7 +15,6 @@ class InstagramProfileDataExtractor
         $bodyTextPreview = (string) data_get($payload, 'profile.bodyTextPreview', '');
         $profileImageUrl = data_get($payload, 'profile.ogImage');
         $operationMode = Str::lower((string) ($payload['operationMode'] ?? ''));
-        $profileId = $this->extractProfileId($payload, $html);
         $counts = $this->extractCounts([
             'body_text_preview' => $bodyTextPreview,
             'description_meta' => $description,
@@ -24,7 +23,6 @@ class InstagramProfileDataExtractor
         ], in_array($operationMode, ['mini', 'mini-scan', 'public', 'public-profile'], true));
 
         return [
-            'profile_id' => $profileId,
             'full_name' => $this->extractFullName($ogTitle),
             'biography' => $this->extractBiography($description),
             'posts_count' => $counts['posts'],
@@ -331,78 +329,6 @@ class InstagramProfileDataExtractor
         }
 
         return $merged;
-    }
-
-    private function extractProfileId(array $payload, string $html): ?string
-    {
-        foreach ([
-            data_get($payload, 'profile.profileId'),
-            data_get($payload, 'profile.instagramProfileId'),
-            data_get($payload, 'profile.id'),
-            data_get($payload, 'profile.pk'),
-        ] as $candidate) {
-            $normalized = $this->normalizeProfileId($candidate);
-
-            if ($normalized !== null) {
-                return $normalized;
-            }
-        }
-
-        if (trim($html) === '') {
-            return null;
-        }
-
-        $username = Str::lower((string) ($payload['username'] ?? ''));
-        $normalizedHtml = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
-        $htmlVariants = array_values(array_unique(array_filter([
-            $normalizedHtml,
-            stripcslashes($normalizedHtml),
-            str_replace(['\\"', '\\u0022'], '"', $normalizedHtml),
-            stripcslashes(str_replace(['\\"', '\\u0022'], '"', $normalizedHtml)),
-        ], static fn (string $variant): bool => trim($variant) !== '')));
-        $globalPatterns = [
-            '/"profile_id"\s*:\s*"?(\d+)"?/i',
-            '/"user_id"\s*:\s*"?(\d+)"?/i',
-            '/"instagram_user_id"\s*:\s*"?(\d+)"?/i',
-            '/profilePage_(\d+)/i',
-        ];
-
-        foreach ($htmlVariants as $htmlVariant) {
-            if ($username !== '') {
-                $quotedUsername = preg_quote($username, '/');
-                $usernamePatterns = [
-                    '/"id"\s*:\s*"?(\d+)"?[^{}]{0,1200}"username"\s*:\s*"'.$quotedUsername.'"/is',
-                    '/"username"\s*:\s*"'.$quotedUsername.'"[^{}]{0,1200}"id"\s*:\s*"?(\d+)"?/is',
-                    '/"pk"\s*:\s*"?(\d+)"?[^{}]{0,1200}"username"\s*:\s*"'.$quotedUsername.'"/is',
-                    '/"username"\s*:\s*"'.$quotedUsername.'"[^{}]{0,1200}"pk"\s*:\s*"?(\d+)"?/is',
-                ];
-
-                foreach ($usernamePatterns as $pattern) {
-                    if (preg_match($pattern, $htmlVariant, $matches)) {
-                        return $this->normalizeProfileId($matches[1] ?? null);
-                    }
-                }
-            }
-
-            foreach ($globalPatterns as $pattern) {
-                if (preg_match($pattern, $htmlVariant, $matches)) {
-                    return $this->normalizeProfileId($matches[1] ?? null);
-                }
-            }
-        }
-
-        return null;
-    }
-
-    private function normalizeProfileId(mixed $candidate): ?string
-    {
-        $candidate = trim((string) $candidate);
-
-        if ($candidate === '' || ! preg_match('/^\d{3,30}$/', $candidate)) {
-            return null;
-        }
-
-        return $candidate;
     }
 
     private function normalizeSourceText(?string $value): string

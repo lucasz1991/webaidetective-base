@@ -772,7 +772,6 @@
                     </div>
 
                     <div class="mt-3 grid gap-2 text-sm text-slate-700">
-                        <p><span class="font-semibold">Profil-ID:</span> {{ $latestSnapshot->instagram_profile_id ?: data_get($latestSnapshot->raw_payload, 'extractedProfile.profileId', '—') }}</p>
                         <p><span class="font-semibold">Profilname:</span> {{ $latestSnapshot->full_name ?: '—' }}</p>
                         <p><span class="font-semibold">Bio:</span> {{ $latestSnapshot->biography ?: '—' }}</p>
                         <p><span class="font-semibold">Follower-Quelle:</span> {{ $resolveCountSourceLabel($latestCountSources['followers'] ?? null) }}</p>

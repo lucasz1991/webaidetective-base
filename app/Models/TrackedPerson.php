@@ -24,7 +24,6 @@ class TrackedPerson extends Model
         'country',
         'notes',
         'instagram_username',
-        'instagram_profile_id',
         'tiktok_username',
         'facebook_username',
         'x_username',

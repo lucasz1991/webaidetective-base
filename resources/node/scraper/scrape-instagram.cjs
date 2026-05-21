@@ -3255,10 +3255,6 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       loginDiagnostics,
     });
 
-    if (isMiniScanMode && /metadaten|snapshot/i.test(outcome.statusMessage || '')) {
-      outcome.statusMessage = 'Instagram hat keine stabile oeffentliche Profilansicht geliefert; der Mini-Scan speichert nur sichtbare DOM- oder eingebettete HTML-Profildaten.';
-    }
-
     fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
 
     if (isMiniScanMode) {
