@@ -199,6 +199,11 @@
                     &middot; {{ number_format($latestFollowerStats['removedHistoryCount']) }} historisch entfernt
                 @endif
             </div>
+            @if(data_get($latestFollowersList, 'attempted') && ! data_get($latestFollowersList, 'complete') && (int) data_get($latestFollowersList, 'expectedCount', 0) > 0)
+                <div class="mt-1 text-xs font-semibold text-amber-700">
+                    Scan unvollstaendig: {{ number_format($latestFollowerStats['observedCount']) }} von {{ number_format((int) data_get($latestFollowersList, 'expectedCount')) }}
+                </div>
+            @endif
         </div>
         <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <div class="flex items-center justify-between gap-3">
@@ -223,6 +228,11 @@
                     &middot; {{ number_format($latestFollowingStats['removedHistoryCount']) }} historisch entfernt
                 @endif
             </div>
+            @if(data_get($latestFollowingList, 'attempted') && ! data_get($latestFollowingList, 'complete') && (int) data_get($latestFollowingList, 'expectedCount', 0) > 0)
+                <div class="mt-1 text-xs font-semibold text-amber-700">
+                    Scan unvollstaendig: {{ number_format($latestFollowingStats['observedCount']) }} von {{ number_format((int) data_get($latestFollowingList, 'expectedCount')) }}
+                </div>
+            @endif
         </div>
         <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Beitraege</div>
@@ -280,6 +290,16 @@
                                 {{ collect(data_get($latestFollowersList, 'removedPreview', []))->pluck('username')->map(fn ($username) => '@'.$username)->implode(', ') ?: 'Keine entfernten Eintraege' }}
                             </div>
                         </div>
+                    </div>
+                @endif
+                @if(data_get($latestFollowersList, 'attempted') && ! data_get($latestFollowersList, 'complete') && (int) data_get($latestFollowersList, 'expectedCount', 0) > 0)
+                    <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                        Diese Followerliste wurde von Instagram nicht vollstaendig ausgeliefert. Es wurden {{ number_format($latestFollowerStats['observedCount']) }} von {{ number_format((int) data_get($latestFollowersList, 'expectedCount')) }} sichtbaren Eintraegen gefunden; fehlende Eintraege bleiben deshalb als ungeklaert gespeichert und werden nicht als entfernt gewertet.
+                        @if(data_get($latestFollowersList, 'searchAttempted'))
+                            <div class="mt-1 text-xs">
+                                Suchlauf: {{ number_format(collect(data_get($latestFollowersList, 'searchQueries', []))->count()) }} Abfragen, Tiefe {{ (int) data_get($latestFollowersList, 'searchMaxDepth', 0) ?: 1 }}.
+                            </div>
+                        @endif
                     </div>
                 @endif
 
@@ -406,6 +426,16 @@
                                 {{ collect(data_get($latestFollowingList, 'removedPreview', []))->pluck('username')->map(fn ($username) => '@'.$username)->implode(', ') ?: 'Keine entfernten Eintraege' }}
                             </div>
                         </div>
+                    </div>
+                @endif
+                @if(data_get($latestFollowingList, 'attempted') && ! data_get($latestFollowingList, 'complete') && (int) data_get($latestFollowingList, 'expectedCount', 0) > 0)
+                    <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950">
+                        Diese Gefolgt-Liste wurde von Instagram nicht vollstaendig ausgeliefert. Es wurden {{ number_format($latestFollowingStats['observedCount']) }} von {{ number_format((int) data_get($latestFollowingList, 'expectedCount')) }} sichtbaren Eintraegen gefunden; fehlende Eintraege bleiben deshalb als ungeklaert gespeichert und werden nicht als entfernt gewertet.
+                        @if(data_get($latestFollowingList, 'searchAttempted'))
+                            <div class="mt-1 text-xs">
+                                Suchlauf: {{ number_format(collect(data_get($latestFollowingList, 'searchQueries', []))->count()) }} Abfragen, Tiefe {{ (int) data_get($latestFollowingList, 'searchMaxDepth', 0) ?: 1 }}.
+                            </div>
+                        @endif
                     </div>
                 @endif
 
