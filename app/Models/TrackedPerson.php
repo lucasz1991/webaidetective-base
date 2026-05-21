@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 
 class TrackedPerson extends Model
@@ -106,6 +107,22 @@ class TrackedPerson extends Model
         }
 
         return Storage::disk('public')->url($this->profile_image_path);
+    }
+
+    public function getLastInstagramAnalyzedAtAttribute($value): ?Carbon
+    {
+        if (! $value) {
+            return null;
+        }
+
+        $timezone = config('app.timezone');
+        $asUtc = Carbon::parse($value, 'UTC')->timezone($timezone);
+
+        if ($asUtc->greaterThan(now($timezone)->addMinute())) {
+            return Carbon::parse($value, $timezone);
+        }
+
+        return $asUtc;
     }
 
     public function analyzeInstagram(?callable $progress = null, bool $fullScan = false): TrackedPersonInstagramSnapshot

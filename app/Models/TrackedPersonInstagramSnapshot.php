@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Storage;
 
 class TrackedPersonInstagramSnapshot extends Model
@@ -71,5 +72,21 @@ class TrackedPersonInstagramSnapshot extends Model
         }
 
         return Storage::disk('public')->url($this->screenshot_path);
+    }
+
+    public function getAnalyzedAtAttribute($value): ?Carbon
+    {
+        if (! $value) {
+            return null;
+        }
+
+        $timezone = config('app.timezone');
+        $asUtc = Carbon::parse($value, 'UTC')->timezone($timezone);
+
+        if ($asUtc->greaterThan(now($timezone)->addMinute())) {
+            return Carbon::parse($value, $timezone);
+        }
+
+        return $asUtc;
     }
 }

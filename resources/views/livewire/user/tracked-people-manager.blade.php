@@ -200,8 +200,11 @@
                                 </td>
                                 <td class="whitespace-nowrap px-5 py-4 text-slate-700">
                                     @if($trackedPerson->last_instagram_analyzed_at)
-                                        <span title="{{ $trackedPerson->last_instagram_analyzed_at->format('d.m.Y H:i') }}">
-                                            {{ $trackedPerson->last_instagram_analyzed_at->diffForHumans() }}
+                                        @php
+                                            $lastInstagramAnalyzedAt = $trackedPerson->last_instagram_analyzed_at->copy()->timezone(config('app.timezone'));
+                                        @endphp
+                                        <span title="{{ $lastInstagramAnalyzedAt->format('d.m.Y H:i') }}">
+                                            {{ $lastInstagramAnalyzedAt->diffForHumans() }}
                                         </span>
                                     @else
                                         Noch nicht analysiert

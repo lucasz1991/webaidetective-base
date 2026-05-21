@@ -42,11 +42,13 @@ class TrackedPersonInstagramAnalysisService
         [$payload, $extracted, $attemptInfo] = $fullScan
             ? $this->scrapePortioned($trackedPerson->instagram_username, $progress)
             : $this->scrapeMini($trackedPerson->instagram_username, $progress);
-        $analyzedAt = now();
+        $analyzedAt = now('UTC')->format('Y-m-d H:i:s');
         $persistedWarnings = [];
         $previousSnapshot = $trackedPerson->instagramSnapshots()
             ->latest('analyzed_at')
             ->first();
+        $miniScanWithoutCounts = ($attemptInfo['scan_mode'] ?? null) === 'mini'
+            && ! (bool) ($attemptInfo['counts_found'] ?? false);
 
         $this->reportProgress($progress, [
             'phase' => 'saving',
@@ -61,6 +63,7 @@ class TrackedPersonInstagramAnalysisService
             $extracted,
             $attemptInfo,
             $analyzedAt,
+            $miniScanWithoutCounts,
             &$persistedWarnings,
         ) {
             $snapshot = $trackedPerson->instagramSnapshots()->create([
@@ -80,7 +83,7 @@ class TrackedPersonInstagramAnalysisService
                 'has_changes' => false,
                 'detected_changes' => [],
                 'raw_payload' => null,
-                'analyzed_at' => $payload['scrapedAt'] ?? $analyzedAt,
+                'analyzed_at' => $analyzedAt,
             ]);
 
             $extracted = $this->storeRelationshipListArtifacts(
@@ -94,7 +97,7 @@ class TrackedPersonInstagramAnalysisService
             $storedMedia = $this->storeSnapshotMedia(
                 $trackedPerson,
                 $snapshot,
-                $extracted['image_urls'] ?? [],
+                $miniScanWithoutCounts ? [] : ($extracted['image_urls'] ?? []),
                 $persistedWarnings,
                 $previousSnapshot,
             );
@@ -103,7 +106,9 @@ class TrackedPersonInstagramAnalysisService
                 ? null
                 : ($profileMedia['storage_path'] ?? null);
             $profileImageHash = $profileMedia['content_hash'] ?? null;
-            $detectedChanges = $this->detectSnapshotChanges($previousSnapshot, $extracted, $profileImageHash);
+            $detectedChanges = $miniScanWithoutCounts
+                ? []
+                : $this->detectSnapshotChanges($previousSnapshot, $extracted, $profileImageHash);
             $snapshotPayload = $this->buildStoredPayload(
                 $payload,
                 $extracted,
@@ -123,7 +128,7 @@ class TrackedPersonInstagramAnalysisService
             $trackedPersonUpdate = [
                 'last_instagram_status_level' => $snapshot->status_level,
                 'last_instagram_status_message' => $snapshot->status_message,
-                'last_instagram_analyzed_at' => $snapshot->analyzed_at,
+                'last_instagram_analyzed_at' => $snapshot->getRawOriginal('analyzed_at') ?: $analyzedAt,
             ];
 
             if ($profileImagePath) {
@@ -154,9 +159,9 @@ class TrackedPersonInstagramAnalysisService
         $this->reportProgress($progress, [
             'phase' => 'done',
             'percent' => 100,
-            'message' => $fullScan
-                ? 'Instagram-Analyse abgeschlossen.'
-                : 'Instagram-Mini-Scan abgeschlossen.',
+            'message' => $snapshot->status_level === 'error'
+                ? ($fullScan ? 'Instagram-Analyse fehlgeschlagen.' : 'Instagram-Mini-Scan fehlgeschlagen.')
+                : ($fullScan ? 'Instagram-Analyse abgeschlossen.' : 'Instagram-Mini-Scan abgeschlossen.'),
         ]);
 
         return $snapshot->fresh('media');
@@ -182,6 +187,14 @@ class TrackedPersonInstagramAnalysisService
             92,
         );
         $extracted = $this->extractor->extract($payload);
+        $countsFound = count(array_filter($extracted['count_sources'] ?? [])) > 0;
+
+        if (! $countsFound) {
+            $payload['ok'] = false;
+            $payload['statusLevel'] = 'error';
+            $payload['statusMessage'] = 'Instagram-Mini-Scan fehlgeschlagen: Es wurden keine oeffentlichen Kennzahlen im sichtbaren DOM oder HTML gefunden.';
+        }
+
         $phaseResults = [
             [
                 'phase' => 'profile',
@@ -207,7 +220,7 @@ class TrackedPersonInstagramAnalysisService
                 'used_attempt' => 1,
                 'max_attempts' => 1,
                 'visible_counts_complete' => (bool) ($extracted['visible_counts_complete'] ?? false),
-                'counts_found' => count(array_filter($extracted['count_sources'] ?? [])) > 0,
+                'counts_found' => $countsFound,
                 'attempts' => [
                     [
                         'attempt' => 1,
@@ -402,7 +415,7 @@ class TrackedPersonInstagramAnalysisService
                 return 'Instagram-Mini-Scan abgeschlossen.';
             }
 
-            return 'Instagram-Mini-Scan abgeschlossen; Instagram hat in diesem Lauf keine oeffentlichen Kennzahlen im DOM oder HTML geliefert.';
+            return 'Instagram-Mini-Scan fehlgeschlagen: Instagram hat in diesem Lauf keine oeffentlichen Kennzahlen im DOM oder HTML geliefert.';
         }
 
         if (! ($attemptInfo['visible_counts_complete'] ?? false)) {
