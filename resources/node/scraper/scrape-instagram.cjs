@@ -560,7 +560,7 @@ function buildArtifactPaths(username) {
 
   return {
     htmlPath: path.join(artifactBasePath, `profile-page-${stamp}.html`),
-    screenshotPath: path.join(artifactBasePath, `profile-snapshot-${stamp}.png`),
+    screenshotPath: path.join(artifactBasePath, `instagram-page-${stamp}.png`),
   };
 }
 
@@ -2821,6 +2821,34 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
   }
 }
 
+async function captureDebugPageScreenshot(page, screenshotPath, notes) {
+  if (!page || !screenshotPath) {
+    return null;
+  }
+
+  try {
+    await page.screenshot({
+      path: screenshotPath,
+      fullPage: false,
+    });
+
+    return screenshotPath;
+  } catch (error) {
+    const message = normalizeText(error?.message || String(error));
+
+    if (Array.isArray(notes)) {
+      notes.push(`Debug-Screenshot konnte nicht erstellt werden: ${message}`);
+    }
+
+    recordRunDebug('debug-screenshot-failed', {
+      screenshotPath,
+      error: message,
+    });
+
+    return null;
+  }
+}
+
 (async () => {
   if (!username && !isLoginSessionMode) {
     console.log(
@@ -2849,6 +2877,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
   let browser;
   let page;
   let initialHtml = '';
+  let debugScreenshotPath = null;
   let initialProfile = {
     bodyTextPreview: '',
     description: null,
@@ -3062,6 +3091,8 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       }
 
       if (isLoginSessionMode) {
+        debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
+
         const responsePayload = {
           ok: sessionEstablished,
           statusLevel: sessionEstablished ? 'success' : 'error',
@@ -3078,9 +3109,9 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
           loginDiagnostics,
           profile: null,
           profileUrl,
-          screenshotPath: null,
+          screenshotPath: debugScreenshotPath,
           scrapedAt: new Date().toISOString(),
-          screenshotMode: null,
+          screenshotMode: debugScreenshotPath ? 'page' : null,
           title: await page.title().catch(() => null),
           warnings: dedupe([
             ...consoleMessages,
@@ -3275,17 +3306,7 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       notes.push('Cookies wurden nicht gespeichert, weil die Session offenbar nicht gueltig war.');
     }
 
-    if (!isRelationshipOnlyMode && !isMiniScanMode) {
-      await renderProfileSnapshot(
-        browser,
-        artifacts.screenshotPath,
-        username,
-        profileUrl,
-        title,
-        initialProfile,
-        dedupe(notes),
-      );
-    }
+    debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
 
     const responsePayload = {
       ok: outcome.ok,
@@ -3301,9 +3322,9 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       loginDiagnostics,
       profile: initialProfile,
       profileUrl,
-      screenshotPath: isRelationshipOnlyMode || isMiniScanMode ? null : artifacts.screenshotPath,
+      screenshotPath: debugScreenshotPath,
       scrapedAt: new Date().toISOString(),
-      screenshotMode: isRelationshipOnlyMode || isMiniScanMode ? null : 'generated-card',
+      screenshotMode: debugScreenshotPath ? 'page' : null,
       title,
       warnings: dedupedWarnings,
       durationMs: Date.now() - startedAt,
@@ -3317,6 +3338,8 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
     }
 
+    debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
+
     const responsePayload = {
       ok: false,
       statusLevel: 'error',
@@ -3326,7 +3349,8 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
       finalUrl,
       htmlPath: initialHtml ? artifacts.htmlPath : null,
       notes: dedupe(notes),
-      screenshotPath: null,
+      screenshotPath: debugScreenshotPath,
+      screenshotMode: debugScreenshotPath ? 'page' : null,
       warnings: dedupe(consoleMessages),
       durationMs: Date.now() - startedAt,
       debugLogPath,

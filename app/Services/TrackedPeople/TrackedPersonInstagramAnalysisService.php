@@ -188,6 +188,7 @@ class TrackedPersonInstagramAnalysisService
                 'mode' => 'mini',
                 'statusLevel' => $payload['statusLevel'] ?? 'unknown',
                 'statusMessage' => $payload['statusMessage'] ?? null,
+                'screenshotPath' => $this->scraper->resolvePublicStoragePath($payload['screenshotPath'] ?? null),
                 'ok' => (bool) ($payload['ok'] ?? false),
             ],
         ];
@@ -206,6 +207,7 @@ class TrackedPersonInstagramAnalysisService
                 'used_attempt' => 1,
                 'max_attempts' => 1,
                 'visible_counts_complete' => (bool) ($extracted['visible_counts_complete'] ?? false),
+                'counts_found' => count(array_filter($extracted['count_sources'] ?? [])) > 0,
                 'attempts' => [
                     [
                         'attempt' => 1,
@@ -293,6 +295,7 @@ class TrackedPersonInstagramAnalysisService
                 'phase' => 'profile',
                 'statusLevel' => $payload['statusLevel'] ?? 'unknown',
                 'statusMessage' => $payload['statusMessage'] ?? null,
+                'screenshotPath' => $this->scraper->resolvePublicStoragePath($payload['screenshotPath'] ?? null),
                 'ok' => (bool) ($payload['ok'] ?? false),
             ],
         ];
@@ -351,6 +354,7 @@ class TrackedPersonInstagramAnalysisService
                     'phase' => $phase,
                     'statusLevel' => $phasePayload['statusLevel'] ?? 'unknown',
                     'statusMessage' => $phasePayload['statusMessage'] ?? null,
+                    'screenshotPath' => $this->scraper->resolvePublicStoragePath($phasePayload['screenshotPath'] ?? null),
                     'ok' => (bool) ($phasePayload['ok'] ?? false),
                     'count' => is_array($phaseList) ? (int) ($phaseList['count'] ?? 0) : 0,
                     'available' => is_array($phaseList) ? (bool) ($phaseList['available'] ?? false) : false,
@@ -394,9 +398,11 @@ class TrackedPersonInstagramAnalysisService
         $statusMessage = $payload['statusMessage'] ?? ($payload['error'] ?? 'Instagram-Scrape fehlgeschlagen.');
 
         if (($attemptInfo['scan_mode'] ?? null) === 'mini') {
-            return ($attemptInfo['visible_counts_complete'] ?? false)
-                ? 'Instagram-Mini-Scan abgeschlossen.'
-                : 'Instagram-Mini-Scan abgeschlossen; oeffentliche Kennzahlen waren nicht vollstaendig sichtbar.';
+            if (($attemptInfo['visible_counts_complete'] ?? false) || ($attemptInfo['counts_found'] ?? false)) {
+                return 'Instagram-Mini-Scan abgeschlossen.';
+            }
+
+            return 'Instagram-Mini-Scan abgeschlossen; Instagram hat in diesem Lauf keine oeffentlichen Kennzahlen im DOM oder HTML geliefert.';
         }
 
         if (! ($attemptInfo['visible_counts_complete'] ?? false)) {
@@ -462,6 +468,7 @@ class TrackedPersonInstagramAnalysisService
             'scrapePhases' => $attemptInfo['phases'] ?? [],
             'usedAttempt' => $attemptInfo['used_attempt'] ?? 1,
             'maxAttempts' => $attemptInfo['max_attempts'] ?? self::MAX_VISIBLE_RETRY_ATTEMPTS,
+            'countsFound' => (bool) ($attemptInfo['counts_found'] ?? false),
             'monitoringOnly' => 'public-visible-data',
         ];
 

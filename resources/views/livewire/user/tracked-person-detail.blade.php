@@ -1,4 +1,4 @@
-<div class="space-y-4" wire:poll.visible.10000ms x-data="{ instagramListModal: null, settingsModal: false }" @keydown.escape.window="instagramListModal = null; settingsModal = false">
+<div class="space-y-4" wire:poll.visible.10000ms>
     @php
         $detailStatusClass = match ($detailStatusLevel ?? 'neutral') {
             'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
@@ -158,7 +158,7 @@
                 </button>
                 <button
                     type="button"
-                    @click="settingsModal = true"
+                    wire:click="$set('showSettingsModal', true)"
                     class="inline-flex justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                     Einstellungen
@@ -179,7 +179,7 @@
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
                 <button
                     type="button"
-                    @click="instagramListModal = 'followers'"
+                    wire:click="$set('showFollowersModal', true)"
                     class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     @disabled($latestFollowerItems->isEmpty())
                 >
@@ -200,7 +200,7 @@
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gefolgt</div>
                 <button
                     type="button"
-                    @click="instagramListModal = 'following'"
+                    wire:click="$set('showFollowingModal', true)"
                     class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     @disabled($latestFollowingItems->isEmpty())
                 >
@@ -230,14 +230,8 @@
         </div>
     </section>
 
-    <div
-        x-cloak
-        x-show="instagramListModal === 'followers'"
-        x-transition.opacity
-        class="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 px-3 py-4 sm:items-center sm:px-4 sm:py-6"
-        @click.self="instagramListModal = null"
-    >
-        <div class="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[85vh]">
+    <x-modal wire:model="showFollowersModal" maxWidth="2xl">
+        <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Followerliste</h3>
@@ -252,7 +246,7 @@
                         @endif
                     </p>
                 </div>
-                <button type="button" @click="instagramListModal = null" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                     Schliessen
                 </button>
             </div>
@@ -329,16 +323,10 @@
                 @endif
             </div>
         </div>
-    </div>
+    </x-modal>
 
-    <div
-        x-cloak
-        x-show="instagramListModal === 'following'"
-        x-transition.opacity
-        class="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 px-3 py-4 sm:items-center sm:px-4 sm:py-6"
-        @click.self="instagramListModal = null"
-    >
-        <div class="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[85vh]">
+    <x-modal wire:model="showFollowingModal" maxWidth="2xl">
+        <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Gefolgt-Liste</h3>
@@ -353,7 +341,7 @@
                         @endif
                     </p>
                 </div>
-                <button type="button" @click="instagramListModal = null" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                <button type="button" x-on:click="$dispatch('close')" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                     Schliessen
                 </button>
             </div>
@@ -430,16 +418,10 @@
                 @endif
             </div>
         </div>
-    </div>
+    </x-modal>
 
-    <div
-        x-cloak
-        x-show="settingsModal"
-        x-transition.opacity
-        class="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/50 px-3 py-4 sm:items-center sm:px-4"
-        @click.self="settingsModal = false"
-    >
-        <div class="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+    <x-modal wire:model="showSettingsModal" maxWidth="2xl">
+        <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden">
             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Einstellungen</h3>
@@ -447,7 +429,7 @@
                         Personendaten, Dauerbeobachtung und Social-Media-Benachrichtigungen.
                     </p>
                 </div>
-                <button type="button" @click="settingsModal = false" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                <button type="button" x-on:click="$dispatch('close')" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                     Schliessen
                 </button>
             </div>
@@ -568,7 +550,7 @@
             </div>
 
             <div class="flex flex-col-reverse gap-2 border-t border-slate-200 px-4 py-3 sm:flex-row sm:justify-end sm:px-5">
-                <button type="button" @click="settingsModal = false" class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                <button type="button" x-on:click="$dispatch('close')" class="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                     Abbrechen
                 </button>
                 <button
@@ -576,14 +558,13 @@
                     wire:click="saveTrackedPerson"
                     wire:loading.attr="disabled"
                     wire:target="saveTrackedPerson"
-                    @click="settingsModal = false"
                     class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                     Einstellungen speichern
                 </button>
             </div>
         </div>
-    </div>
+    </x-modal>
 
     <section class="grid gap-4 2xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.8fr)]">
         <div class="space-y-4">
@@ -766,7 +747,7 @@
                         <p class="mt-1 text-xs">{{ optional($latestSnapshot->analyzed_at)->format('d.m.Y H:i') ?: '—' }}</p>
                         @if($latestSnapshot->screenshot_url)
                             <a href="{{ $latestSnapshot->screenshot_url }}" target="_blank" class="mt-3 inline-flex rounded-full border border-current px-3 py-1 text-xs font-semibold uppercase tracking-wide">
-                                Snapshot oeffnen
+                                Debug-Screenshot oeffnen
                             </a>
                         @endif
                     </div>
@@ -785,6 +766,9 @@
                             <h4 class="font-semibold text-slate-900">Scrape-Phasen</h4>
                             <div class="mt-2 grid gap-2">
                                 @foreach($latestScrapePhases as $phase)
+                                    @php
+                                        $phaseScreenshotPath = data_get($phase, 'screenshotPath');
+                                    @endphp
                                     <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white px-3 py-2">
                                         <span class="font-semibold">
                                             {{ match(data_get($phase, 'phase')) {
@@ -798,6 +782,9 @@
                                             {{ data_get($phase, 'statusLevel', 'unknown') }}
                                             @if(data_get($phase, 'count') !== null)
                                                 · {{ number_format((int) data_get($phase, 'count')) }} Eintraege
+                                            @endif
+                                            @if($phaseScreenshotPath)
+                                                | <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($phaseScreenshotPath) }}" target="_blank" class="font-semibold text-slate-700 underline decoration-slate-300 underline-offset-2">Screenshot</a>
                                             @endif
                                         </span>
                                     </div>

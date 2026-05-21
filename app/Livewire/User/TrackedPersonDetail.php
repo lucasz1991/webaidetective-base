@@ -33,6 +33,9 @@ class TrackedPersonDetail extends Component
     public $notify_x_changes = true;
     public $notify_youtube_changes = true;
     public $notify_snapchat_changes = true;
+    public bool $showFollowersModal = false;
+    public bool $showFollowingModal = false;
+    public bool $showSettingsModal = false;
 
     public $knownFactLabel = '';
     public $knownFactValue = '';
@@ -119,6 +122,7 @@ class TrackedPersonDetail extends Component
 
         $freshPerson = $trackedPerson->fresh();
         $this->fillFormFromModel($freshPerson);
+        $this->showSettingsModal = false;
         $this->setDetailStatus('Personendaten wurden gespeichert.', 'success');
         $this->dispatch('tracked-person-refresh');
     }

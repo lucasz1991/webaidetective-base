@@ -6,6 +6,9 @@
             'error' => 'border-rose-200 bg-rose-50 text-rose-900',
             default => 'border-slate-200 bg-slate-50 text-slate-800',
         };
+        $selectedTrackedPerson = $selectedTrackedPersonId
+            ? $trackedPeople->firstWhere('id', $selectedTrackedPersonId)
+            : null;
     @endphp
 
     <section class="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -110,91 +113,140 @@
         @endif
     </section>
 
-    <section class="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <aside class="space-y-3">
-            @forelse($trackedPeople as $trackedPerson)
-                @php
-                    $isSelected = $selectedTrackedPersonId === $trackedPerson->id;
-                    $statusLevel = $trackedPerson->last_instagram_status_level ?? 'neutral';
-                    $statusBadgeClass = match ($statusLevel) {
-                        'success' => 'bg-emerald-100 text-emerald-700',
-                        'partial' => 'bg-amber-100 text-amber-800',
-                        'error' => 'bg-rose-100 text-rose-700',
-                        default => 'bg-slate-100 text-slate-600',
-                    };
-                @endphp
+    <section class="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+            <div>
+                <h3 class="text-base font-bold text-slate-900">Personenliste</h3>
+                <p class="mt-1 text-sm text-slate-600">Details und Analysen werden per Klick im Modal geoeffnet.</p>
+            </div>
+        </div>
 
-                <button
-                    wire:click="selectTrackedPerson({{ $trackedPerson->id }})"
-                    wire:key="tracked-person-list-{{ $trackedPerson->id }}"
-                    class="w-full rounded-2xl border p-4 text-left shadow-sm transition {{ $isSelected ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white hover:border-slate-300' }}"
-                >
-                    <div class="flex items-center gap-3">
-                        <div class="h-14 w-14 overflow-hidden rounded-2xl bg-slate-100">
-                            @if($trackedPerson->profile_image_url)
-                                <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full object-cover">
-                            @else
-                                <div class="flex h-full w-full items-center justify-center text-xs font-semibold {{ $isSelected ? 'text-slate-400' : 'text-slate-500' }}">
-                                    Kein Bild
-                                </div>
-                            @endif
-                        </div>
-                        <div class="min-w-0 flex-1">
-                            <div class="truncate text-sm font-bold {{ $isSelected ? 'text-white' : 'text-slate-900' }}">
-                                {{ $trackedPerson->display_name }}
-                            </div>
-                            <div class="mt-1 truncate text-xs {{ $isSelected ? 'text-slate-300' : 'text-slate-500' }}">
-                                {{ $trackedPerson->instagram_username ? '@'.$trackedPerson->instagram_username : ($trackedPerson->alias ?: 'Ohne Instagram-Handle') }}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="mt-4 flex flex-wrap items-center gap-2 text-xs">
-                        <span class="rounded-full px-2 py-1 font-semibold {{ $isSelected ? 'bg-white/10 text-white' : $statusBadgeClass }}">
-                            {{ $trackedPerson->last_instagram_status_level ?: 'nicht analysiert' }}
-                        </span>
-                        @if($trackedPerson->monitoring_enabled)
-                            <span class="rounded-full px-2 py-1 font-semibold {{ $isSelected ? 'bg-white/10 text-white' : 'bg-indigo-100 text-indigo-700' }}">
-                                Beobachtung aktiv
-                            </span>
-                        @endif
-                        @if($trackedPerson->notify_social_changes)
-                            <span class="rounded-full px-2 py-1 font-semibold {{ $isSelected ? 'bg-white/10 text-white' : 'bg-sky-100 text-sky-700' }}">
-                                Benachrichtigungen aktiv
-                            </span>
-                        @endif
-                    </div>
-
-                    <div class="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
-                        <div class="rounded-xl {{ $isSelected ? 'bg-white/10' : 'bg-slate-50' }} px-2 py-2">
-                            <div class="{{ $isSelected ? 'text-slate-300' : 'text-slate-500' }}">Follower</div>
-                            <div class="mt-1 font-bold">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '—' }}</div>
-                        </div>
-                        <div class="rounded-xl {{ $isSelected ? 'bg-white/10' : 'bg-slate-50' }} px-2 py-2">
-                            <div class="{{ $isSelected ? 'text-slate-300' : 'text-slate-500' }}">Gefolgt</div>
-                            <div class="mt-1 font-bold">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '—' }}</div>
-                        </div>
-                        <div class="rounded-xl {{ $isSelected ? 'bg-white/10' : 'bg-slate-50' }} px-2 py-2">
-                            <div class="{{ $isSelected ? 'text-slate-300' : 'text-slate-500' }}">Beitraege</div>
-                            <div class="mt-1 font-bold">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '—' }}</div>
-                        </div>
-                    </div>
-                </button>
-            @empty
+        @if($trackedPeople->isEmpty())
+            <div class="p-6">
                 <div class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">
                     Noch keine Personen gespeichert.
                 </div>
-            @endforelse
-        </aside>
+            </div>
+        @else
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 text-left text-sm">
+                    <thead class="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <tr>
+                            <th scope="col" class="px-5 py-3">Person</th>
+                            <th scope="col" class="px-5 py-3">Instagram</th>
+                            <th scope="col" class="px-5 py-3">Status</th>
+                            <th scope="col" class="px-5 py-3">Zuletzt aktualisiert</th>
+                            <th scope="col" class="px-5 py-3 text-right">Aktion</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 bg-white">
+                        @foreach($trackedPeople as $trackedPerson)
+                            @php
+                                $isSelected = $selectedTrackedPersonId === $trackedPerson->id;
+                                $statusLevel = $trackedPerson->last_instagram_status_level ?: 'neutral';
+                                $statusLabel = match ($statusLevel) {
+                                    'success' => 'Erfolgreich',
+                                    'partial' => 'Teilweise',
+                                    'error' => 'Fehler',
+                                    default => 'Nicht analysiert',
+                                };
+                                $statusBadgeClass = match ($statusLevel) {
+                                    'success' => 'bg-emerald-100 text-emerald-700 ring-emerald-200',
+                                    'partial' => 'bg-amber-100 text-amber-800 ring-amber-200',
+                                    'error' => 'bg-rose-100 text-rose-700 ring-rose-200',
+                                    default => 'bg-slate-100 text-slate-600 ring-slate-200',
+                                };
+                                $secondaryText = $trackedPerson->alias ?: trim(collect([$trackedPerson->city, $trackedPerson->country])->filter()->implode(', '));
+                                $secondaryText = $secondaryText !== '' ? $secondaryText : 'Keine Zusatzdaten';
+                            @endphp
 
-        <div>
-            @if($selectedTrackedPersonId)
-                <livewire:user.tracked-person-detail :tracked-person-id="$selectedTrackedPersonId" :key="'tracked-person-detail-'.$selectedTrackedPersonId" />
-            @else
-                <div class="rounded-3xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500 shadow-sm">
-                    Lege zuerst eine Person an, damit Details, Social-Handles und Analysen angezeigt werden koennen.
-                </div>
-            @endif
-        </div>
+                            <tr wire:key="tracked-person-list-{{ $trackedPerson->id }}" class="transition {{ $isSelected && $showDetailModal ? 'bg-slate-50' : 'hover:bg-slate-50' }}">
+                                <td class="px-5 py-4">
+                                    <div class="flex min-w-56 items-center gap-3">
+                                        <div class="h-10 w-10 shrink-0 overflow-hidden rounded-xl bg-slate-100">
+                                            @if($trackedPerson->profile_image_url)
+                                                <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full object-cover">
+                                            @else
+                                                <div class="flex h-full w-full items-center justify-center text-[10px] font-semibold text-slate-500">
+                                                    Kein Bild
+                                                </div>
+                                            @endif
+                                        </div>
+                                        <div class="min-w-0">
+                                            <div class="truncate font-semibold text-slate-900">{{ $trackedPerson->display_name }}</div>
+                                            <div class="mt-0.5 truncate text-xs text-slate-500">{{ $secondaryText }}</div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="whitespace-nowrap px-5 py-4 text-slate-700">
+                                    {{ $trackedPerson->instagram_username ? '@'.$trackedPerson->instagram_username : '-' }}
+                                </td>
+                                <td class="px-5 py-4">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <span class="rounded-full px-2.5 py-1 text-xs font-semibold ring-1 {{ $statusBadgeClass }}">
+                                            {{ $statusLabel }}
+                                        </span>
+                                        @if($trackedPerson->monitoring_enabled)
+                                            <span class="rounded-full bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-indigo-100">
+                                                Beobachtung
+                                            </span>
+                                        @endif
+                                    </div>
+                                    @if($trackedPerson->last_instagram_status_message)
+                                        <div class="mt-1 max-w-xs truncate text-xs text-slate-500" title="{{ $trackedPerson->last_instagram_status_message }}">
+                                            {{ $trackedPerson->last_instagram_status_message }}
+                                        </div>
+                                    @endif
+                                </td>
+                                <td class="whitespace-nowrap px-5 py-4 text-slate-700">
+                                    @if($trackedPerson->last_instagram_analyzed_at)
+                                        <span title="{{ $trackedPerson->last_instagram_analyzed_at->format('d.m.Y H:i') }}">
+                                            {{ $trackedPerson->last_instagram_analyzed_at->diffForHumans() }}
+                                        </span>
+                                    @else
+                                        Noch nicht analysiert
+                                    @endif
+                                </td>
+                                <td class="px-5 py-4 text-right">
+                                    <button
+                                        type="button"
+                                        wire:click="selectTrackedPerson({{ $trackedPerson->id }})"
+                                        class="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+                                    >
+                                        Details
+                                    </button>
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
+        @endif
     </section>
+
+    @if($showDetailModal && $selectedTrackedPersonId)
+        <x-modal wire:model="showDetailModal" maxWidth="6xl">
+            <div class="flex max-h-[92vh] flex-col overflow-hidden bg-slate-50">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-5">
+                    <div class="min-w-0">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Personendetails</p>
+                        <h3 class="truncate text-lg font-bold text-slate-900">
+                            {{ $selectedTrackedPerson?->display_name ?? 'Person' }}
+                        </h3>
+                    </div>
+                    <button
+                        type="button"
+                        x-on:click="$dispatch('close')"
+                        class="rounded-full border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50"
+                    >
+                        Schliessen
+                    </button>
+                </div>
+
+                <div class="overflow-y-auto p-4 sm:p-5">
+                    <livewire:user.tracked-person-detail :tracked-person-id="$selectedTrackedPersonId" :key="'tracked-person-detail-modal-'.$selectedTrackedPersonId" />
+                </div>
+            </div>
+        </x-modal>
+    @endif
 </div>

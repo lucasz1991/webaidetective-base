@@ -2,7 +2,6 @@
 
 namespace App\Livewire\User;
 
-use App\Models\TrackedPerson;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
 
@@ -23,6 +22,7 @@ class TrackedPeopleManager extends Component
     public $snapchat_username = '';
 
     public ?int $selectedTrackedPersonId = null;
+    public bool $showDetailModal = false;
     public bool $showCreateForm = false;
     public $managerStatus = null;
     public $managerStatusLevel = 'neutral';
@@ -30,15 +30,6 @@ class TrackedPeopleManager extends Component
     protected $listeners = [
         'tracked-person-refresh' => '$refresh',
     ];
-
-    public function mount(): void
-    {
-        $user = Auth::user();
-
-        if ($user) {
-            $this->selectedTrackedPersonId = $user->trackedPeople()->orderBy('last_name')->orderBy('first_name')->value('id');
-        }
-    }
 
     protected function rules(): array
     {
@@ -66,7 +57,19 @@ class TrackedPeopleManager extends Component
 
     public function selectTrackedPerson(int $trackedPersonId): void
     {
+        $user = Auth::user();
+
+        if (! $user || ! $user->trackedPeople()->whereKey($trackedPersonId)->exists()) {
+            return;
+        }
+
         $this->selectedTrackedPersonId = $trackedPersonId;
+        $this->showDetailModal = true;
+    }
+
+    public function closeDetailModal(): void
+    {
+        $this->showDetailModal = false;
     }
 
     public function createTrackedPerson(): void
@@ -91,6 +94,7 @@ class TrackedPeopleManager extends Component
         $person = Auth::user()->trackedPeople()->create($validated);
 
         $this->selectedTrackedPersonId = $person->id;
+        $this->showDetailModal = true;
         $this->showCreateForm = false;
         $this->resetForm();
         $this->setManagerStatus(
@@ -104,18 +108,19 @@ class TrackedPeopleManager extends Component
         $user = Auth::user();
         $trackedPeople = $user
             ? $user->trackedPeople()
-                ->with('latestInstagramSnapshot')
                 ->orderBy('last_name')
                 ->orderBy('first_name')
                 ->get()
             : collect();
 
-        if ($trackedPeople->isNotEmpty() && ! $trackedPeople->contains('id', $this->selectedTrackedPersonId)) {
-            $this->selectedTrackedPersonId = $trackedPeople->first()->id;
+        if ($this->selectedTrackedPersonId && ! $trackedPeople->contains('id', $this->selectedTrackedPersonId)) {
+            $this->selectedTrackedPersonId = null;
+            $this->showDetailModal = false;
         }
 
         if ($trackedPeople->isEmpty()) {
             $this->selectedTrackedPersonId = null;
+            $this->showDetailModal = false;
         }
 
         return view('livewire.user.tracked-people-manager', [
