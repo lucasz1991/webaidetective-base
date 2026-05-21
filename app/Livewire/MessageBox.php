@@ -3,7 +3,6 @@
 namespace App\Livewire;
 
 use Livewire\Component;
-use App\Models\Message;
 use Livewire\WithPagination;
 
 
@@ -14,6 +13,8 @@ class MessageBox extends Component
     public $selectedMessage;
     public $showMessageModal = false;
     public $loadedPages = 1;
+    public $messageBoxStatus = null;
+    public $messageBoxStatusLevel = 'success';
 
     protected $listeners = [
         'refreshComponent' => '$refresh',
@@ -41,6 +42,48 @@ class MessageBox extends Component
         $this->dispatch('refreshComponent');
     }
 
+    public function markAllAsRead(): void
+    {
+        auth()->user()->receivedMessages()
+            ->where('status', '1')
+            ->update(['status' => '2']);
+
+        $this->setMessageBoxStatus('Alle Nachrichten wurden als gelesen markiert.', 'success');
+        $this->dispatch('refreshComponent');
+    }
+
+    public function deleteAllMessages(): void
+    {
+        auth()->user()->receivedMessages()->delete();
+
+        $this->selectedMessage = null;
+        $this->showMessageModal = false;
+        $this->loadedPages = 1;
+        $this->resetPage();
+        $this->setMessageBoxStatus('Alle Nachrichten wurden geloescht.', 'success');
+        $this->dispatch('refreshComponent');
+    }
+
+    public function deleteMessage(int $messageId): void
+    {
+        $message = auth()->user()->receivedMessages()->find($messageId);
+
+        if (! $message) {
+            $this->setMessageBoxStatus('Die Nachricht wurde nicht gefunden.', 'error');
+
+            return;
+        }
+
+        if ($this->selectedMessage && (int) $this->selectedMessage->id === $message->id) {
+            $this->selectedMessage = null;
+            $this->showMessageModal = false;
+        }
+
+        $message->delete();
+        $this->setMessageBoxStatus('Nachricht wurde geloescht.', 'success');
+        $this->dispatch('refreshComponent');
+    }
+
     public function render()
     {
        
@@ -49,5 +92,11 @@ class MessageBox extends Component
             ->paginate(12 * $this->loadedPages);  
 
         return view('livewire.message-box', compact('messages'))->layout("layouts/app");
+    }
+
+    private function setMessageBoxStatus(string $message, string $level = 'success'): void
+    {
+        $this->messageBoxStatus = $message;
+        $this->messageBoxStatusLevel = $level;
     }
 }

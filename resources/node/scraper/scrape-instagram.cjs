@@ -117,6 +117,11 @@ const shouldCollectFollowing = operationMode === 'analyze' || isFollowingOnlyMod
 const DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS = 0;
 const DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS = 100000;
 const RELATIONSHIP_NO_PROGRESS_REOPEN_LIMIT = 2;
+const RELATIONSHIP_SEARCH_PARTITION_QUERIES = [
+  'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+  'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+  '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '_',
+];
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1311,6 +1316,119 @@ async function scrollFollowerDialog(page) {
   }));
 }
 
+async function relationshipDialogSearchInputAvailable(page) {
+  return page.evaluate(() => {
+    const dialog = document.querySelector('div[role="dialog"]') || document.body;
+    const inputs = Array.from(dialog.querySelectorAll('input'));
+    const visibleInputs = inputs.filter((input) => {
+      const rect = input.getBoundingClientRect();
+      const style = window.getComputedStyle(input);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && !input.disabled
+        && !input.readOnly;
+    });
+    const preferredInput = visibleInputs.find((input) => {
+      const haystack = [
+        input.getAttribute('placeholder') || '',
+        input.getAttribute('aria-label') || '',
+        input.getAttribute('name') || '',
+        input.getAttribute('type') || '',
+      ].join(' ');
+
+      return /suchen|suche|search/i.test(haystack);
+    }) || visibleInputs.find((input) => {
+      const type = (input.getAttribute('type') || 'text').toLowerCase();
+
+      return type === 'text' || type === 'search';
+    });
+
+    return Boolean(preferredInput);
+  }).catch(() => false);
+}
+
+async function setRelationshipDialogSearchQuery(page, query) {
+  const applied = await page.evaluate((value) => {
+    const dialog = document.querySelector('div[role="dialog"]') || document.body;
+    const inputs = Array.from(dialog.querySelectorAll('input'));
+    const visibleInputs = inputs.filter((input) => {
+      const rect = input.getBoundingClientRect();
+      const style = window.getComputedStyle(input);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && !input.disabled
+        && !input.readOnly;
+    });
+    const input = visibleInputs.find((candidate) => {
+      const haystack = [
+        candidate.getAttribute('placeholder') || '',
+        candidate.getAttribute('aria-label') || '',
+        candidate.getAttribute('name') || '',
+        candidate.getAttribute('type') || '',
+      ].join(' ');
+
+      return /suchen|suche|search/i.test(haystack);
+    }) || visibleInputs.find((candidate) => {
+      const type = (candidate.getAttribute('type') || 'text').toLowerCase();
+
+      return type === 'text' || type === 'search';
+    });
+
+    if (!input) {
+      return false;
+    }
+
+    const nativeValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+
+    input.focus();
+
+    if (nativeValueSetter) {
+      nativeValueSetter.call(input, '');
+    } else {
+      input.value = '';
+    }
+
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: 'deleteContentBackward',
+    }));
+
+    if (nativeValueSetter) {
+      nativeValueSetter.call(input, value);
+    } else {
+      input.value = value;
+    }
+
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      data: value,
+      inputType: 'insertText',
+    }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+    const scrollTargets = Array.from(dialog.querySelectorAll('div, ul, section'))
+      .filter((element) => element.scrollHeight > element.clientHeight + 40);
+
+    for (const target of scrollTargets) {
+      target.scrollTop = 0;
+    }
+
+    return true;
+  }, String(query || '')).catch(() => false);
+
+  if (applied) {
+    await sleep(query ? 1250 : 600);
+  }
+
+  return applied;
+}
+
 async function openInstagramRelationshipDialog(page, username, relationship, runtimeConfig = {}) {
   const normalizedUsername = normalizeInstagramUsername(username);
   const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
@@ -1369,6 +1487,281 @@ async function openFollowingDialog(page, username, runtimeConfig = {}) {
   return openInstagramRelationshipDialog(page, username, 'following', runtimeConfig);
 }
 
+function addRelationshipEntriesToMap(entries, usersByUsername, targetUsername) {
+  let added = 0;
+
+  for (const entry of entries) {
+    const relatedUsername = normalizeInstagramUsername(entry?.username);
+
+    if (!relatedUsername || relatedUsername === targetUsername || usersByUsername.has(relatedUsername)) {
+      continue;
+    }
+
+    usersByUsername.set(relatedUsername, {
+      username: relatedUsername,
+      displayName: entry.displayName,
+      profileUrl: entry.profileUrl,
+    });
+    added++;
+  }
+
+  return added;
+}
+
+function getRelationshipSearchPartitionQueries(runtimeConfig = {}) {
+  const configuredQueries = Array.isArray(runtimeConfig.relationshipSearchPartitionQueries)
+    ? runtimeConfig.relationshipSearchPartitionQueries
+    : [];
+  const normalizedQueries = configuredQueries
+    .map((query) => normalizeText(String(query || '')).toLowerCase())
+    .filter((query) => query !== '');
+
+  return normalizedQueries.length > 0
+    ? [...new Set(normalizedQueries)]
+    : RELATIONSHIP_SEARCH_PARTITION_QUERIES;
+}
+
+async function collectRelationshipSearchPartitions(page, username, relationship, options, usersByUsername) {
+  const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
+  const runtimeConfig = options.runtimeConfig || {};
+  const maxItems = normalizeOptionalPositiveInteger(options.maxItems, DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS);
+  const expectedCount = normalizeOptionalPositiveInteger(options.expectedCount, 0);
+  const maxScrollRounds = Math.max(
+    20,
+    normalizeOptionalPositiveInteger(options.searchMaxScrollRounds, options.maxScrollRounds)
+      || options.maxScrollRounds
+      || DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS,
+  );
+  const hasItemLimit = maxItems > 0;
+  const targetUsername = normalizeInstagramUsername(username);
+  const queries = getRelationshipSearchPartitionQueries(runtimeConfig);
+  const queriesRun = [];
+  let searchRounds = 0;
+  let openAttempts = 0;
+  let addedCount = 0;
+  let stopReason = null;
+
+  const targetReached = () => {
+    if (hasItemLimit && usersByUsername.size >= maxItems) {
+      return true;
+    }
+
+    return expectedCount > 0 && usersByUsername.size >= expectedCount;
+  };
+
+  progressLog('relationship-search-opening', {
+    relationship: normalizedRelationship,
+    loaded: usersByUsername.size,
+    expectedCount,
+    maxItems,
+    maxScrollRounds,
+    queryCount: queries.length,
+  });
+
+  openAttempts++;
+  let opened = normalizedRelationship === 'following'
+    ? await openFollowingDialog(page, username, runtimeConfig)
+    : await openFollowersDialog(page, username, runtimeConfig);
+
+  if (!opened) {
+    return {
+      attempted: true,
+      inputAvailable: false,
+      queries: queriesRun,
+      rounds: searchRounds,
+      addedCount,
+      openAttempts,
+      stopReason: 'search-dialog-not-found',
+      rateLimited: false,
+      rateLimitText: null,
+    };
+  }
+
+  let inputAvailable = await relationshipDialogSearchInputAvailable(page);
+
+  if (!inputAvailable) {
+    await closeInstagramDialog(page);
+
+    return {
+      attempted: true,
+      inputAvailable: false,
+      queries: queriesRun,
+      rounds: searchRounds,
+      addedCount,
+      openAttempts,
+      stopReason: 'search-input-not-found',
+      rateLimited: false,
+      rateLimitText: null,
+    };
+  }
+
+  for (const query of queries) {
+    if (targetReached() || searchRounds >= maxScrollRounds) {
+      break;
+    }
+
+    let queryApplied = await setRelationshipDialogSearchQuery(page, query);
+
+    if (!queryApplied) {
+      await closeInstagramDialog(page);
+      openAttempts++;
+      opened = normalizedRelationship === 'following'
+        ? await openFollowingDialog(page, username, runtimeConfig)
+        : await openFollowersDialog(page, username, runtimeConfig);
+      inputAvailable = opened ? await relationshipDialogSearchInputAvailable(page) : false;
+      queryApplied = opened && inputAvailable
+        ? await setRelationshipDialogSearchQuery(page, query)
+        : false;
+    }
+
+    if (!queryApplied) {
+      stopReason = inputAvailable ? 'search-query-not-applied' : 'search-input-lost';
+      break;
+    }
+
+    queriesRun.push(query);
+    const queryStartCount = usersByUsername.size;
+    let previousCount = usersByUsername.size;
+    let unchangedRounds = 0;
+    let queryRounds = 0;
+    let lastScrollState = null;
+    let queryStopReason = null;
+
+    progressLog('relationship-search-query-start', {
+      relationship: normalizedRelationship,
+      query,
+      loaded: usersByUsername.size,
+      expectedCount,
+      maxItems,
+      maxScrollRounds,
+      searchRounds,
+    });
+
+    while (!targetReached() && searchRounds < maxScrollRounds) {
+      const collection = await collectFollowerEntriesFromDialog(page);
+      const entries = Array.isArray(collection) ? collection : (collection.entries || []);
+      const suggestionsVisible = !Array.isArray(collection) && Boolean(collection.suggestionsVisible);
+      const rateLimited = !Array.isArray(collection) && Boolean(collection.rateLimited);
+
+      if (rateLimited) {
+        stopReason = 'instagram-rate-limit';
+        await closeInstagramDialog(page);
+
+        return {
+          attempted: true,
+          inputAvailable,
+          queries: queriesRun,
+          rounds: searchRounds,
+          addedCount,
+          openAttempts,
+          stopReason,
+          rateLimited: true,
+          rateLimitText: collection.rateLimitText || null,
+        };
+      }
+
+      const addedThisRound = addRelationshipEntriesToMap(entries, usersByUsername, targetUsername);
+      addedCount += addedThisRound;
+      searchRounds++;
+      queryRounds++;
+
+      if (usersByUsername.size === previousCount) {
+        unchangedRounds++;
+      } else {
+        unchangedRounds = 0;
+        previousCount = usersByUsername.size;
+      }
+
+      progressLog('relationship-search-progress', {
+        relationship: normalizedRelationship,
+        query,
+        round: searchRounds,
+        queryRound: queryRounds,
+        loaded: usersByUsername.size,
+        expectedCount,
+        maxItems,
+        maxScrollRounds,
+        unchangedRounds,
+        addedThisRound,
+        atBottom: Boolean(lastScrollState?.atBottom),
+        suggestionsVisible,
+      });
+
+      if (targetReached()) {
+        queryStopReason = expectedCount > 0 && usersByUsername.size >= expectedCount
+          ? 'expected-count-reached'
+          : 'max-items-reached';
+        break;
+      }
+
+      if (suggestionsVisible && unchangedRounds >= 1) {
+        queryStopReason = 'search-suggestions-section-reached';
+        break;
+      }
+
+      const scrollState = await scrollFollowerDialog(page);
+      lastScrollState = scrollState;
+
+      if (scrollState.atBottom && unchangedRounds >= 3) {
+        queryStopReason = 'search-bottom-stale';
+        break;
+      }
+
+      if (!scrollState.scrolled && unchangedRounds >= 2) {
+        queryStopReason = 'search-scroll-stale';
+        break;
+      }
+
+      if (unchangedRounds >= 8) {
+        queryStopReason = 'search-no-new-items';
+        break;
+      }
+
+      await sleep(scrollState.atBottom ? 900 : 650);
+    }
+
+    progressLog('relationship-search-query-complete', {
+      relationship: normalizedRelationship,
+      query,
+      loaded: usersByUsername.size,
+      addedThisQuery: usersByUsername.size - queryStartCount,
+      expectedCount,
+      maxItems,
+      queryRounds,
+      searchRounds,
+      reason: queryStopReason,
+      complete: targetReached(),
+    });
+
+    if (targetReached()) {
+      stopReason = queryStopReason;
+      break;
+    }
+
+    if (searchRounds >= maxScrollRounds) {
+      stopReason = 'search-max-scroll-rounds-reached';
+      break;
+    }
+
+    await sleep(450);
+  }
+
+  await setRelationshipDialogSearchQuery(page, '');
+  await closeInstagramDialog(page);
+
+  return {
+    attempted: true,
+    inputAvailable,
+    queries: queriesRun,
+    rounds: searchRounds,
+    addedCount,
+    openAttempts,
+    stopReason: stopReason || (targetReached() ? 'expected-count-reached' : 'search-partitions-exhausted'),
+    rateLimited: false,
+    rateLimitText: null,
+  };
+}
+
 async function collectPublicRelationshipList(page, username, profile, relationship, options = {}) {
   const maxItems = normalizeOptionalPositiveInteger(options.maxItems, DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS);
   const expectedCount = normalizeOptionalPositiveInteger(options.expectedCount, 0);
@@ -1396,6 +1789,12 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     openAttempts: 0,
     scrollRounds: 0,
     noProgressReopenLimit: RELATIONSHIP_NO_PROGRESS_REOPEN_LIMIT,
+    searchAttempted: false,
+    searchInputAvailable: false,
+    searchQueries: [],
+    searchRounds: 0,
+    searchAddedCount: 0,
+    searchStopReason: null,
   };
 
   if (profile?.isPrivate) {
@@ -1493,19 +1892,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
         break;
       }
 
-      for (const entry of entries) {
-        const relatedUsername = normalizeInstagramUsername(entry.username);
-
-        if (!relatedUsername || relatedUsername === targetUsername || usersByUsername.has(relatedUsername)) {
-          continue;
-        }
-
-        usersByUsername.set(relatedUsername, {
-          username: relatedUsername,
-          displayName: entry.displayName,
-          profileUrl: entry.profileUrl,
-        });
-      }
+      addRelationshipEntriesToMap(entries, usersByUsername, targetUsername);
 
       totalScrollRounds++;
       passRounds++;
@@ -1609,6 +1996,55 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     await sleep(900);
   }
 
+  if (
+    stopReason !== 'instagram-rate-limit'
+    && !targetReached()
+    && expectedCount > 0
+    && usersByUsername.size < expectedCount
+  ) {
+    const searchResult = await collectRelationshipSearchPartitions(
+      page,
+      username,
+      normalizedRelationship,
+      {
+        ...options,
+        maxScrollRounds,
+      },
+      usersByUsername,
+    );
+
+    result.searchAttempted = Boolean(searchResult.attempted);
+    result.searchInputAvailable = Boolean(searchResult.inputAvailable);
+    result.searchQueries = searchResult.queries || [];
+    result.searchRounds = searchResult.rounds || 0;
+    result.searchAddedCount = searchResult.addedCount || 0;
+    result.searchStopReason = searchResult.stopReason || null;
+    openAttempts += searchResult.openAttempts || 0;
+    totalScrollRounds += searchResult.rounds || 0;
+
+    progressLog('relationship-search-complete', {
+      relationship: normalizedRelationship,
+      loaded: usersByUsername.size,
+      expectedCount,
+      maxItems,
+      searchQueries: result.searchQueries.length,
+      searchRounds: result.searchRounds,
+      searchAddedCount: result.searchAddedCount,
+      reason: result.searchStopReason,
+      complete: targetReached(),
+    });
+
+    if (searchResult.rateLimited) {
+      stopReason = 'instagram-rate-limit';
+      result.rateLimited = true;
+      result.rateLimitText = searchResult.rateLimitText || null;
+    } else {
+      stopReason = targetReached()
+        ? (expectedCount > 0 && usersByUsername.size >= expectedCount ? 'expected-count-reached-after-search' : 'max-items-reached-after-search')
+        : (searchResult.stopReason || 'search-partitions-exhausted');
+    }
+  }
+
   result.items = hasItemLimit
     ? Array.from(usersByUsername.values()).slice(0, maxItems)
     : Array.from(usersByUsername.values());
@@ -1616,10 +2052,16 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   result.available = result.count > 0;
   result.openAttempts = openAttempts;
   result.scrollRounds = totalScrollRounds;
-  result.complete = stopReason !== 'instagram-rate-limit' && (stopReason === 'suggestions-section-reached'
-    || (expectedCount > 0
-      ? result.count >= expectedCount
-      : ((!hasItemLimit || result.count < maxItems) && ['no-new-items-after-reopen', 'pass-bottom-stale', 'pass-scroll-stale'].includes(stopReason))));
+  result.complete = stopReason !== 'instagram-rate-limit' && (expectedCount > 0
+    ? result.count >= expectedCount
+    : ((!hasItemLimit || result.count < maxItems) && [
+      'suggestions-section-reached',
+      'no-new-items-after-reopen',
+      'pass-bottom-stale',
+      'pass-scroll-stale',
+      'pass-no-new-items',
+      'search-partitions-exhausted',
+    ].includes(stopReason)));
   result.reason = stopReason === 'instagram-rate-limit'
     ? stopReason
     : result.available
@@ -2460,6 +2902,17 @@ function mergeRelationshipLists(previousList, nextList) {
     rateLimitText: nextList.rateLimited ? (nextList.rateLimitText || previousList.rateLimitText || null) : null,
     rateLimitRecovered: recoveredFromRateLimit,
     previousRateLimitText: previousList.rateLimitText || previousList.previousRateLimitText || null,
+    searchAttempted: Boolean(previousList.searchAttempted || nextList.searchAttempted),
+    searchInputAvailable: Boolean(previousList.searchInputAvailable || nextList.searchInputAvailable),
+    searchQueries: [
+      ...new Set([
+        ...(Array.isArray(previousList.searchQueries) ? previousList.searchQueries : []),
+        ...(Array.isArray(nextList.searchQueries) ? nextList.searchQueries : []),
+      ]),
+    ],
+    searchRounds: (Number(previousList.searchRounds) || 0) + (Number(nextList.searchRounds) || 0),
+    searchAddedCount: (Number(previousList.searchAddedCount) || 0) + (Number(nextList.searchAddedCount) || 0),
+    searchStopReason: nextList.searchStopReason || previousList.searchStopReason || null,
   };
 }
 

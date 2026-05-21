@@ -1,4 +1,4 @@
-<div class="space-y-4" wire:poll.visible.10000ms>
+<div class="space-y-4" wire:poll.visible.4000ms>
     @php
         $detailStatusClass = match ($detailStatusLevel ?? 'neutral') {
             'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
@@ -41,6 +41,8 @@
         $latestFollowingItems = $loadRelationshipItems($latestFollowingList);
         $latestFollowerRemovedItems = $loadRelationshipItems($latestFollowersList, 'currentlyRemovedItems');
         $latestFollowingRemovedItems = $loadRelationshipItems($latestFollowingList, 'currentlyRemovedItems');
+        $latestFollowerRemovedHistoryItems = $loadRelationshipItems($latestFollowersList, 'removedHistoryItems');
+        $latestFollowingRemovedHistoryItems = $loadRelationshipItems($latestFollowingList, 'removedHistoryItems');
         $relationshipStats = function (array $relationshipList, \Illuminate\Support\Collection $items) {
             return [
                 'activeCount' => (int) data_get($relationshipList, 'activeCount', data_get($relationshipList, 'count', $items->count())),
@@ -181,7 +183,7 @@
                     type="button"
                     wire:click="$set('showFollowersModal', true)"
                     class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    @disabled($latestFollowerItems->isEmpty())
+                    @disabled($latestFollowerItems->isEmpty() && $latestFollowerRemovedItems->isEmpty() && $latestFollowerRemovedHistoryItems->isEmpty())
                 >
                     Liste
                 </button>
@@ -191,7 +193,10 @@
             <div class="mt-0.5 text-xs text-slate-500">
                 {{ number_format($latestFollowerStats['observedCount']) }} zuletzt gesehen
                 @if($latestFollowerStats['currentlyRemovedCount'] > 0)
-                    &middot; {{ number_format($latestFollowerStats['currentlyRemovedCount']) }} entfernt archiviert
+                    &middot; {{ number_format($latestFollowerStats['currentlyRemovedCount']) }} aktuell entfernt
+                @endif
+                @if($latestFollowerStats['removedHistoryCount'] > 0)
+                    &middot; {{ number_format($latestFollowerStats['removedHistoryCount']) }} historisch entfernt
                 @endif
             </div>
         </div>
@@ -202,7 +207,7 @@
                     type="button"
                     wire:click="$set('showFollowingModal', true)"
                     class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    @disabled($latestFollowingItems->isEmpty())
+                    @disabled($latestFollowingItems->isEmpty() && $latestFollowingRemovedItems->isEmpty() && $latestFollowingRemovedHistoryItems->isEmpty())
                 >
                     Liste
                 </button>
@@ -212,7 +217,10 @@
             <div class="mt-0.5 text-xs text-slate-500">
                 {{ number_format($latestFollowingStats['observedCount']) }} zuletzt gesehen
                 @if($latestFollowingStats['currentlyRemovedCount'] > 0)
-                    &middot; {{ number_format($latestFollowingStats['currentlyRemovedCount']) }} entfernt archiviert
+                    &middot; {{ number_format($latestFollowingStats['currentlyRemovedCount']) }} aktuell entfernt
+                @endif
+                @if($latestFollowingStats['removedHistoryCount'] > 0)
+                    &middot; {{ number_format($latestFollowingStats['removedHistoryCount']) }} historisch entfernt
                 @endif
             </div>
         </div>
@@ -230,7 +238,7 @@
         </div>
     </section>
 
-    <x-modal wire:model="showFollowersModal" maxWidth="2xl">
+    <x-modal wire:model="showFollowersModal" maxWidth="3xl">
         <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
@@ -242,7 +250,13 @@
                             &middot; Limit {{ number_format((int) data_get($latestFollowersList, 'maxItems')) }}
                         @endif
                         @if($latestFollowerStats['currentlyRemovedCount'] > 0)
-                            &middot; {{ number_format($latestFollowerStats['currentlyRemovedCount']) }} entfernt archiviert
+                            &middot; {{ number_format($latestFollowerStats['currentlyRemovedCount']) }} aktuell entfernt
+                        @endif
+                        @if($latestFollowerStats['removedHistoryCount'] > 0)
+                            &middot; {{ number_format($latestFollowerStats['removedHistoryCount']) }} historisch entfernt
+                        @endif
+                        @if(data_get($latestFollowersList, 'searchAttempted'))
+                            &middot; Suchlauf {{ number_format(collect(data_get($latestFollowersList, 'searchQueries', []))->count()) }} Abfragen
                         @endif
                     </p>
                 </div>
@@ -269,8 +283,9 @@
                     </div>
                 @endif
 
-                @if($latestFollowerItems->isNotEmpty() || $latestFollowerRemovedItems->isNotEmpty())
+                @if($latestFollowerItems->isNotEmpty() || $latestFollowerRemovedItems->isNotEmpty() || $latestFollowerRemovedHistoryItems->isNotEmpty())
                     @if($latestFollowerItems->isNotEmpty())
+                        <h4 class="mb-2 text-sm font-bold text-slate-900">Aktive und ungeklaerte Follower</h4>
                         <div class="space-y-2">
                             @foreach($latestFollowerItems as $follower)
                                 <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
@@ -292,7 +307,7 @@
                     @if($latestFollowerRemovedItems->isNotEmpty())
                         <details class="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950">
                             <summary class="cursor-pointer font-semibold">
-                                {{ number_format($latestFollowerRemovedItems->count()) }} entfernt archiviert
+                                {{ number_format($latestFollowerRemovedItems->count()) }} aktuell entfernt
                             </summary>
                             <div class="mt-3 space-y-2">
                                 @foreach($latestFollowerRemovedItems as $removedFollower)
@@ -313,6 +328,30 @@
                             </div>
                         </details>
                     @endif
+                    @if($latestFollowerRemovedHistoryItems->isNotEmpty())
+                        <details class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+                            <summary class="cursor-pointer font-semibold">
+                                {{ number_format($latestFollowerRemovedHistoryItems->count()) }} dauerhaft in der Entfernt-Historie
+                            </summary>
+                            <div class="mt-3 space-y-2">
+                                @foreach($latestFollowerRemovedHistoryItems as $historyFollower)
+                                    <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
+                                        <div class="min-w-0">
+                                            <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($historyFollower, 'username') }}</div>
+                                            @if(data_get($historyFollower, 'displayName'))
+                                                <div class="mt-0.5 truncate text-slate-500">{{ data_get($historyFollower, 'displayName') }}</div>
+                                            @endif
+                                        </div>
+                                        @if(data_get($historyFollower, 'profileUrl'))
+                                            <a href="{{ data_get($historyFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                                                Oeffnen
+                                            </a>
+                                        @endif
+                                    </div>
+                                @endforeach
+                            </div>
+                        </details>
+                    @endif
                 @else
                     <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                         Keine Followerliste gespeichert.
@@ -325,7 +364,7 @@
         </div>
     </x-modal>
 
-    <x-modal wire:model="showFollowingModal" maxWidth="2xl">
+    <x-modal wire:model="showFollowingModal" maxWidth="3xl">
         <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
@@ -337,7 +376,13 @@
                             &middot; Limit {{ number_format((int) data_get($latestFollowingList, 'maxItems')) }}
                         @endif
                         @if($latestFollowingStats['currentlyRemovedCount'] > 0)
-                            &middot; {{ number_format($latestFollowingStats['currentlyRemovedCount']) }} entfernt archiviert
+                            &middot; {{ number_format($latestFollowingStats['currentlyRemovedCount']) }} aktuell entfernt
+                        @endif
+                        @if($latestFollowingStats['removedHistoryCount'] > 0)
+                            &middot; {{ number_format($latestFollowingStats['removedHistoryCount']) }} historisch entfernt
+                        @endif
+                        @if(data_get($latestFollowingList, 'searchAttempted'))
+                            &middot; Suchlauf {{ number_format(collect(data_get($latestFollowingList, 'searchQueries', []))->count()) }} Abfragen
                         @endif
                     </p>
                 </div>
@@ -364,8 +409,9 @@
                     </div>
                 @endif
 
-                @if($latestFollowingItems->isNotEmpty() || $latestFollowingRemovedItems->isNotEmpty())
+                @if($latestFollowingItems->isNotEmpty() || $latestFollowingRemovedItems->isNotEmpty() || $latestFollowingRemovedHistoryItems->isNotEmpty())
                     @if($latestFollowingItems->isNotEmpty())
+                        <h4 class="mb-2 text-sm font-bold text-slate-900">Aktive und ungeklaerte Gefolgt-Profile</h4>
                         <div class="space-y-2">
                             @foreach($latestFollowingItems as $followedProfile)
                                 <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
@@ -387,7 +433,7 @@
                     @if($latestFollowingRemovedItems->isNotEmpty())
                         <details class="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950">
                             <summary class="cursor-pointer font-semibold">
-                                {{ number_format($latestFollowingRemovedItems->count()) }} entfernt archiviert
+                                {{ number_format($latestFollowingRemovedItems->count()) }} aktuell entfernt
                             </summary>
                             <div class="mt-3 space-y-2">
                                 @foreach($latestFollowingRemovedItems as $removedProfile)
@@ -400,6 +446,30 @@
                                         </div>
                                         @if(data_get($removedProfile, 'profileUrl'))
                                             <a href="{{ data_get($removedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
+                                                Oeffnen
+                                            </a>
+                                        @endif
+                                    </div>
+                                @endforeach
+                            </div>
+                        </details>
+                    @endif
+                    @if($latestFollowingRemovedHistoryItems->isNotEmpty())
+                        <details class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+                            <summary class="cursor-pointer font-semibold">
+                                {{ number_format($latestFollowingRemovedHistoryItems->count()) }} dauerhaft in der Entfernt-Historie
+                            </summary>
+                            <div class="mt-3 space-y-2">
+                                @foreach($latestFollowingRemovedHistoryItems as $historyProfile)
+                                    <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
+                                        <div class="min-w-0">
+                                            <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($historyProfile, 'username') }}</div>
+                                            @if(data_get($historyProfile, 'displayName'))
+                                                <div class="mt-0.5 truncate text-slate-500">{{ data_get($historyProfile, 'displayName') }}</div>
+                                            @endif
+                                        </div>
+                                        @if(data_get($historyProfile, 'profileUrl'))
+                                            <a href="{{ data_get($historyProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
                                                 Oeffnen
                                             </a>
                                         @endif

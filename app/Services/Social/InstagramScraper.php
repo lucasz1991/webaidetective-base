@@ -158,8 +158,12 @@ class InstagramScraper
         $maxRounds = max(1, (int) ($event['maxScrollRounds'] ?? 1));
         $openAttempt = (int) ($event['openAttempt'] ?? 0);
         $stage = (string) ($event['stage'] ?? '');
+        $query = (string) ($event['query'] ?? '');
         $phasePercent = match ($stage) {
             'relationship-opening' => 2,
+            'relationship-search-opening' => $expected > 0 ? min(98, max(5, (int) floor(($loaded / max(1, $expected)) * 100))) : 55,
+            'relationship-search-query-start' => $expected > 0 ? min(98, max(5, (int) floor(($loaded / max(1, $expected)) * 100))) : 60,
+            'relationship-search-complete' => $expected > 0 && $loaded < $expected ? 98 : 100,
             'relationship-dialog-missing' => 100,
             'relationship-complete' => 100,
             'relationship-rate-limited' => 100,
@@ -182,11 +186,12 @@ class InstagramScraper
             'expected' => $expected,
             'round' => $round,
             'openAttempt' => $openAttempt,
-            'message' => $this->buildProgressMessage($phase, $stage, $loaded, $expected, $openAttempt),
+            'query' => $query,
+            'message' => $this->buildProgressMessage($phase, $stage, $loaded, $expected, $openAttempt, $query),
         ];
     }
 
-    private function buildProgressMessage(string $phase, string $stage, int $loaded, int $expected, int $openAttempt = 0): string
+    private function buildProgressMessage(string $phase, string $stage, int $loaded, int $expected, int $openAttempt = 0, string $query = ''): string
     {
         if ($phase === 'followers') {
             if ($stage === 'relationship-rate-limited') {
@@ -203,6 +208,12 @@ class InstagramScraper
 
             if ($stage === 'relationship-pass-complete') {
                 return 'Followerlisten-Pass abgeschlossen: '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
+            }
+
+            if (Str::startsWith($stage, 'relationship-search')) {
+                return $expected > 0
+                    ? 'Followerliste wird per Suche vervollstaendigt'.($query !== '' ? ' ('.$query.')' : '').': '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.')
+                    : 'Followerliste wird per Suche vervollstaendigt'.($query !== '' ? ' ('.$query.')' : '').': '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
             }
 
             return $expected > 0
@@ -225,6 +236,12 @@ class InstagramScraper
 
             if ($stage === 'relationship-pass-complete') {
                 return 'Gefolgt-Listen-Pass abgeschlossen: '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
+            }
+
+            if (Str::startsWith($stage, 'relationship-search')) {
+                return $expected > 0
+                    ? 'Gefolgt-Liste wird per Suche vervollstaendigt'.($query !== '' ? ' ('.$query.')' : '').': '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.')
+                    : 'Gefolgt-Liste wird per Suche vervollstaendigt'.($query !== '' ? ' ('.$query.')' : '').': '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
             }
 
             return $expected > 0
