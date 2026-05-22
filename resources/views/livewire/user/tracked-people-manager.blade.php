@@ -158,6 +158,11 @@
                                 };
                                 $secondaryText = $trackedPerson->alias ?: trim(collect([$trackedPerson->city, $trackedPerson->country])->filter()->implode(', '));
                                 $secondaryText = $secondaryText !== '' ? $secondaryText : 'Keine Zusatzdaten';
+                                $instagramMetrics = collect([
+                                    ['label' => 'Follower', 'value' => $trackedPerson->instagram_followers_count],
+                                    ['label' => 'Gefolgt', 'value' => $trackedPerson->instagram_following_count],
+                                    ['label' => 'Beitraege', 'value' => $trackedPerson->instagram_posts_count],
+                                ])->filter(fn (array $metric) => $metric['value'] !== null)->values();
                             @endphp
 
                             <tr wire:key="tracked-person-list-{{ $trackedPerson->id }}" class="transition {{ $isSelected && $showDetailModal ? 'bg-slate-50' : 'hover:bg-slate-50' }}">
@@ -178,8 +183,24 @@
                                         </div>
                                     </div>
                                 </td>
-                                <td class="whitespace-nowrap px-5 py-4 text-slate-700">
-                                    {{ $trackedPerson->instagram_username ? '@'.$trackedPerson->instagram_username : '-' }}
+                                <td class="px-5 py-4 text-slate-700">
+                                    @if($trackedPerson->instagram_username)
+                                        <div class="font-medium text-slate-900">{{ '@'.$trackedPerson->instagram_username }}</div>
+
+                                        @if($instagramMetrics->isNotEmpty())
+                                            <div class="mt-2 flex flex-wrap gap-2">
+                                                @foreach($instagramMetrics as $metric)
+                                                    <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">
+                                                        {{ $metric['label'] }}: {{ number_format($metric['value']) }}
+                                                    </span>
+                                                @endforeach
+                                            </div>
+                                        @else
+                                            <div class="mt-1 text-xs text-slate-500">Noch keine Kennzahlen geladen</div>
+                                        @endif
+                                    @else
+                                        -
+                                    @endif
                                 </td>
                                 <td class="px-5 py-4">
                                     <div class="flex flex-wrap items-center gap-2">
