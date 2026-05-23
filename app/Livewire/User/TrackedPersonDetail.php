@@ -322,7 +322,9 @@ class TrackedPersonDetail extends Component
         $trackedPerson = $this->resolveTrackedPerson()
             ->load([
                 'knownFacts' => fn ($query) => $query->latest(),
-                'publicProfiles' => fn ($query) => $query->latest(),
+                'publicProfiles' => fn ($query) => $query
+                    ->where('platform', 'instagram')
+                    ->latest(),
                 'latestInstagramSnapshot.media' => fn ($query) => $query->orderBy('sort_order'),
                 'instagramSnapshots' => fn ($query) => $query
                     ->where('has_changes', true)

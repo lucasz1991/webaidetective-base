@@ -24,7 +24,11 @@ class Dashboard extends Component
                 'total' => (clone $trackedPeopleQuery)->count(),
                 'with_instagram' => (clone $trackedPeopleQuery)->whereNotNull('instagram_username')->count(),
                 'monitored' => (clone $trackedPeopleQuery)->where('monitoring_enabled', true)->count(),
-                'notifications_enabled' => (clone $trackedPeopleQuery)->where('notify_social_changes', true)->count(),
+                'notifications_enabled' => (clone $trackedPeopleQuery)
+                    ->whereNotNull('instagram_username')
+                    ->where('notify_social_changes', true)
+                    ->where('notify_instagram_changes', true)
+                    ->count(),
                 'analyzed' => (clone $trackedPeopleQuery)->whereNotNull('last_instagram_analyzed_at')->count(),
             ];
         }

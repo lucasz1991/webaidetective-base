@@ -124,14 +124,16 @@
     <div
         wire:loading.flex
         wire:target="analyzeInstagram,analyzeInstagramMini"
-        class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/60 px-4"
+        class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/70 px-4"
     >
-        <div class="w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl">
-            <div class="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-pink-600"></div>
+        <div class="w-full max-w-md rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
+            <div class="mx-auto rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-1">
+                <div class="h-10 w-10 animate-spin rounded-full border-4 border-white/70 border-t-slate-950 bg-white"></div>
+            </div>
             <div class="mt-4 text-xs font-semibold uppercase tracking-wide text-pink-700" wire:stream="instagram-progress-phase">Start</div>
-            <h3 class="mt-1 text-lg font-bold text-slate-900">Instagram-Analyse laeuft</h3>
+            <h3 class="mt-1 text-lg font-bold text-slate-950">Instagram-Scan laeuft</h3>
             <p class="mt-2 text-sm leading-6 text-slate-600" wire:stream="instagram-progress-message">
-                Grunddaten, Followerliste und Gefolgt-Liste werden nacheinander abgearbeitet.
+                Profil, Kennzahlen und Listen werden abgearbeitet.
             </p>
             <div class="mt-5">
                 <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
@@ -139,29 +141,31 @@
                     <span wire:stream="instagram-progress-percent">0%</span>
                 </div>
                 <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200" wire:stream="instagram-progress-bar">
-                    <div class="h-full rounded-full bg-pink-600" style="width: 0%"></div>
+                    <div class="h-full rounded-full bg-gradient-to-r from-rose-500 to-fuchsia-600" style="width: 0%"></div>
                 </div>
             </div>
-            <p class="mt-4 text-xs leading-5 text-slate-500">
-                Die Listen sind nicht nach Eintraegen begrenzt. Instagram kann das Laden bei sehr grossen Profilen trotzdem abbremsen oder blockieren.
-            </p>
         </div>
     </div>
 
-    <section class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+    <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div class="h-1.5 bg-gradient-to-r from-amber-400 via-rose-500 to-fuchsia-600"></div>
+        <div class="p-4 sm:p-5">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start">
-                <div class="h-20 w-20 shrink-0 overflow-hidden rounded-2xl bg-slate-100 sm:h-24 sm:w-24">
+                <div class="h-24 w-24 shrink-0 rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-1 sm:h-32 sm:w-32">
                     @if($trackedPerson->profile_image_url)
-                        <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full object-cover">
+                        <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full rounded-full border-4 border-white object-cover">
                     @else
-                        <div class="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-500">
-                            Kein Bild
+                        <div class="flex h-full w-full items-center justify-center rounded-full border-4 border-white bg-slate-100 text-sm font-semibold text-slate-500">
+                            IG
                         </div>
                     @endif
                 </div>
                 <div class="min-w-0">
-                    <h2 class="break-words text-xl font-bold text-slate-900 sm:text-2xl">{{ $trackedPerson->display_name }}</h2>
+                    <h2 class="break-words text-2xl font-bold text-slate-950">
+                        {{ $trackedPerson->instagram_username ? '@'.$trackedPerson->instagram_username : $trackedPerson->display_name }}
+                    </h2>
+                    <div class="mt-1 text-sm font-semibold text-slate-700">{{ $trackedPerson->display_name }}</div>
                     <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600 sm:text-sm">
                         <span>Alias: {{ $trackedPerson->alias ?: '—' }}</span>
                         <span>Ort: {{ $trackedPerson->city ?: '—' }}</span>
@@ -170,23 +174,23 @@
                     </div>
                     <div class="mt-3 flex flex-wrap gap-1.5 text-xs">
                         @if($trackedPerson->instagram_username)
-                            <span class="rounded-full bg-pink-100 px-3 py-1 font-semibold text-pink-700">
-                                Instagram: {{ '@'.$trackedPerson->instagram_username }}
+                            <span class="rounded-lg bg-pink-50 px-3 py-1 font-semibold text-pink-700 ring-1 ring-pink-100">
+                                Instagram
                             </span>
                         @endif
                         @if($trackedPerson->monitoring_enabled)
-                            <span class="rounded-full bg-indigo-100 px-3 py-1 font-semibold text-indigo-700">
+                            <span class="rounded-lg bg-slate-950 px-3 py-1 font-semibold text-white">
                                 Dauerbeobachtung aktiv
                             </span>
                         @endif
                         @if($trackedPerson->notify_social_changes && $trackedPerson->notify_instagram_changes)
-                            <span class="rounded-full bg-sky-100 px-3 py-1 font-semibold text-sky-700">
+                            <span class="rounded-lg bg-sky-50 px-3 py-1 font-semibold text-sky-700 ring-1 ring-sky-100">
                                 Benachrichtigungen aktiv
                             </span>
                         @endif
                         @if($trackedPerson->last_instagram_analyzed_at)
-                            <span class="rounded-full bg-slate-100 px-3 py-1 font-semibold text-slate-700">
-                                Letzte Analyse: {{ $trackedPerson->last_instagram_analyzed_at->format('d.m.Y H:i') }}
+                            <span class="rounded-lg bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                                {{ $trackedPerson->last_instagram_analyzed_at->copy()->timezone(config('app.timezone'))->diffForHumans() }}
                             </span>
                         @endif
                     </div>
@@ -198,7 +202,7 @@
                     wire:click="analyzeInstagramMini"
                     wire:loading.attr="disabled"
                     wire:target="analyzeInstagramMini"
-                    class="inline-flex justify-center rounded-xl border border-pink-200 bg-white px-4 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-50"
+                    class="inline-flex justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
                 >
                     <span wire:loading.remove wire:target="analyzeInstagramMini">Mini-Scan</span>
                     <span wire:loading wire:target="analyzeInstagramMini">Mini-Scan laeuft...</span>
@@ -207,7 +211,7 @@
                     wire:click="analyzeInstagram"
                     wire:loading.attr="disabled"
                     wire:target="analyzeInstagram"
-                    class="inline-flex justify-center rounded-xl bg-pink-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-pink-700"
+                    class="inline-flex justify-center rounded-lg bg-gradient-to-r from-rose-500 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow hover:from-rose-600 hover:to-fuchsia-700"
                 >
                     <span wire:loading.remove wire:target="analyzeInstagram">Instagram voll analysieren</span>
                     <span wire:loading wire:target="analyzeInstagram">Vollanalyse laeuft...</span>
@@ -215,7 +219,7 @@
                 <button
                     type="button"
                     wire:click="$set('showSettingsModal', true)"
-                    class="inline-flex justify-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    class="inline-flex justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                 >
                     Einstellungen
                 </button>
@@ -223,14 +227,15 @@
         </div>
 
         @if($detailStatus)
-            <div class="mt-4 rounded-xl border p-3 text-sm {{ $detailStatusClass }}">
+            <div class="mt-4 rounded-lg border p-3 text-sm {{ $detailStatusClass }}">
                 {{ $detailStatus }}
             </div> 
         @endif
+        </div>
     </section>
 
     <section class="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-5">
-        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
             <div class="flex items-center justify-between gap-3">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
                 <button
@@ -259,7 +264,7 @@
                 </div>
             @endif
         </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
             <div class="flex items-center justify-between gap-3">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gefolgt</div>
                 <button
@@ -288,17 +293,17 @@
                 </div>
             @endif
         </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+        <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Beitraege</div>
             <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '—' }}</div>
         </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Bekannte Daten</div>
+        <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram-Notizen</div>
             <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ number_format($trackedPerson->knownFacts->count()) }}</div>
         </div>
-        <div class="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
-            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Oeffentliche Profile</div>
-            <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ number_format($trackedPerson->publicProfiles->count()) }}</div>
+        <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">IG-Verbindungen</div>
+            <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ number_format($trackedPerson->publicProfiles->where('platform', 'instagram')->count()) }}</div>
         </div>
     </section>
 
@@ -760,9 +765,9 @@
         <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden">
             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
-                    <h3 class="text-lg font-bold text-slate-900">Einstellungen</h3>
+                    <h3 class="text-lg font-bold text-slate-900">Instagram-Einstellungen</h3>
                     <p class="mt-1 text-sm text-slate-500">
-                        Personendaten, Dauerbeobachtung und Social-Media-Benachrichtigungen.
+                        Profilhandle, Dauerbeobachtung und Instagram-Benachrichtigungen.
                     </p>
                 </div>
                 <button type="button" x-on:click="$dispatch('close')" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
@@ -802,27 +807,7 @@
                         </div>
                         <div>
                             <label class="mb-1 block text-sm font-medium text-slate-700">Instagram</label>
-                            <input type="text" wire:model.defer="instagram_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-sm font-medium text-slate-700">TikTok</label>
-                            <input type="text" wire:model.defer="tiktok_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-sm font-medium text-slate-700">Facebook</label>
-                            <input type="text" wire:model.defer="facebook_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-sm font-medium text-slate-700">X / Twitter</label>
-                            <input type="text" wire:model.defer="x_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-sm font-medium text-slate-700">YouTube</label>
-                            <input type="text" wire:model.defer="youtube_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-sm font-medium text-slate-700">Snapchat</label>
-                            <input type="text" wire:model.defer="snapchat_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            <input type="text" wire:model.defer="instagram_username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500" placeholder="@username">
                         </div>
                         <div class="sm:col-span-2">
                             <label class="mb-1 block text-sm font-medium text-slate-700">Notizen</label>
@@ -849,37 +834,17 @@
                         </label>
                         <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                             <input type="checkbox" wire:model.defer="notify_social_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span class="font-medium">Benachrichtigungen fuer Social-Media-Aenderungen aktivieren</span>
+                            <span class="font-medium">Benachrichtigungen fuer Instagram-Aenderungen aktivieren</span>
                         </label>
                     </div>
                 </div>
 
                 <div class="mt-4">
-                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Kanaele</div>
-                    <div class="mt-2 grid gap-2 sm:grid-cols-2">
+                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram-Kanal</div>
+                    <div class="mt-2 grid gap-2">
                         <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_instagram_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>Instagram</span>
-                        </label>
-                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_tiktok_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>TikTok</span>
-                        </label>
-                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_facebook_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>Facebook</span>
-                        </label>
-                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_x_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>X / Twitter</span>
-                        </label>
-                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_youtube_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>YouTube</span>
-                        </label>
-                        <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
-                            <input type="checkbox" wire:model.defer="notify_snapchat_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                            <span>Snapchat</span>
+                            <input type="checkbox" wire:model.defer="notify_instagram_changes" class="rounded border-slate-300 text-pink-600 focus:ring-pink-500">
+                            <span>Instagram-Aenderungen melden</span>
                         </label>
                     </div>
                 </div>
@@ -905,7 +870,7 @@
     <section class="grid gap-4 2xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.8fr)]">
         <div class="space-y-4">
             <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 class="text-lg font-bold text-slate-900">Bekannte Daten</h3>
+                <h3 class="text-lg font-bold text-slate-900">Instagram-Notizen</h3>
                 <div class="mt-3 space-y-2">
                     @forelse($trackedPerson->knownFacts as $knownFact)
                         <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
@@ -955,9 +920,9 @@
             </div>
 
             <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 class="text-lg font-bold text-slate-900">Bekannte oeffentliche Profile</h3>
+                <h3 class="text-lg font-bold text-slate-900">Bekannte Instagram-Profile</h3>
                 <p class="mt-1 text-sm text-slate-600">
-                    Hier speicherst du oeffentlich sichtbare Profile, die nachweisbar mit dieser Person verbunden sind.
+                    Hier speicherst du oeffentlich sichtbare Instagram-Profile, die nachweisbar mit dieser Person verbunden sind.
                 </p>
 
                 <div class="mt-3 space-y-2">
@@ -1009,12 +974,6 @@
                             <label class="mb-1 block text-sm font-medium text-slate-700">Plattform</label>
                             <select wire:model.defer="publicProfilePlatform" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
                                 <option value="instagram">Instagram</option>
-                                <option value="tiktok">TikTok</option>
-                                <option value="facebook">Facebook</option>
-                                <option value="x">X / Twitter</option>
-                                <option value="youtube">YouTube</option>
-                                <option value="snapchat">Snapchat</option>
-                                <option value="other">Andere Plattform</option>
                             </select>
                             @error('publicProfilePlatform') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
                         </div>
