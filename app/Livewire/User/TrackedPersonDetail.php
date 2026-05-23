@@ -42,13 +42,9 @@ class TrackedPersonDetail extends Component
     public $knownFactValue = '';
     public $knownFactSource = '';
     public $knownFactNotes = '';
-    public $publicProfilePlatform = 'instagram';
-    public $publicProfileUsername = '';
-    public $publicProfileDisplayName = '';
+    public $publicProfileTrackedPersonId = '';
     public $publicProfileRelationshipType = 'public_connection';
-    public $publicProfileUrl = '';
     public $publicProfileNotes = '';
-    public $publicProfileIsPublic = true;
 
     public $detailStatus = null;
     public $detailStatusLevel = 'neutral';
@@ -267,31 +263,47 @@ class TrackedPersonDetail extends Component
     public function savePublicProfile(): void
     {
         $validated = $this->validate([
-            'publicProfilePlatform' => ['required', 'string', 'in:instagram,tiktok,facebook,x,youtube,snapchat,other'],
-            'publicProfileUsername' => ['required', 'string', 'max:255'],
-            'publicProfileDisplayName' => ['nullable', 'string', 'max:255'],
+            'publicProfileTrackedPersonId' => ['required', 'integer'],
             'publicProfileRelationshipType' => ['required', 'string', 'in:follows_target,followed_by_target,mutual,public_connection'],
-            'publicProfileUrl' => ['nullable', 'url', 'max:2048'],
             'publicProfileNotes' => ['nullable', 'string'],
-            'publicProfileIsPublic' => ['boolean'],
         ]);
 
         $trackedPerson = $this->resolveTrackedPerson();
-        $normalizedUsername = $this->normalizeHandle($validated['publicProfileUsername']);
+        $linkedTrackedPerson = Auth::user()
+            ->trackedPeople()
+            ->with('latestInstagramSnapshot')
+            ->whereKey((int) $validated['publicProfileTrackedPersonId'])
+            ->where('id', '!=', $trackedPerson->id)
+            ->whereNotNull('instagram_username')
+            ->first();
+
+        if (! $linkedTrackedPerson) {
+            $this->addError('publicProfileTrackedPersonId', 'Bitte ein anderes beobachtetes Instagram-Profil auswaehlen.');
+
+            return;
+        }
+
+        if (data_get($linkedTrackedPerson->latestInstagramSnapshot?->raw_payload, 'extractedProfile.profileVisibility') !== 'public') {
+            $this->addError('publicProfileTrackedPersonId', 'Dieses beobachtete Profil wurde noch nicht als oeffentlich erkannt.');
+
+            return;
+        }
+
+        $normalizedUsername = $this->normalizeHandle($linkedTrackedPerson->instagram_username);
 
         $publicProfile = $trackedPerson->publicProfiles()->firstOrNew([
-            'platform' => $validated['publicProfilePlatform'],
+            'platform' => 'instagram',
             'username' => $normalizedUsername,
         ]);
         $wasExisting = $publicProfile->exists;
 
         $publicProfile->fill([
             'user_id' => Auth::id(),
-            'display_name' => $this->nullableTrim($validated['publicProfileDisplayName'] ?? null),
+            'display_name' => $linkedTrackedPerson->display_name,
             'relationship_type' => $validated['publicProfileRelationshipType'],
-            'profile_url' => $this->nullableTrim($validated['publicProfileUrl'] ?? null),
+            'profile_url' => 'https://www.instagram.com/'.$normalizedUsername.'/',
             'notes' => $this->nullableTrim($validated['publicProfileNotes'] ?? null),
-            'is_public' => (bool) $this->publicProfileIsPublic,
+            'is_public' => true,
         ]);
         $publicProfile->save();
 
@@ -344,10 +356,23 @@ class TrackedPersonDetail extends Component
             ->unique('content_hash')
             ->take(12)
             ->values();
+        $publicProfileCandidates = Auth::user()
+            ->trackedPeople()
+            ->with('latestInstagramSnapshot')
+            ->where('id', '!=', $trackedPerson->id)
+            ->whereNotNull('instagram_username')
+            ->orderBy('instagram_username')
+            ->get()
+            ->filter(fn (TrackedPerson $candidate): bool => data_get(
+                $candidate->latestInstagramSnapshot?->raw_payload,
+                'extractedProfile.profileVisibility',
+            ) === 'public')
+            ->values();
 
         return view('livewire.user.tracked-person-detail', [
             'trackedPerson' => $trackedPerson,
             'profileImageHistory' => $profileImageHistory,
+            'publicProfileCandidates' => $publicProfileCandidates,
         ]);
     }
 
@@ -395,13 +420,9 @@ class TrackedPersonDetail extends Component
 
     private function resetPublicProfileForm(): void
     {
-        $this->publicProfilePlatform = 'instagram';
-        $this->publicProfileUsername = '';
-        $this->publicProfileDisplayName = '';
+        $this->publicProfileTrackedPersonId = '';
         $this->publicProfileRelationshipType = 'public_connection';
-        $this->publicProfileUrl = '';
         $this->publicProfileNotes = '';
-        $this->publicProfileIsPublic = true;
     }
 
     private function nullableTrim(?string $value): ?string

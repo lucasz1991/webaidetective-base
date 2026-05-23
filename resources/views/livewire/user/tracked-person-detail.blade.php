@@ -922,7 +922,7 @@
             <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Bekannte Instagram-Profile</h3>
                 <p class="mt-1 text-sm text-slate-600">
-                    Hier speicherst du oeffentlich sichtbare Instagram-Profile, die nachweisbar mit dieser Person verbunden sind.
+                    Hier verknuepfst du andere bereits beobachtete Instagram-Profile, die mit diesem Profil eng verbunden sind.
                 </p>
 
                 <div class="mt-3 space-y-2">
@@ -964,34 +964,40 @@
                             </div>
                         </div>
                     @empty
-                        <p class="text-sm text-slate-500">Bisher wurden noch keine bekannten oeffentlichen Profile hinterlegt.</p>
+                        <p class="text-sm text-slate-500">Bisher wurden noch keine beobachteten Instagram-Profile als Verbindung hinterlegt.</p>
                     @endforelse
                 </div>
 
                 <div class="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-                    <div class="grid gap-3 md:grid-cols-2">
-                        <div>
-                            <label class="mb-1 block text-sm font-medium text-slate-700">Plattform</label>
-                            <select wire:model.defer="publicProfilePlatform" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                                <option value="instagram">Instagram</option>
-                            </select>
-                            @error('publicProfilePlatform') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
-                            <label class="mb-1 block text-sm font-medium text-slate-700">Handle / Nutzername</label>
-                            <input type="text" wire:model.defer="publicProfileUsername" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="@profilname">
-                            @error('publicProfileUsername') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
-                        </div>
+                    <div>
+                        <label class="mb-1 block text-sm font-medium text-slate-700">Beobachtetes Profil</label>
+                        <select wire:model.defer="publicProfileTrackedPersonId" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500">
+                            <option value="">Profil auswaehlen</option>
+                            @foreach($publicProfileCandidates as $candidate)
+                                @php
+                                    $candidateVisibility = data_get($candidate->latestInstagramSnapshot?->raw_payload, 'extractedProfile.profileVisibility');
+                                    $candidateVisibilityLabel = match ($candidateVisibility) {
+                                        'public' => 'oeffentlich',
+                                        'private' => 'privat',
+                                        default => 'unbekannt',
+                                    };
+                                @endphp
+                                <option value="{{ $candidate->id }}">
+                                    {{ '@'.$candidate->instagram_username }} - {{ $candidate->display_name }} ({{ $candidateVisibilityLabel }})
+                                </option>
+                            @endforeach
+                        </select>
+                        @error('publicProfileTrackedPersonId') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        @if($publicProfileCandidates->isEmpty())
+                            <p class="mt-2 text-xs text-amber-700">
+                                Es gibt noch kein weiteres beobachtetes Instagram-Profil, das im letzten Scan als oeffentlich erkannt wurde.
+                            </p>
+                        @endif
                     </div>
                     <div class="grid gap-3 md:grid-cols-2">
                         <div>
-                            <label class="mb-1 block text-sm font-medium text-slate-700">Anzeigename</label>
-                            <input type="text" wire:model.defer="publicProfileDisplayName" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="Optionaler Klarname">
-                            @error('publicProfileDisplayName') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
-                        </div>
-                        <div>
                             <label class="mb-1 block text-sm font-medium text-slate-700">Beziehungsart</label>
-                            <select wire:model.defer="publicProfileRelationshipType" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                            <select wire:model.defer="publicProfileRelationshipType" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500">
                                 <option value="follows_target">Folgt der Person</option>
                                 <option value="followed_by_target">Wird von der Person gefolgt</option>
                                 <option value="mutual">Gegenseitige Verbindung</option>
@@ -999,24 +1005,19 @@
                             </select>
                             @error('publicProfileRelationshipType') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
                         </div>
+                        <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Quelle</div>
+                            <div class="mt-1 font-semibold text-slate-900">Beobachtete Profile</div>
+                        </div>
                     </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Profil-URL</label>
-                        <input type="url" wire:model.defer="publicProfileUrl" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="Optional, falls du die exakte URL speichern willst">
-                        @error('publicProfileUrl') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
-                    </div>
-                    <label class="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-                        <input type="checkbox" wire:model.defer="publicProfileIsPublic" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
-                        <span class="font-medium">Profil ist oeffentlich bestaetigt</span>
-                    </label>
                     <div>
                         <label class="mb-1 block text-sm font-medium text-slate-700">Notizen</label>
-                        <textarea wire:model.defer="publicProfileNotes" rows="3" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="Warum dieses Profil relevant ist, z. B. gegenseitige Erwaehnungen oder bekannte Verbindungen"></textarea>
+                        <textarea wire:model.defer="publicProfileNotes" rows="3" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500" placeholder="Warum dieses beobachtete Profil relevant ist, z. B. enge Verbindung, gegenseitige Erwaehnungen oder bekannte Beziehung"></textarea>
                         @error('publicProfileNotes') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
                     </div>
                     <div class="flex justify-end">
-                        <button wire:click="savePublicProfile" class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800">
-                            Oeffentliches Profil speichern
+                        <button wire:click="savePublicProfile" @disabled($publicProfileCandidates->isEmpty()) class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
+                            Verbindung speichern
                         </button>
                     </div>
                 </div>
