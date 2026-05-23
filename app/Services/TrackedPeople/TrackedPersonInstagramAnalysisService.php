@@ -6,6 +6,7 @@ use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -31,6 +32,24 @@ class TrackedPersonInstagramAnalysisService
             throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');
         }
 
+        $lock = Cache::lock($this->analysisLockKey($trackedPerson), 3600);
+
+        if (! $lock->get()) {
+            throw new \RuntimeException('Fuer diese Person laeuft bereits eine Instagram-Analyse. Bitte den laufenden Scan abwarten.');
+        }
+
+        try {
+            return $this->analyzeWithLock($trackedPerson, $progress, $fullScan);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function analyzeWithLock(
+        TrackedPerson $trackedPerson,
+        ?callable $progress = null,
+        bool $fullScan = false,
+    ): TrackedPersonInstagramSnapshot {
         $this->reportProgress($progress, [
             'phase' => 'start',
             'percent' => 1,
@@ -165,6 +184,11 @@ class TrackedPersonInstagramAnalysisService
         ]);
 
         return $snapshot->fresh('media');
+    }
+
+    private function analysisLockKey(TrackedPerson $trackedPerson): string
+    {
+        return 'tracked-person-instagram-analysis:'.$trackedPerson->getKey();
     }
 
     private function scrapeMini(string $username, ?callable $progress = null): array

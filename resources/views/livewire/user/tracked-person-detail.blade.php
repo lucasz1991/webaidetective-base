@@ -179,7 +179,7 @@
                                 Dauerbeobachtung aktiv
                             </span>
                         @endif
-                        @if($trackedPerson->notify_social_changes)
+                        @if($trackedPerson->notify_social_changes && $trackedPerson->notify_instagram_changes)
                             <span class="rounded-full bg-sky-100 px-3 py-1 font-semibold text-sky-700">
                                 Benachrichtigungen aktiv
                             </span>
