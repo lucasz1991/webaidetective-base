@@ -5,6 +5,7 @@ namespace App\Livewire\User;
 use App\Jobs\MonitorTrackedPersonInstagram;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
+use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
 
@@ -134,6 +135,51 @@ class TrackedPersonDetail extends Component
         $this->runInstagramAnalysis(true);
     }
 
+    public function scanPublicProfileConnections(): void
+    {
+        @set_time_limit(0);
+        @ignore_user_abort(true);
+
+        $trackedPerson = $this->resolveTrackedPerson();
+
+        if (! $trackedPerson->instagram_username) {
+            $this->setDetailStatus('Fuer diese Person ist kein Instagram-Name hinterlegt.', 'error');
+
+            return;
+        }
+
+        $progress = fn (array $state) => $this->streamInstagramProgress($state);
+
+        try {
+            $this->streamInstagramProgress([
+                'phase' => 'public-connections',
+                'percent' => 1,
+                'message' => 'Public-Profile-Verbindungsscan wird vorbereitet.',
+            ]);
+
+            $scans = app(TrackedPersonInstagramPublicProfileScanService::class)->scan($trackedPerson, $progress);
+        } catch (\Throwable $exception) {
+            $this->streamInstagramProgress([
+                'phase' => 'error',
+                'percent' => 100,
+                'message' => 'Public-Profile-Verbindungsscan fehlgeschlagen.',
+            ]);
+            $this->setDetailStatus('Public-Profile-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+
+            return;
+        }
+
+        $foundCount = $scans
+            ->filter(fn ($scan) => $scan->public_profile_follows_target || $scan->target_follows_public_profile)
+            ->count();
+
+        $this->setDetailStatus(
+            'Public-Profile-Verbindungsscan abgeschlossen: '.$foundCount.' direkte Verbindung(en) gefunden.',
+            $scans->contains(fn ($scan) => $scan->status_level === 'error') ? 'partial' : 'success',
+        );
+        $this->dispatch('tracked-person-refresh');
+    }
+
     private function runInstagramAnalysis(bool $fullScan): void
     {
         @set_time_limit(0);
@@ -214,6 +260,7 @@ class TrackedPersonDetail extends Component
             'profile' => 'Grunddaten',
             'followers' => 'Followerliste',
             'following' => 'Gefolgt-Liste',
+            'public-connections' => 'Verbindungen',
             'saving' => 'Speichern',
             'done' => 'Fertig',
             'error' => 'Fehler',
@@ -336,7 +383,12 @@ class TrackedPersonDetail extends Component
                 'knownFacts' => fn ($query) => $query->latest(),
                 'publicProfiles' => fn ($query) => $query
                     ->where('platform', 'instagram')
+                    ->with('latestInstagramConnectionScan')
                     ->latest(),
+                'instagramPublicProfileScans' => fn ($query) => $query
+                    ->with('publicProfile')
+                    ->latest('analyzed_at')
+                    ->limit(20),
                 'latestInstagramSnapshot.media' => fn ($query) => $query->orderBy('sort_order'),
                 'instagramSnapshots' => fn ($query) => $query
                     ->where('has_changes', true)

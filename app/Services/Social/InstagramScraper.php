@@ -104,6 +104,124 @@ class InstagramScraper
         return $payload;
     }
 
+    public function scanPublicProfileConnection(
+        string $publicUsername,
+        string $targetUsername,
+        ?callable $progress = null,
+        array $runtimeConfigOverrides = [],
+    ): array {
+        $publicUsername = $this->normalizeInstagramUsername($publicUsername);
+        $targetUsername = $this->normalizeInstagramUsername($targetUsername);
+
+        if ($publicUsername === null || $targetUsername === null) {
+            throw new \RuntimeException('Bitte gueltige Instagram-Usernames fuer Verbindungsscan angeben.');
+        }
+
+        $nodeScript = base_path('resources/node/scraper/scrape-instagram-public-profile-connections.cjs');
+
+        if (! File::exists($nodeScript)) {
+            throw new \RuntimeException('Node-Skript fuer Public-Profile-Verbindungsscan nicht gefunden.');
+        }
+
+        $runtimeConfigPath = $this->writeRuntimeConfig($runtimeConfigOverrides);
+        $stdout = '';
+        $stderr = '';
+        $stderrBuffer = '';
+
+        try {
+            $result = Process::path(base_path())
+                ->forever()
+                ->run([
+                    $this->resolveNodeBinary(),
+                    $nodeScript,
+                    $publicUsername,
+                    $targetUsername,
+                    $runtimeConfigPath,
+                ], function (string $type, string $buffer) use (
+                    &$stdout,
+                    &$stderr,
+                    &$stderrBuffer,
+                    $progress,
+                    $publicUsername,
+                ) {
+                    if ($type === SymfonyProcess::OUT) {
+                        $stdout .= $buffer;
+
+                        return;
+                    }
+
+                    $stderr .= $buffer;
+
+                    if (! $progress) {
+                        return;
+                    }
+
+                    $stderrBuffer .= $buffer;
+                    $lines = preg_split("/\r\n|\n|\r/", $stderrBuffer);
+
+                    if ($lines === false) {
+                        return;
+                    }
+
+                    $stderrBuffer = array_pop($lines) ?? '';
+
+                    foreach ($lines as $line) {
+                        $event = $this->parseProgressLine($line);
+
+                        if (! $event) {
+                            continue;
+                        }
+
+                        $relationship = (string) ($event['relationship'] ?? '');
+                        [$progressStart, $progressEnd] = match ($relationship) {
+                            'followers' => [5, 49],
+                            'following' => [50, 94],
+                            default => [1, 99],
+                        };
+                        $normalized = $this->normalizeProgressEvent(
+                            $event,
+                            $relationship ?: 'public-profile-connections',
+                            $progressStart,
+                            $progressEnd,
+                        );
+                        $normalized['phase'] = 'public-connections';
+                        $normalized['message'] = '@'.$publicUsername.': '.$normalized['message'];
+
+                        $progress($normalized);
+                    }
+                });
+        } finally {
+            if ($runtimeConfigPath && File::exists($runtimeConfigPath)) {
+                File::delete($runtimeConfigPath);
+            }
+        }
+
+        $output = trim($stdout !== '' ? $stdout : $result->output());
+        $errorOutput = trim($stderr !== '' ? $stderr : $result->errorOutput());
+
+        if ($output === '') {
+            throw new \RuntimeException(
+                $errorOutput !== ''
+                    ? 'Fehler: Kein Output vom Public-Profile-Verbindungsscan. '.$errorOutput
+                    : 'Fehler: Kein Output vom Public-Profile-Verbindungsscan.'
+            );
+        }
+
+        $payload = json_decode($output, true);
+
+        if (! is_array($payload)) {
+            throw new \RuntimeException('Fehler: Unerwartetes Output-Format vom Public-Profile-Verbindungsscan.');
+        }
+
+        $payload['_process_successful'] = $result->successful();
+        $payload['_stderr'] = $errorOutput;
+        $payload['publicUsername'] = $payload['publicUsername'] ?? $publicUsername;
+        $payload['targetUsername'] = $payload['targetUsername'] ?? $targetUsername;
+        $payload['operationMode'] = 'public-profile-connections';
+
+        return $payload;
+    }
+
     private function handleProgressOutput(
         string &$buffer,
         string $chunk,

@@ -84,6 +84,11 @@ class TrackedPerson extends Model
         return $this->hasMany(TrackedPersonPublicProfile::class);
     }
 
+    public function instagramPublicProfileScans(): HasMany
+    {
+        return $this->hasMany(TrackedPersonInstagramPublicProfileScan::class);
+    }
+
     public function instagramSnapshots(): HasMany
     {
         return $this->hasMany(TrackedPersonInstagramSnapshot::class);

@@ -123,7 +123,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanPublicProfileConnections"
         class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="w-full max-w-md rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
@@ -920,13 +920,36 @@
             </div>
 
             <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                <h3 class="text-lg font-bold text-slate-900">Bekannte Instagram-Profile</h3>
-                <p class="mt-1 text-sm text-slate-600">
-                    Hier verknuepfst du andere bereits beobachtete Instagram-Profile, die mit diesem Profil eng verbunden sind.
-                </p>
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                        <h3 class="text-lg font-bold text-slate-900">Bekannte Instagram-Profile</h3>
+                        <p class="mt-1 text-sm text-slate-600">
+                            Hier verknuepfst du andere bereits beobachtete Instagram-Profile, die mit diesem Profil eng verbunden sind.
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        wire:click="scanPublicProfileConnections"
+                        wire:loading.attr="disabled"
+                        wire:target="scanPublicProfileConnections"
+                        @disabled($trackedPerson->publicProfiles->isEmpty() || ! $trackedPerson->instagram_username)
+                        class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Listenverbindungen pruefen
+                    </button>
+                </div>
 
                 <div class="mt-3 space-y-2">
                     @forelse($trackedPerson->publicProfiles as $publicProfile)
+                        @php
+                            $latestConnectionScan = $publicProfile->latestInstagramConnectionScan;
+                            $connectionStatusClass = match ($latestConnectionScan?->status_level) {
+                                'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
+                                'partial' => 'border-amber-200 bg-amber-50 text-amber-950',
+                                'error' => 'border-rose-200 bg-rose-50 text-rose-900',
+                                default => 'border-slate-200 bg-white text-slate-600',
+                            };
+                        @endphp
                         <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                             <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div>
@@ -949,6 +972,29 @@
                                     <div class="mt-1 text-slate-600">{{ $publicProfile->display_handle }}</div>
                                     @if($publicProfile->notes)
                                         <p class="mt-2 whitespace-pre-wrap text-xs text-slate-500">{{ $publicProfile->notes }}</p>
+                                    @endif
+                                    @if($latestConnectionScan)
+                                        <div class="mt-3 rounded-xl border px-3 py-2 text-xs {{ $connectionStatusClass }}">
+                                            <div class="flex flex-wrap items-center gap-2">
+                                                <span class="font-semibold">{{ $latestConnectionScan->relation_label }}</span>
+                                                <span>{{ $latestConnectionScan->analyzed_at ? $latestConnectionScan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</span>
+                                            </div>
+                                            <div class="mt-2 flex flex-wrap gap-2">
+                                                @if($latestConnectionScan->public_profile_follows_target)
+                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">Profil folgt dieser Person</span>
+                                                @endif
+                                                @if($latestConnectionScan->target_follows_public_profile)
+                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">Person folgt diesem Profil</span>
+                                                @endif
+                                                @if(! $latestConnectionScan->public_profile_follows_target && ! $latestConnectionScan->target_follows_public_profile)
+                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">Keine direkte Listenverbindung</span>
+                                                @endif
+                                            </div>
+                                            <div class="mt-2 text-[11px]">
+                                                Follower geprueft: {{ $latestConnectionScan->followers_observed_count ?? 0 }}
+                                                / Gefolgt geprueft: {{ $latestConnectionScan->following_observed_count ?? 0 }}
+                                            </div>
+                                        </div>
                                     @endif
                                 </div>
                                 <div class="flex flex-wrap gap-2">
@@ -1019,6 +1065,48 @@
                         <button wire:click="savePublicProfile" @disabled($publicProfileCandidates->isEmpty()) class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
                             Verbindung speichern
                         </button>
+                    </div>
+                </div>
+
+                <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h4 class="text-sm font-bold text-slate-900">Analysierte Listenverbindungen</h4>
+                        <span class="text-xs text-slate-500">Letzte 20 Scans</span>
+                    </div>
+                    <div class="mt-3 space-y-2">
+                        @forelse($trackedPerson->instagramPublicProfileScans as $connectionScan)
+                            @php
+                                $scanStatusClass = match ($connectionScan->status_level) {
+                                    'success' => 'border-emerald-200 bg-white text-emerald-900',
+                                    'partial' => 'border-amber-200 bg-white text-amber-950',
+                                    'error' => 'border-rose-200 bg-white text-rose-900',
+                                    default => 'border-slate-200 bg-white text-slate-700',
+                                };
+                            @endphp
+                            <div class="rounded-xl border px-3 py-2 text-xs {{ $scanStatusClass }}">
+                                <div class="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <div class="font-semibold text-slate-950">
+                                            {{ $connectionScan->publicProfile?->display_name ?: '@'.$connectionScan->public_username }}
+                                            <span class="font-normal text-slate-500">({{ '@'.$connectionScan->public_username }})</span>
+                                        </div>
+                                        <div class="mt-1">{{ $connectionScan->relation_label }}</div>
+                                        @if($connectionScan->status_message)
+                                            <div class="mt-1 text-slate-500">{{ $connectionScan->status_message }}</div>
+                                        @endif
+                                    </div>
+                                    <div class="text-right text-slate-500">
+                                        <div>{{ $connectionScan->analyzed_at ? $connectionScan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</div>
+                                        <div class="mt-1">
+                                            Follower {{ $connectionScan->followers_observed_count ?? 0 }}
+                                            / Gefolgt {{ $connectionScan->following_observed_count ?? 0 }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        @empty
+                            <p class="text-sm text-slate-500">Noch keine Public-Profile-Listenverbindungen analysiert.</p>
+                        @endforelse
                     </div>
                 </div>
             </div>

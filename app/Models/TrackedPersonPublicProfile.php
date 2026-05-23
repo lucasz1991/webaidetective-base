@@ -5,6 +5,8 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Str;
 
 class TrackedPersonPublicProfile extends Model
@@ -41,6 +43,17 @@ class TrackedPersonPublicProfile extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function instagramConnectionScans(): HasMany
+    {
+        return $this->hasMany(TrackedPersonInstagramPublicProfileScan::class, 'public_profile_id');
+    }
+
+    public function latestInstagramConnectionScan(): HasOne
+    {
+        return $this->hasOne(TrackedPersonInstagramPublicProfileScan::class, 'public_profile_id')
+            ->latestOfMany('analyzed_at');
     }
 
     public function getResolvedProfileUrlAttribute(): ?string
