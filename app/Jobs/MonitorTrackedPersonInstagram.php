@@ -10,6 +10,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class MonitorTrackedPersonInstagram implements ShouldQueue
@@ -22,10 +23,66 @@ class MonitorTrackedPersonInstagram implements ShouldQueue
         public readonly int $trackedPersonId,
         public readonly bool $force = false,
         public readonly bool $sendNotifications = true,
+        public readonly bool $fullScan = false,
     ) {
     }
 
+    public static function dispatchFullScanIfNotQueued(int $trackedPersonId, bool $sendNotifications = true): bool
+    {
+        $lockKey = self::fullScanQueueCacheKey($trackedPersonId);
+
+        if (! Cache::add($lockKey, now()->toIso8601String(), now()->addHours(2))) {
+            return false;
+        }
+
+        try {
+            TrackedPerson::query()
+                ->whereKey($trackedPersonId)
+                ->update([
+                    'last_instagram_status_level' => 'partial',
+                    'last_instagram_status_message' => 'Follower-/Gefolgt-Aenderung erkannt; Instagram-Vollanalyse wurde als Hintergrund-Job eingereiht.',
+                ]);
+
+            self::dispatch($trackedPersonId, true, $sendNotifications, true);
+
+            return true;
+        } catch (\Throwable $exception) {
+            Cache::forget($lockKey);
+
+            throw $exception;
+        }
+    }
+
+    public static function shouldRunFullScanAfterSnapshot($snapshot): bool
+    {
+        if (data_get($snapshot?->raw_payload, 'analysisPolicy.scanMode') !== 'mini') {
+            return false;
+        }
+
+        return collect($snapshot?->detected_changes ?? [])
+            ->pluck('field')
+            ->contains(fn ($field) => in_array($field, [
+                'followers_count',
+                'following_count',
+                'followers_list_added',
+                'followers_list_removed',
+                'following_list_added',
+                'following_list_removed',
+            ], true));
+    }
+
     public function handle(): void
+    {
+        try {
+            $this->run();
+        } finally {
+            if ($this->fullScan) {
+                Cache::forget(self::fullScanQueueCacheKey($this->trackedPersonId));
+            }
+        }
+    }
+
+    private function run(): void
     {
         $trackedPerson = TrackedPerson::query()
             ->with('user')
@@ -40,23 +97,45 @@ class MonitorTrackedPersonInstagram implements ShouldQueue
         }
 
         try {
+            $scanLabel = $this->fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan';
+
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'partial',
-                'last_instagram_status_message' => 'Instagram-Mini-Scan laeuft im Hintergrund.',
+                'last_instagram_status_message' => $scanLabel.' laeuft im Hintergrund.',
             ])->save();
 
-            $snapshot = $trackedPerson->analyzeInstagram();
+            $snapshot = $trackedPerson->analyzeInstagram(null, $this->fullScan);
         } catch (\Throwable $exception) {
             Log::warning('Monitoring fuer getrackte Person fehlgeschlagen.', [
                 'tracked_person_id' => $trackedPerson->id,
                 'instagram_username' => $trackedPerson->instagram_username,
+                'full_scan' => $this->fullScan,
                 'error' => $exception->getMessage(),
             ]);
 
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => 'Instagram-Analyse fehlgeschlagen: '.$exception->getMessage(),
+                'last_instagram_status_message' => ($this->fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
             ])->save();
+
+            return;
+        }
+
+        if (! $this->fullScan && self::shouldRunFullScanAfterSnapshot($snapshot)) {
+            $queued = self::dispatchFullScanIfNotQueued($trackedPerson->id, $this->sendNotifications);
+
+            if (! $queued) {
+                $trackedPerson->forceFill([
+                    'last_instagram_status_level' => 'partial',
+                    'last_instagram_status_message' => 'Follower-/Gefolgt-Aenderung erkannt; Instagram-Vollanalyse ist bereits eingereiht oder laeuft.',
+                ])->save();
+            }
+
+            Log::info('Follower-/Gefolgt-Aenderung erkannt; Vollanalyse wurde nach Mini-Scan behandelt.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'instagram_username' => $trackedPerson->instagram_username,
+                'queued' => $queued,
+            ]);
 
             return;
         }
@@ -97,6 +176,11 @@ class MonitorTrackedPersonInstagram implements ShouldQueue
         $type = strtolower((string) ($trackedPerson->notification_delivery_type ?: 'both'));
 
         return in_array($type, ['message', 'mail', 'both'], true) ? $type : 'both';
+    }
+
+    private static function fullScanQueueCacheKey(int $trackedPersonId): string
+    {
+        return 'tracked-person-instagram-full-scan:'.$trackedPersonId;
     }
 
     private function buildNotificationMessage(TrackedPerson $trackedPerson, $snapshot): string

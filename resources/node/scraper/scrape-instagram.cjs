@@ -378,6 +378,7 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
     persistentProfileEnabled: isLoginSessionMode && input?.persistentProfileEnabled !== false,
     headlessEnabled: input?.headlessEnabled !== false,
     autoLoginEnabled: input?.autoLoginEnabled === true,
+    miniScanUseSession: input?.miniScanUseSession === true || input?.mini_scan_use_session === true,
     navigationTimeoutMs: Math.max(30000, Number(input?.navigationTimeoutMs || merged.navigationTimeoutMs || 120000)),
     postLoginWaitMs: Math.max(500, Number(input?.postLoginWaitMs || merged.postLoginWaitMs || 2500)),
     typingDelayMs: Math.max(0, Number(input?.typingDelayMs || merged.typingDelayMs || 0)),
@@ -466,6 +467,7 @@ function loadRuntimeConfig(configPath) {
     cookieFilePath: path.resolve(__dirname, '../../../storage/app/cookies/instagram-cookies.json'),
     headlessEnabled: true,
     autoLoginEnabled: false,
+    miniScanUseSession: false,
     loginUsername: '',
     loginPassword: '',
     loginPasswordConfigured: false,
@@ -3635,7 +3637,9 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
 
     let sessionEstablished = false;
 
-    if (isMiniScanMode) {
+    const miniScanUsesSession = isMiniScanMode && runtimeConfig.miniScanUseSession === true;
+
+    if (isMiniScanMode && !miniScanUsesSession) {
       notes.push('Mini-Scan aktiv: oeffentliche Profildaten werden ohne Instagram-Anmeldung ausgelesen.');
       cookieDiagnostics = {
         loaded: false,
@@ -3876,7 +3880,7 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
 
     fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
 
-    if (isMiniScanMode) {
+    if (isMiniScanMode && !miniScanUsesSession) {
       notes.push('Cookies wurden im Mini-Scan nicht geladen oder gespeichert.');
     } else if (runtimeState.cookieSaveDisabled) {
       notes.push('Cookies wurden nicht gespeichert, weil der Account-Wechsel keine stabile Session herstellen konnte.');

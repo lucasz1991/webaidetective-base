@@ -21,10 +21,13 @@ class InstagramProfileDataExtractor
             'html_document' => $html,
             'profile_counts' => data_get($payload, 'profile.counts', []),
         ], in_array($operationMode, ['mini', 'mini-scan', 'public', 'public-profile'], true));
+        $privacy = $this->extractPrivacyStatus($payload, $html, $bodyTextPreview, $description, $ogTitle);
 
         return [
             'full_name' => $this->extractFullName($ogTitle),
             'biography' => $this->extractBiography($description),
+            'is_private' => $privacy['is_private'],
+            'profile_visibility' => $privacy['visibility'],
             'posts_count' => $counts['posts'],
             'followers_count' => $counts['followers'],
             'following_count' => $counts['following'],
@@ -35,6 +38,40 @@ class InstagramProfileDataExtractor
             'image_urls' => $this->extractImageUrls($html, $profileImageUrl),
             'followers_list' => $this->extractFollowersList($payload),
             'following_list' => $this->extractFollowingList($payload),
+        ];
+    }
+
+    private function extractPrivacyStatus(
+        array $payload,
+        string $html,
+        string $bodyTextPreview,
+        string $description,
+        string $ogTitle,
+    ): array {
+        $rawIsPrivate = data_get($payload, 'profile.isPrivate');
+        $requiresLogin = (bool) data_get($payload, 'profile.requiresLogin', false);
+        $usernameSeen = (bool) data_get($payload, 'profile.usernameSeen', false);
+        $scrapeOk = (bool) ($payload['ok'] ?? false);
+        $combinedText = $this->normalizeSourceText($bodyTextPreview.' '.$description.' '.$ogTitle.' '.strip_tags($html));
+        $privatePattern = '/dieses profil ist privat|this account is private|private account|privates profil/i';
+
+        if ($rawIsPrivate === true || preg_match($privatePattern, $combinedText)) {
+            return [
+                'is_private' => true,
+                'visibility' => 'private',
+            ];
+        }
+
+        if ($rawIsPrivate === false && ($usernameSeen || ($scrapeOk && ! $requiresLogin))) {
+            return [
+                'is_private' => false,
+                'visibility' => 'public',
+            ];
+        }
+
+        return [
+            'is_private' => null,
+            'visibility' => 'unknown',
         ];
     }
 

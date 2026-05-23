@@ -2,6 +2,7 @@
 
 namespace App\Livewire\User;
 
+use App\Jobs\MonitorTrackedPersonInstagram;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
 use Illuminate\Support\Facades\Auth;
@@ -188,9 +189,22 @@ class TrackedPersonDetail extends Component
             return;
         }
 
+        $queuedFullScan = false;
+
+        if (! $fullScan && MonitorTrackedPersonInstagram::shouldRunFullScanAfterSnapshot($snapshot)) {
+            $queuedFullScan = MonitorTrackedPersonInstagram::dispatchFullScanIfNotQueued($trackedPerson->id, true);
+
+            if (! $queuedFullScan) {
+                $trackedPerson->forceFill([
+                    'last_instagram_status_level' => 'partial',
+                    'last_instagram_status_message' => 'Follower-/Gefolgt-Aenderung erkannt; Instagram-Vollanalyse ist bereits eingereiht oder laeuft.',
+                ])->save();
+            }
+        }
+
         $this->fillFormFromModel($trackedPerson->fresh());
         $this->setDetailStatus(
-            ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' abgeschlossen: '.$snapshot->status_message,
+            ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' abgeschlossen: '.$snapshot->status_message.($queuedFullScan ? ' Eine Vollanalyse wurde als Hintergrund-Job eingereiht.' : ''),
             $snapshot->status_level === 'success' ? 'success' : ($snapshot->status_level === 'partial' ? 'partial' : 'error'),
         );
         $this->dispatch('tracked-person-refresh');

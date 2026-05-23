@@ -14,6 +14,50 @@
         $latestLoginDiagnostics = data_get($latestSnapshot?->raw_payload, 'loginDiagnostics', []);
         $latestFollowersList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followersList', []);
         $latestFollowingList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followingList', []);
+        $relationshipSearchText = function ($item) {
+            return \Illuminate\Support\Str::lower(trim(data_get($item, 'username', '').' '.data_get($item, 'displayName', '')));
+        };
+        $relationshipTimestamp = function ($item, array $keys = ['firstSeenAt', 'lastSeenAt', 'removedAt']) {
+            foreach ($keys as $key) {
+                $value = data_get($item, $key);
+
+                if (! filled($value)) {
+                    continue;
+                }
+
+                try {
+                    return \Illuminate\Support\Carbon::parse($value)->timestamp;
+                } catch (\Throwable) {
+                    continue;
+                }
+            }
+
+            return 0;
+        };
+        $sortRelationshipItemsNewest = function (\Illuminate\Support\Collection $items, array $keys = ['firstSeenAt', 'lastSeenAt', 'removedAt']) use ($relationshipTimestamp) {
+            return $items
+                ->values()
+                ->sortByDesc(fn ($item, $index) => sprintf('%020d.%06d', $relationshipTimestamp($item, $keys), 999999 - $index))
+                ->values();
+        };
+        $sortRelationshipActiveItems = function (\Illuminate\Support\Collection $items, \Illuminate\Support\Collection $addedItems) use ($relationshipTimestamp) {
+            $addedUsernames = $addedItems
+                ->pluck('username')
+                ->filter()
+                ->map(fn ($username) => \Illuminate\Support\Str::lower((string) $username))
+                ->flip();
+
+            return $items
+                ->values()
+                ->sortByDesc(function ($item, $index) use ($addedUsernames, $relationshipTimestamp) {
+                    $username = \Illuminate\Support\Str::lower((string) data_get($item, 'username', ''));
+                    $isAdded = $addedUsernames->has($username) ? 1 : 0;
+                    $timestamp = $relationshipTimestamp($item, ['firstSeenAt', 'lastSeenAt', 'removedAt']);
+
+                    return sprintf('%d.%020d.%06d', $isAdded, $timestamp, 999999 - $index);
+                })
+                ->values();
+        };
         $loadRelationshipItems = function (array $relationshipList, string $key = 'items') {
             $items = collect(data_get($relationshipList, $key, []));
             $itemsPath = data_get($relationshipList, 'itemsPath');
@@ -37,12 +81,16 @@
                 return collect();
             }
         };
-        $latestFollowerItems = $loadRelationshipItems($latestFollowersList);
-        $latestFollowingItems = $loadRelationshipItems($latestFollowingList);
-        $latestFollowerRemovedItems = $loadRelationshipItems($latestFollowersList, 'currentlyRemovedItems');
-        $latestFollowingRemovedItems = $loadRelationshipItems($latestFollowingList, 'currentlyRemovedItems');
-        $latestFollowerRemovedHistoryItems = $loadRelationshipItems($latestFollowersList, 'removedHistoryItems');
-        $latestFollowingRemovedHistoryItems = $loadRelationshipItems($latestFollowingList, 'removedHistoryItems');
+        $latestFollowerAddedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowersList, 'addedItems'));
+        $latestFollowingAddedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowingList, 'addedItems'));
+        $latestFollowerItems = $sortRelationshipActiveItems($loadRelationshipItems($latestFollowersList), $latestFollowerAddedItems);
+        $latestFollowingItems = $sortRelationshipActiveItems($loadRelationshipItems($latestFollowingList), $latestFollowingAddedItems);
+        $latestFollowerScanRemovedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowersList, 'removedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
+        $latestFollowingScanRemovedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowingList, 'removedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
+        $latestFollowerRemovedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowersList, 'currentlyRemovedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
+        $latestFollowingRemovedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowingList, 'currentlyRemovedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
+        $latestFollowerRemovedHistoryItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowersList, 'removedHistoryItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
+        $latestFollowingRemovedHistoryItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowingList, 'removedHistoryItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
         $relationshipStats = function (array $relationshipList, \Illuminate\Support\Collection $items) {
             return [
                 'activeCount' => (int) data_get($relationshipList, 'activeCount', data_get($relationshipList, 'count', $items->count())),
@@ -55,6 +103,12 @@
         $latestFollowerStats = $relationshipStats($latestFollowersList, $latestFollowerItems);
         $latestFollowingStats = $relationshipStats($latestFollowingList, $latestFollowingItems);
         $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
+        $latestProfileVisibility = data_get($latestSnapshot?->raw_payload, 'extractedProfile.profileVisibility');
+        $latestProfileVisibilityLabel = match ($latestProfileVisibility) {
+            'public' => 'Oeffentlich',
+            'private' => 'Privat',
+            default => 'Unbekannt',
+        };
         $countSourceLabels = [
             'body_text_preview' => 'sichtbarer Profiltext',
             'profile_dom' => 'sichtbarer Profil-DOM',
@@ -249,7 +303,7 @@
     </section>
 
     <x-modal wire:model="showFollowersModal" maxWidth="3xl">
-        <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
+        <div x-data="{ search: '', showAdded: false, showScanRemoved: false, showCurrentRemoved: false, showHistory: false }" class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Followerliste</h3>
@@ -276,20 +330,99 @@
             </div>
 
             <div class="overflow-y-auto p-4 sm:p-5">
-                @if((int) data_get($latestFollowersList, 'addedCount', 0) > 0 || (int) data_get($latestFollowersList, 'removedCount', 0) > 0)
+                <div class="mb-4 flex flex-col gap-2 lg:flex-row">
+                    <div class="min-w-0 flex-1">
+                        <label class="sr-only" for="followers-search">Followerliste durchsuchen</label>
+                        <input
+                            id="followers-search"
+                            type="search"
+                            x-model.debounce.150ms="search"
+                            class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                            placeholder="Followerliste durchsuchen..."
+                        >
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        @if($latestFollowerAddedItems->isNotEmpty())
+                            <button type="button" x-on:click="showAdded = ! showAdded" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">
+                                Neu {{ number_format($latestFollowerAddedItems->count()) }}
+                            </button>
+                        @endif
+                        @if($latestFollowerScanRemovedItems->isNotEmpty())
+                            <button type="button" x-on:click="showScanRemoved = ! showScanRemoved" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800 hover:bg-rose-100">
+                                Entfernt {{ number_format($latestFollowerScanRemovedItems->count()) }}
+                            </button>
+                        @endif
+                        @if($latestFollowerRemovedItems->isNotEmpty())
+                            <button type="button" x-on:click="showCurrentRemoved = ! showCurrentRemoved" class="rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-800 hover:bg-rose-50">
+                                Aktuell entfernt {{ number_format($latestFollowerRemovedItems->count()) }}
+                            </button>
+                        @endif
+                        @if($latestFollowerRemovedHistoryItems->isNotEmpty())
+                            <button type="button" x-on:click="showHistory = ! showHistory" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                                Historie {{ number_format($latestFollowerRemovedHistoryItems->count()) }}
+                            </button>
+                        @endif
+                    </div>
+                </div>
+
+                @if($latestFollowerAddedItems->isNotEmpty() || $latestFollowerScanRemovedItems->isNotEmpty())
                     <div class="mb-4 grid gap-3 md:grid-cols-2">
-                        <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
-                            <div class="font-semibold">{{ number_format((int) data_get($latestFollowersList, 'addedCount', 0)) }} hinzugefuegt</div>
-                            <div class="mt-1 break-words">
-                                {{ collect(data_get($latestFollowersList, 'addedPreview', []))->pluck('username')->map(fn ($username) => '@'.$username)->implode(', ') ?: 'Keine neuen Eintraege' }}
-                            </div>
-                        </div>
-                        <div class="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900">
-                            <div class="font-semibold">{{ number_format((int) data_get($latestFollowersList, 'removedCount', 0)) }} entfernt</div>
-                            <div class="mt-1 break-words">
-                                {{ collect(data_get($latestFollowersList, 'removedPreview', []))->pluck('username')->map(fn ($username) => '@'.$username)->implode(', ') ?: 'Keine entfernten Eintraege' }}
-                            </div>
-                        </div>
+                        @if($latestFollowerAddedItems->isNotEmpty())
+                            <details x-bind:open="search !== '' || showAdded" class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
+                                <summary class="cursor-pointer font-semibold">
+                                    {{ number_format($latestFollowerAddedItems->count()) }} neu hinzugefuegt
+                                </summary>
+                                <div class="mt-3 space-y-2">
+                                    @foreach($latestFollowerAddedItems as $addedFollower)
+                                        <div
+                                            data-relationship-search="{{ e($relationshipSearchText($addedFollower)) }}"
+                                            x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
+                                            class="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-white px-4 py-3 text-sm"
+                                        >
+                                            <div class="min-w-0">
+                                                <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($addedFollower, 'username') }}</div>
+                                                @if(data_get($addedFollower, 'displayName'))
+                                                    <div class="mt-0.5 truncate text-slate-500">{{ data_get($addedFollower, 'displayName') }}</div>
+                                                @endif
+                                            </div>
+                                            @if(data_get($addedFollower, 'profileUrl'))
+                                                <a href="{{ data_get($addedFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50">
+                                                    Oeffnen
+                                                </a>
+                                            @endif
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </details>
+                        @endif
+                        @if($latestFollowerScanRemovedItems->isNotEmpty())
+                            <details x-bind:open="search !== '' || showScanRemoved" class="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950">
+                                <summary class="cursor-pointer font-semibold">
+                                    {{ number_format($latestFollowerScanRemovedItems->count()) }} neu entfernt
+                                </summary>
+                                <div class="mt-3 space-y-2">
+                                    @foreach($latestFollowerScanRemovedItems as $removedFollower)
+                                        <div
+                                            data-relationship-search="{{ e($relationshipSearchText($removedFollower)) }}"
+                                            x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
+                                            class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm"
+                                        >
+                                            <div class="min-w-0">
+                                                <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedFollower, 'username') }}</div>
+                                                @if(data_get($removedFollower, 'displayName'))
+                                                    <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedFollower, 'displayName') }}</div>
+                                                @endif
+                                            </div>
+                                            @if(data_get($removedFollower, 'profileUrl'))
+                                                <a href="{{ data_get($removedFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
+                                                    Oeffnen
+                                                </a>
+                                            @endif
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </details>
+                        @endif
                     </div>
                 @endif
                 @if(data_get($latestFollowersList, 'attempted') && ! data_get($latestFollowersList, 'complete') && (int) data_get($latestFollowersList, 'expectedCount', 0) > 0)
@@ -302,13 +435,73 @@
                         @endif
                     </div>
                 @endif
-
+                
                 @if($latestFollowerItems->isNotEmpty() || $latestFollowerRemovedItems->isNotEmpty() || $latestFollowerRemovedHistoryItems->isNotEmpty())
+                @if($latestFollowerRemovedItems->isNotEmpty())
+                    <details x-bind:open="search !== '' || showCurrentRemoved" class="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950">
+                        <summary class="cursor-pointer font-semibold">
+                            {{ number_format($latestFollowerRemovedItems->count()) }} aktuell entfernt
+                        </summary>
+                        <div class="mt-3 space-y-2">
+                            @foreach($latestFollowerRemovedItems as $removedFollower)
+                                <div
+                                    data-relationship-search="{{ e($relationshipSearchText($removedFollower)) }}"
+                                    x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
+                                    class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm"
+                                >
+                                    <div class="min-w-0">
+                                        <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedFollower, 'username') }}</div>
+                                        @if(data_get($removedFollower, 'displayName'))
+                                            <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedFollower, 'displayName') }}</div>
+                                        @endif
+                                    </div>
+                                    @if(data_get($removedFollower, 'profileUrl'))
+                                        <a href="{{ data_get($removedFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
+                                            Oeffnen
+                                        </a>
+                                    @endif
+                                </div>
+                            @endforeach
+                        </div>
+                    </details>
+                @endif
+                @if($latestFollowerRemovedHistoryItems->isNotEmpty())
+                    <details x-bind:open="search !== '' || showHistory" class="mt-4 mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+                        <summary class="cursor-pointer font-semibold">
+                            {{ number_format($latestFollowerRemovedHistoryItems->count()) }} dauerhaft in der Entfernt-Historie
+                        </summary>
+                        <div class="mt-3 space-y-2">
+                            @foreach($latestFollowerRemovedHistoryItems as $historyFollower)
+                                <div
+                                    data-relationship-search="{{ e($relationshipSearchText($historyFollower)) }}"
+                                    x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
+                                    class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm"
+                                >
+                                    <div class="min-w-0">
+                                        <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($historyFollower, 'username') }}</div>
+                                        @if(data_get($historyFollower, 'displayName'))
+                                            <div class="mt-0.5 truncate text-slate-500">{{ data_get($historyFollower, 'displayName') }}</div>
+                                        @endif
+                                    </div>
+                                    @if(data_get($historyFollower, 'profileUrl'))
+                                        <a href="{{ data_get($historyFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                                            Oeffnen
+                                        </a>
+                                    @endif
+                                </div>
+                            @endforeach
+                        </div>
+                    </details>
+                @endif
                     @if($latestFollowerItems->isNotEmpty())
                         <h4 class="mb-2 text-sm font-bold text-slate-900">Aktive und ungeklaerte Follower</h4>
                         <div class="space-y-2">
                             @foreach($latestFollowerItems as $follower)
-                                <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+                                <div
+                                    data-relationship-search="{{ e($relationshipSearchText($follower)) }}"
+                                    x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
+                                    class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+                                >
                                     <div class="min-w-0">
                                         <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($follower, 'username') }}</div>
                                         @if(data_get($follower, 'displayName'))
@@ -324,54 +517,6 @@
                             @endforeach
                         </div>
                     @endif
-                    @if($latestFollowerRemovedItems->isNotEmpty())
-                        <details class="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950">
-                            <summary class="cursor-pointer font-semibold">
-                                {{ number_format($latestFollowerRemovedItems->count()) }} aktuell entfernt
-                            </summary>
-                            <div class="mt-3 space-y-2">
-                                @foreach($latestFollowerRemovedItems as $removedFollower)
-                                    <div class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm">
-                                        <div class="min-w-0">
-                                            <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedFollower, 'username') }}</div>
-                                            @if(data_get($removedFollower, 'displayName'))
-                                                <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedFollower, 'displayName') }}</div>
-                                            @endif
-                                        </div>
-                                        @if(data_get($removedFollower, 'profileUrl'))
-                                            <a href="{{ data_get($removedFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
-                                                Oeffnen
-                                            </a>
-                                        @endif
-                                    </div>
-                                @endforeach
-                            </div>
-                        </details>
-                    @endif
-                    @if($latestFollowerRemovedHistoryItems->isNotEmpty())
-                        <details class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
-                            <summary class="cursor-pointer font-semibold">
-                                {{ number_format($latestFollowerRemovedHistoryItems->count()) }} dauerhaft in der Entfernt-Historie
-                            </summary>
-                            <div class="mt-3 space-y-2">
-                                @foreach($latestFollowerRemovedHistoryItems as $historyFollower)
-                                    <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
-                                        <div class="min-w-0">
-                                            <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($historyFollower, 'username') }}</div>
-                                            @if(data_get($historyFollower, 'displayName'))
-                                                <div class="mt-0.5 truncate text-slate-500">{{ data_get($historyFollower, 'displayName') }}</div>
-                                            @endif
-                                        </div>
-                                        @if(data_get($historyFollower, 'profileUrl'))
-                                            <a href="{{ data_get($historyFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                                                Oeffnen
-                                            </a>
-                                        @endif
-                                    </div>
-                                @endforeach
-                            </div>
-                        </details>
-                    @endif
                 @else
                     <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                         Keine Followerliste gespeichert.
@@ -385,7 +530,7 @@
     </x-modal>
 
     <x-modal wire:model="showFollowingModal" maxWidth="3xl">
-        <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
+        <div x-data="{ search: '', showAdded: false, showScanRemoved: false, showCurrentRemoved: false, showHistory: false }" class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Gefolgt-Liste</h3>
@@ -412,20 +557,99 @@
             </div>
 
             <div class="overflow-y-auto p-4 sm:p-5">
-                @if((int) data_get($latestFollowingList, 'addedCount', 0) > 0 || (int) data_get($latestFollowingList, 'removedCount', 0) > 0)
+                <div class="mb-4 flex flex-col gap-2 lg:flex-row">
+                    <div class="min-w-0 flex-1">
+                        <label class="sr-only" for="following-search">Gefolgt-Liste durchsuchen</label>
+                        <input
+                            id="following-search"
+                            type="search"
+                            x-model.debounce.150ms="search"
+                            class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                            placeholder="Gefolgt-Liste durchsuchen..."
+                        >
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        @if($latestFollowingAddedItems->isNotEmpty())
+                            <button type="button" x-on:click="showAdded = ! showAdded" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">
+                                Neu {{ number_format($latestFollowingAddedItems->count()) }}
+                            </button>
+                        @endif
+                        @if($latestFollowingScanRemovedItems->isNotEmpty())
+                            <button type="button" x-on:click="showScanRemoved = ! showScanRemoved" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800 hover:bg-rose-100">
+                                Entfernt {{ number_format($latestFollowingScanRemovedItems->count()) }}
+                            </button>
+                        @endif
+                        @if($latestFollowingRemovedItems->isNotEmpty())
+                            <button type="button" x-on:click="showCurrentRemoved = ! showCurrentRemoved" class="rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-800 hover:bg-rose-50">
+                                Aktuell entfernt {{ number_format($latestFollowingRemovedItems->count()) }}
+                            </button>
+                        @endif
+                        @if($latestFollowingRemovedHistoryItems->isNotEmpty())
+                            <button type="button" x-on:click="showHistory = ! showHistory" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                                Historie {{ number_format($latestFollowingRemovedHistoryItems->count()) }}
+                            </button>
+                        @endif
+                    </div>
+                </div>
+
+                @if($latestFollowingAddedItems->isNotEmpty() || $latestFollowingScanRemovedItems->isNotEmpty())
                     <div class="mb-4 grid gap-3 md:grid-cols-2">
-                        <div class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900">
-                            <div class="font-semibold">{{ number_format((int) data_get($latestFollowingList, 'addedCount', 0)) }} hinzugefuegt</div>
-                            <div class="mt-1 break-words">
-                                {{ collect(data_get($latestFollowingList, 'addedPreview', []))->pluck('username')->map(fn ($username) => '@'.$username)->implode(', ') ?: 'Keine neuen Eintraege' }}
-                            </div>
-                        </div>
-                        <div class="rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900">
-                            <div class="font-semibold">{{ number_format((int) data_get($latestFollowingList, 'removedCount', 0)) }} entfernt</div>
-                            <div class="mt-1 break-words">
-                                {{ collect(data_get($latestFollowingList, 'removedPreview', []))->pluck('username')->map(fn ($username) => '@'.$username)->implode(', ') ?: 'Keine entfernten Eintraege' }}
-                            </div>
-                        </div>
+                        @if($latestFollowingAddedItems->isNotEmpty())
+                            <details x-bind:open="search !== '' || showAdded" class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
+                                <summary class="cursor-pointer font-semibold">
+                                    {{ number_format($latestFollowingAddedItems->count()) }} neu hinzugefuegt
+                                </summary>
+                                <div class="mt-3 space-y-2">
+                                    @foreach($latestFollowingAddedItems as $addedProfile)
+                                        <div
+                                            data-relationship-search="{{ e($relationshipSearchText($addedProfile)) }}"
+                                            x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
+                                            class="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-white px-4 py-3 text-sm"
+                                        >
+                                            <div class="min-w-0">
+                                                <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($addedProfile, 'username') }}</div>
+                                                @if(data_get($addedProfile, 'displayName'))
+                                                    <div class="mt-0.5 truncate text-slate-500">{{ data_get($addedProfile, 'displayName') }}</div>
+                                                @endif
+                                            </div>
+                                            @if(data_get($addedProfile, 'profileUrl'))
+                                                <a href="{{ data_get($addedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50">
+                                                    Oeffnen
+                                                </a>
+                                            @endif
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </details>
+                        @endif
+                        @if($latestFollowingScanRemovedItems->isNotEmpty())
+                            <details x-bind:open="search !== '' || showScanRemoved" class="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950">
+                                <summary class="cursor-pointer font-semibold">
+                                    {{ number_format($latestFollowingScanRemovedItems->count()) }} neu entfernt
+                                </summary>
+                                <div class="mt-3 space-y-2">
+                                    @foreach($latestFollowingScanRemovedItems as $removedProfile)
+                                        <div
+                                            data-relationship-search="{{ e($relationshipSearchText($removedProfile)) }}"
+                                            x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
+                                            class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm"
+                                        >
+                                            <div class="min-w-0">
+                                                <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedProfile, 'username') }}</div>
+                                                @if(data_get($removedProfile, 'displayName'))
+                                                    <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedProfile, 'displayName') }}</div>
+                                                @endif
+                                            </div>
+                                            @if(data_get($removedProfile, 'profileUrl'))
+                                                <a href="{{ data_get($removedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
+                                                    Oeffnen
+                                                </a>
+                                            @endif
+                                        </div>
+                                    @endforeach
+                                </div>
+                            </details>
+                        @endif
                     </div>
                 @endif
                 @if(data_get($latestFollowingList, 'attempted') && ! data_get($latestFollowingList, 'complete') && (int) data_get($latestFollowingList, 'expectedCount', 0) > 0)
@@ -440,11 +664,71 @@
                 @endif
 
                 @if($latestFollowingItems->isNotEmpty() || $latestFollowingRemovedItems->isNotEmpty() || $latestFollowingRemovedHistoryItems->isNotEmpty())
+                @if($latestFollowingRemovedItems->isNotEmpty())
+                    <details x-bind:open="search !== '' || showCurrentRemoved" class="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950">
+                        <summary class="cursor-pointer font-semibold">
+                            {{ number_format($latestFollowingRemovedItems->count()) }} aktuell entfernt
+                        </summary>
+                        <div class="mt-3 space-y-2">
+                            @foreach($latestFollowingRemovedItems as $removedProfile)
+                                <div
+                                    data-relationship-search="{{ e($relationshipSearchText($removedProfile)) }}"
+                                    x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
+                                    class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm"
+                                >
+                                    <div class="min-w-0">
+                                        <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedProfile, 'username') }}</div>
+                                        @if(data_get($removedProfile, 'displayName'))
+                                            <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedProfile, 'displayName') }}</div>
+                                        @endif
+                                    </div>
+                                    @if(data_get($removedProfile, 'profileUrl'))
+                                        <a href="{{ data_get($removedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
+                                            Oeffnen
+                                        </a>
+                                    @endif
+                                </div>
+                            @endforeach
+                        </div>
+                    </details>
+                @endif
+                @if($latestFollowingRemovedHistoryItems->isNotEmpty())
+                    <details x-bind:open="search !== '' || showHistory" class="mt-4 mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
+                        <summary class="cursor-pointer font-semibold">
+                            {{ number_format($latestFollowingRemovedHistoryItems->count()) }} dauerhaft in der Entfernt-Historie
+                        </summary>
+                        <div class="mt-3 space-y-2">
+                            @foreach($latestFollowingRemovedHistoryItems as $historyProfile)
+                                <div
+                                    data-relationship-search="{{ e($relationshipSearchText($historyProfile)) }}"
+                                    x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
+                                    class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm"
+                                >
+                                    <div class="min-w-0">
+                                        <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($historyProfile, 'username') }}</div>
+                                        @if(data_get($historyProfile, 'displayName'))
+                                            <div class="mt-0.5 truncate text-slate-500">{{ data_get($historyProfile, 'displayName') }}</div>
+                                        @endif
+                                    </div>
+                                    @if(data_get($historyProfile, 'profileUrl'))
+                                        <a href="{{ data_get($historyProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                                            Oeffnen
+                                        </a>
+                                    @endif
+                                </div>
+                            @endforeach
+                        </div>
+                    </details>
+                @endif
                     @if($latestFollowingItems->isNotEmpty())
                         <h4 class="mb-2 text-sm font-bold text-slate-900">Aktive und ungeklaerte Gefolgt-Profile</h4>
                         <div class="space-y-2">
                             @foreach($latestFollowingItems as $followedProfile)
-                                <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm">
+                                <div
+                                    data-relationship-search="{{ e($relationshipSearchText($followedProfile)) }}"
+                                    x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
+                                    class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+                                >
                                     <div class="min-w-0">
                                         <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($followedProfile, 'username') }}</div>
                                         @if(data_get($followedProfile, 'displayName'))
@@ -459,54 +743,6 @@
                                 </div>
                             @endforeach
                         </div>
-                    @endif
-                    @if($latestFollowingRemovedItems->isNotEmpty())
-                        <details class="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-950">
-                            <summary class="cursor-pointer font-semibold">
-                                {{ number_format($latestFollowingRemovedItems->count()) }} aktuell entfernt
-                            </summary>
-                            <div class="mt-3 space-y-2">
-                                @foreach($latestFollowingRemovedItems as $removedProfile)
-                                    <div class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm">
-                                        <div class="min-w-0">
-                                            <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedProfile, 'username') }}</div>
-                                            @if(data_get($removedProfile, 'displayName'))
-                                                <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedProfile, 'displayName') }}</div>
-                                            @endif
-                                        </div>
-                                        @if(data_get($removedProfile, 'profileUrl'))
-                                            <a href="{{ data_get($removedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
-                                                Oeffnen
-                                            </a>
-                                        @endif
-                                    </div>
-                                @endforeach
-                            </div>
-                        </details>
-                    @endif
-                    @if($latestFollowingRemovedHistoryItems->isNotEmpty())
-                        <details class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-800">
-                            <summary class="cursor-pointer font-semibold">
-                                {{ number_format($latestFollowingRemovedHistoryItems->count()) }} dauerhaft in der Entfernt-Historie
-                            </summary>
-                            <div class="mt-3 space-y-2">
-                                @foreach($latestFollowingRemovedHistoryItems as $historyProfile)
-                                    <div class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm">
-                                        <div class="min-w-0">
-                                            <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($historyProfile, 'username') }}</div>
-                                            @if(data_get($historyProfile, 'displayName'))
-                                                <div class="mt-0.5 truncate text-slate-500">{{ data_get($historyProfile, 'displayName') }}</div>
-                                            @endif
-                                        </div>
-                                        @if(data_get($historyProfile, 'profileUrl'))
-                                            <a href="{{ data_get($historyProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                                                Oeffnen
-                                            </a>
-                                        @endif
-                                    </div>
-                                @endforeach
-                            </div>
-                        </details>
                     @endif
                 @else
                     <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
@@ -854,6 +1090,7 @@
 
                     <div class="mt-3 grid gap-2 text-sm text-slate-700">
                         <p><span class="font-semibold">Profilname:</span> {{ $latestSnapshot->full_name ?: '—' }}</p>
+                        <p><span class="font-semibold">Profilstatus:</span> {{ $latestProfileVisibilityLabel }}</p>
                         <p><span class="font-semibold">Bio:</span> {{ $latestSnapshot->biography ?: '—' }}</p>
                         <p><span class="font-semibold">Follower-Quelle:</span> {{ $resolveCountSourceLabel($latestCountSources['followers'] ?? null) }}</p>
                         <p><span class="font-semibold">Gefolgt-Quelle:</span> {{ $resolveCountSourceLabel($latestCountSources['following'] ?? null) }}</p>

@@ -175,36 +175,66 @@ class TrackedPersonInstagramAnalysisService
             'message' => 'Oeffentliche Instagram-Grunddaten werden ohne Anmeldung geladen.',
         ]);
 
-        $payload = $this->scraper->scrape(
+        $attempts = [];
+        $phaseResults = [];
+        [$payload, $extracted, $countsFound] = $this->runMiniScanAttempt(
             $username,
-            'mini',
             $progress,
             [
                 'autoLoginEnabled' => false,
                 'accountPool' => [],
+                'miniScanUseSession' => false,
             ],
             4,
-            92,
+            44,
         );
-        $extracted = $this->extractor->extract($payload);
-        $countsFound = count(array_filter($extracted['count_sources'] ?? [])) > 0;
+        $attempts[] = $this->summarizeMiniScanAttempt(1, 'mini-public', $payload, $extracted);
+        $phaseResults[] = [
+            'phase' => 'profile',
+            'mode' => 'mini-public',
+            'statusLevel' => $payload['statusLevel'] ?? 'unknown',
+            'statusMessage' => $payload['statusMessage'] ?? null,
+            'screenshotPath' => $this->scraper->resolvePublicStoragePath($payload['screenshotPath'] ?? null),
+            'ok' => (bool) ($payload['ok'] ?? false),
+        ];
+
+        if (! $countsFound || ! (bool) ($payload['ok'] ?? false)) {
+            $this->reportProgress($progress, [
+                'phase' => 'profile',
+                'percent' => 45,
+                'message' => 'Oeffentlicher Mini-Scan war nicht erfolgreich; Mini-Scan wird mit gespeicherter Instagram-Session wiederholt.',
+            ]);
+
+            [$sessionPayload, $sessionExtracted, $sessionCountsFound] = $this->runMiniScanAttempt(
+                $username,
+                $progress,
+                [
+                    'miniScanUseSession' => true,
+                ],
+                45,
+                92,
+            );
+
+            $attempts[] = $this->summarizeMiniScanAttempt(2, 'mini-session', $sessionPayload, $sessionExtracted);
+            $phaseResults[] = [
+                'phase' => 'profile',
+                'mode' => 'mini-session',
+                'statusLevel' => $sessionPayload['statusLevel'] ?? 'unknown',
+                'statusMessage' => $sessionPayload['statusMessage'] ?? null,
+                'screenshotPath' => $this->scraper->resolvePublicStoragePath($sessionPayload['screenshotPath'] ?? null),
+                'ok' => (bool) ($sessionPayload['ok'] ?? false),
+            ];
+
+            $payload = $sessionPayload;
+            $extracted = $sessionExtracted;
+            $countsFound = $sessionCountsFound;
+        }
 
         if (! $countsFound) {
             $payload['ok'] = false;
             $payload['statusLevel'] = 'error';
-            $payload['statusMessage'] = 'Instagram-Mini-Scan fehlgeschlagen: Es wurden keine oeffentlichen Kennzahlen im sichtbaren DOM oder HTML gefunden.';
+            $payload['statusMessage'] = 'Instagram-Mini-Scan fehlgeschlagen: Es wurden auch mit Session keine Kennzahlen im sichtbaren DOM oder HTML gefunden.';
         }
-
-        $phaseResults = [
-            [
-                'phase' => 'profile',
-                'mode' => 'mini',
-                'statusLevel' => $payload['statusLevel'] ?? 'unknown',
-                'statusMessage' => $payload['statusMessage'] ?? null,
-                'screenshotPath' => $this->scraper->resolvePublicStoragePath($payload['screenshotPath'] ?? null),
-                'ok' => (bool) ($payload['ok'] ?? false),
-            ],
-        ];
 
         $this->reportProgress($progress, [
             'phase' => 'profile',
@@ -217,24 +247,52 @@ class TrackedPersonInstagramAnalysisService
             $extracted,
             [
                 'scan_mode' => 'mini',
-                'used_attempt' => 1,
-                'max_attempts' => 1,
+                'used_attempt' => count($attempts),
+                'max_attempts' => 2,
+                'session_fallback_used' => count($attempts) > 1,
                 'visible_counts_complete' => (bool) ($extracted['visible_counts_complete'] ?? false),
                 'counts_found' => $countsFound,
-                'attempts' => [
-                    [
-                        'attempt' => 1,
-                        'mode' => 'mini',
-                        'statusLevel' => $payload['statusLevel'] ?? 'unknown',
-                        'statusMessage' => $payload['statusMessage'] ?? null,
-                        'followersSource' => $extracted['count_sources']['followers'] ?? null,
-                        'followingSource' => $extracted['count_sources']['following'] ?? null,
-                        'postsSource' => $extracted['count_sources']['posts'] ?? null,
-                        'visibleCountsComplete' => (bool) ($extracted['visible_counts_complete'] ?? false),
-                    ],
-                ],
+                'attempts' => $attempts,
                 'phases' => $phaseResults,
             ],
+        ];
+    }
+
+    private function runMiniScanAttempt(
+        string $username,
+        ?callable $progress,
+        array $runtimeConfigOverrides,
+        int $progressStart,
+        int $progressEnd,
+    ): array {
+        $payload = $this->scraper->scrape(
+            $username,
+            'mini',
+            $progress,
+            $runtimeConfigOverrides,
+            $progressStart,
+            $progressEnd,
+        );
+        $extracted = $this->extractor->extract($payload);
+        $countsFound = count(array_filter($extracted['count_sources'] ?? [])) > 0;
+
+        return [$payload, $extracted, $countsFound];
+    }
+
+    private function summarizeMiniScanAttempt(int $attempt, string $mode, array $payload, array $extracted): array
+    {
+        return [
+            'attempt' => $attempt,
+            'mode' => $mode,
+            'statusLevel' => $payload['statusLevel'] ?? 'unknown',
+            'statusMessage' => $payload['statusMessage'] ?? null,
+            'followersSource' => $extracted['count_sources']['followers'] ?? null,
+            'followingSource' => $extracted['count_sources']['following'] ?? null,
+            'postsSource' => $extracted['count_sources']['posts'] ?? null,
+            'visibleCountsComplete' => (bool) ($extracted['visible_counts_complete'] ?? false),
+            'profileVisibility' => $extracted['profile_visibility'] ?? 'unknown',
+            'isPrivate' => $extracted['is_private'] ?? null,
+            'sessionUsed' => $mode === 'mini-session',
         ];
     }
 
@@ -269,6 +327,8 @@ class TrackedPersonInstagramAnalysisService
                 'followingSource' => $extracted['count_sources']['following'] ?? null,
                 'postsSource' => $extracted['count_sources']['posts'] ?? null,
                 'visibleCountsComplete' => (bool) ($extracted['visible_counts_complete'] ?? false),
+                'profileVisibility' => $extracted['profile_visibility'] ?? 'unknown',
+                'isPrivate' => $extracted['is_private'] ?? null,
             ];
 
             $lastPayload = $payload;
@@ -461,6 +521,8 @@ class TrackedPersonInstagramAnalysisService
         $payload['extractedProfile'] = [
             'fullName' => $extracted['full_name'] ?? null,
             'biography' => $extracted['biography'] ?? null,
+            'isPrivate' => $extracted['is_private'] ?? null,
+            'profileVisibility' => $extracted['profile_visibility'] ?? 'unknown',
             'postsCount' => $extracted['posts_count'] ?? null,
             'followersCount' => $extracted['followers_count'] ?? null,
             'followingCount' => $extracted['following_count'] ?? null,
@@ -682,14 +744,31 @@ class TrackedPersonInstagramAnalysisService
             $previousItems = $previousState['items'];
             $previousRemovedHistoryItems = $previousState['removedHistoryItems'];
             $currentIsComplete = (bool) ($relationshipList['complete'] ?? false);
-            $activeItems = $this->mergeRelationshipItems($previousItems, $observedItems, $currentIsComplete);
-            $addedItems = $this->diffRelationshipItems($observedItems, $previousItems);
+            $analyzedAt = optional($snapshot->analyzed_at)->toIso8601String();
+            $observedItems = $this->stampObservedRelationshipItems($observedItems, $previousItems, $analyzedAt);
+            $activeItems = $this->sortRelationshipItemsNewestFirst(
+                $this->mergeRelationshipItems($previousItems, $observedItems, $currentIsComplete),
+            );
+            $addedItems = $this->sortRelationshipItemsNewestFirst(
+                $this->diffRelationshipItems($observedItems, $previousItems),
+            );
             $removedItems = $currentIsComplete
-                ? $this->diffRelationshipItems($previousItems, $observedItems)
+                ? $this->stampRemovedRelationshipItems(
+                    $this->diffRelationshipItems($previousItems, $observedItems),
+                    $analyzedAt,
+                )
                 : [];
-            $removedHistoryItems = $this->mergeRelationshipItemSets($previousRemovedHistoryItems, $removedItems);
-            $currentlyRemovedItems = $this->diffRelationshipItems($removedHistoryItems, $activeItems);
-            $allKnownItems = $this->mergeRelationshipItemSets($activeItems, $removedHistoryItems);
+            $removedHistoryItems = $this->sortRelationshipItemsNewestFirst(
+                $this->mergeRelationshipItemSets($previousRemovedHistoryItems, $removedItems),
+                ['removedAt', 'lastSeenAt', 'firstSeenAt'],
+            );
+            $currentlyRemovedItems = $this->sortRelationshipItemsNewestFirst(
+                $this->diffRelationshipItems($removedHistoryItems, $activeItems),
+                ['removedAt', 'lastSeenAt', 'firstSeenAt'],
+            );
+            $allKnownItems = $this->sortRelationshipItemsNewestFirst(
+                $this->mergeRelationshipItemSets($activeItems, $removedHistoryItems),
+            );
 
             $relationshipList['observedCount'] = count($observedItems);
             $relationshipList['activeCount'] = count($activeItems);
@@ -789,15 +868,91 @@ class TrackedPersonInstagramAnalysisService
             ->filter(fn ($item) => is_array($item) && filled($item['username'] ?? null))
             ->map(function (array $item) {
                 $username = Str::lower(trim((string) ($item['username'] ?? '')));
-
-                return [
+                $normalized = [
                     'username' => $username,
                     'displayName' => filled($item['displayName'] ?? null) ? trim((string) $item['displayName']) : null,
                     'profileUrl' => filled($item['profileUrl'] ?? null) ? (string) $item['profileUrl'] : 'https://www.instagram.com/'.$username.'/',
                 ];
+
+                foreach (['firstSeenAt', 'lastSeenAt', 'removedAt'] as $timestampKey) {
+                    $timestamp = $this->normalizeRelationshipTimestamp($item[$timestampKey] ?? null);
+
+                    if ($timestamp !== null) {
+                        $normalized[$timestampKey] = $timestamp;
+                    }
+                }
+
+                return $normalized;
             })
             ->filter(fn (array $item) => $item['username'] !== '')
             ->unique('username')
+            ->values()
+            ->all();
+    }
+
+    private function normalizeRelationshipTimestamp(mixed $value): ?string
+    {
+        if (! filled($value)) {
+            return null;
+        }
+
+        try {
+            return \Illuminate\Support\Carbon::parse($value)->toIso8601String();
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function stampObservedRelationshipItems(array $observedItems, array $previousItems, ?string $analyzedAt): array
+    {
+        $previousByUsername = collect($previousItems)->keyBy('username');
+
+        return collect($observedItems)
+            ->map(function (array $item) use ($previousByUsername, $analyzedAt) {
+                $previous = $previousByUsername->get($item['username'] ?? '');
+                $firstSeenAt = $item['firstSeenAt'] ?? data_get($previous, 'firstSeenAt');
+
+                if ($firstSeenAt === null && $previous === null) {
+                    $firstSeenAt = $analyzedAt;
+                }
+
+                return array_filter([
+                    ...$item,
+                    'firstSeenAt' => $firstSeenAt,
+                    'lastSeenAt' => $analyzedAt,
+                    'removedAt' => null,
+                ], fn ($value) => $value !== null);
+            })
+            ->values()
+            ->all();
+    }
+
+    private function stampRemovedRelationshipItems(array $removedItems, ?string $removedAt): array
+    {
+        return collect($removedItems)
+            ->map(fn (array $item) => array_filter([
+                ...$item,
+                'removedAt' => $item['removedAt'] ?? $removedAt,
+            ], fn ($value) => $value !== null))
+            ->values()
+            ->all();
+    }
+
+    private function sortRelationshipItemsNewestFirst(array $items, array $timestampKeys = ['firstSeenAt', 'lastSeenAt', 'removedAt']): array
+    {
+        return collect($items)
+            ->values()
+            ->sortByDesc(function (array $item, int $index) use ($timestampKeys) {
+                foreach ($timestampKeys as $timestampKey) {
+                    $timestamp = $this->normalizeRelationshipTimestamp($item[$timestampKey] ?? null);
+
+                    if ($timestamp !== null) {
+                        return sprintf('%020d.%06d', strtotime($timestamp) ?: 0, 999999 - $index);
+                    }
+                }
+
+                return sprintf('%020d.%06d', 0, 999999 - $index);
+            })
             ->values()
             ->all();
     }
