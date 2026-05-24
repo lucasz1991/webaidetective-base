@@ -7,6 +7,7 @@ use App\Jobs\MonitorTrackedPersonInstagram;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
 
@@ -139,7 +140,7 @@ class TrackedPersonDetail extends Component
     public function scanPublicProfileConnections(): void
     {
         @set_time_limit(0);
-        @ignore_user_abort(true);
+        @ignore_user_abort(false);
 
         $trackedPerson = $this->resolveTrackedPerson();
 
@@ -150,6 +151,7 @@ class TrackedPersonDetail extends Component
         }
 
         $progress = fn (array $state) => $this->streamInstagramProgress($state);
+        $this->cancelInstagramScanWhenClientDisconnects($trackedPerson->id);
 
         try {
             $this->streamInstagramProgress([
@@ -192,7 +194,7 @@ class TrackedPersonDetail extends Component
     private function runInstagramAnalysis(bool $fullScan): void
     {
         @set_time_limit(0);
-        @ignore_user_abort(true);
+        @ignore_user_abort(false);
 
         $trackedPerson = $this->resolveTrackedPerson();
 
@@ -203,6 +205,7 @@ class TrackedPersonDetail extends Component
         }
 
         $progress = fn (array $state) => $this->streamInstagramProgress($state);
+        $this->cancelInstagramScanWhenClientDisconnects($trackedPerson->id);
 
         $trackedPerson->forceFill([
             'last_instagram_status_level' => 'partial',
@@ -321,6 +324,28 @@ class TrackedPersonDetail extends Component
             '<div class="h-full rounded-full bg-pink-600 transition-all duration-300" style="width: '.$percent.'%"></div>',
             true,
         );
+    }
+
+    private function cancelInstagramScanWhenClientDisconnects(int $trackedPersonId): void
+    {
+        static $registered = [];
+
+        if (isset($registered[$trackedPersonId])) {
+            return;
+        }
+
+        $registered[$trackedPersonId] = true;
+
+        register_shutdown_function(static function () use ($trackedPersonId): void {
+            if (! connection_aborted()) {
+                return;
+            }
+
+            app(TrackedPersonInstagramScanCoordinator::class)->cancelActive(
+                $trackedPersonId,
+                'GUI-Verbindung wurde beendet.',
+            );
+        });
     }
 
     public function saveKnownFact(): void

@@ -127,8 +127,155 @@ const RELATIONSHIP_SEARCH_PARTITION_CHARACTERS = [
 ];
 const RELATIONSHIP_SEARCH_PARTITION_QUERIES = RELATIONSHIP_SEARCH_PARTITION_CHARACTERS;
 
+class ScraperAbortError extends Error {
+  constructor(message, code = 'SCRAPER_ABORTED') {
+    super(message);
+    this.name = 'ScraperAbortError';
+    this.code = code;
+  }
+}
+
+const scriptWatchdog = {
+  enabled: false,
+  interval: null,
+  timeoutMs: 0,
+  lastActivityAt: Date.now(),
+  lastActivityReason: 'start',
+  abortError: null,
+  abortListeners: new Set(),
+  browser: null,
+  intentionalBrowserClose: false,
+  browserDisconnectAbort: true,
+};
+
+function markScriptActivity(reason = 'activity') {
+  scriptWatchdog.lastActivityAt = Date.now();
+  scriptWatchdog.lastActivityReason = reason;
+}
+
+function requestScriptAbort(message, code = 'SCRAPER_ABORTED') {
+  if (scriptWatchdog.abortError) {
+    return scriptWatchdog.abortError;
+  }
+
+  const error = new ScraperAbortError(message, code);
+  scriptWatchdog.abortError = error;
+
+  process.stderr.write(`[SCRAPER ABORT] ${JSON.stringify({
+    at: new Date().toISOString(),
+    code,
+    message,
+    lastActivityReason: scriptWatchdog.lastActivityReason,
+    idleMs: Date.now() - scriptWatchdog.lastActivityAt,
+  })}\n`);
+
+  try {
+    recordRunDebug('script-abort-requested', {
+      code,
+      message,
+      lastActivityReason: scriptWatchdog.lastActivityReason,
+      idleMs: Date.now() - scriptWatchdog.lastActivityAt,
+    });
+  } catch {
+    // Debug logging must never block abort handling.
+  }
+
+  for (const listener of Array.from(scriptWatchdog.abortListeners)) {
+    try {
+      listener(error);
+    } catch {
+      // Ignore listener cleanup failures.
+    }
+  }
+
+  try {
+    scriptWatchdog.browser?.process?.()?.kill?.('SIGTERM');
+  } catch {
+    // The browser may already be gone.
+  }
+
+  return error;
+}
+
+function assertScriptAlive() {
+  if (scriptWatchdog.abortError) {
+    throw scriptWatchdog.abortError;
+  }
+}
+
+function configureScriptWatchdog(runtimeConfig = {}) {
+  const enabled = runtimeConfig.scriptWatchdogEnabled !== false;
+  const configuredTimeout = Number(runtimeConfig.scriptStallTimeoutMs || runtimeConfig.nodeStallTimeoutMs || 900000);
+  const timeoutMs = Number.isFinite(configuredTimeout)
+    ? Math.max(60000, configuredTimeout)
+    : 900000;
+
+  scriptWatchdog.enabled = enabled;
+  scriptWatchdog.timeoutMs = timeoutMs;
+  scriptWatchdog.browserDisconnectAbort = runtimeConfig.browserDisconnectAbort !== false;
+  markScriptActivity('watchdog-configured');
+
+  if (scriptWatchdog.interval) {
+    clearInterval(scriptWatchdog.interval);
+    scriptWatchdog.interval = null;
+  }
+
+  if (!enabled) {
+    return;
+  }
+
+  scriptWatchdog.interval = setInterval(() => {
+    if (scriptWatchdog.abortError) {
+      return;
+    }
+
+    const idleMs = Date.now() - scriptWatchdog.lastActivityAt;
+
+    if (idleMs >= scriptWatchdog.timeoutMs) {
+      requestScriptAbort(
+        `Node-Scraper abgebrochen: seit ${Math.round(idleMs / 1000)} Sekunden kein Fortschritt (${scriptWatchdog.lastActivityReason}).`,
+        'SCRIPT_STALLED',
+      );
+    }
+  }, Math.min(30000, Math.max(5000, Math.floor(timeoutMs / 6))));
+
+  scriptWatchdog.interval.unref?.();
+}
+
+function stopScriptWatchdog() {
+  if (scriptWatchdog.interval) {
+    clearInterval(scriptWatchdog.interval);
+    scriptWatchdog.interval = null;
+  }
+}
+
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  assertScriptAlive();
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      clearTimeout(timer);
+      scriptWatchdog.abortListeners.delete(onAbort);
+      callback(value);
+    };
+    const onAbort = (error) => finish(reject, error);
+    const timer = setTimeout(() => {
+      try {
+        assertScriptAlive();
+        finish(resolve);
+      } catch (error) {
+        finish(reject, error);
+      }
+    }, Math.max(0, Number(ms) || 0));
+
+    scriptWatchdog.abortListeners.add(onAbort);
+  });
 }
 
 function resolveNavigationWaitMs(runtimeConfig, fallbackMs = 120000) {
@@ -223,6 +370,9 @@ function debugLog(message, data) {
 }
 
 function progressLog(stage, data = {}) {
+  assertScriptAlive();
+  markScriptActivity(`progress:${stage}`);
+
   process.stderr.write(`[SCRAPER PROGRESS] ${JSON.stringify({
     at: new Date().toISOString(),
     mode: operationMode,
@@ -367,6 +517,16 @@ function normalizeOptionalPositiveInteger(value, fallback = 0) {
   return Math.floor(normalizedValue);
 }
 
+function normalizeNumberAtLeast(value, fallback, minimum) {
+  const normalizedValue = Number(value ?? fallback);
+
+  if (!Number.isFinite(normalizedValue)) {
+    return Math.max(minimum, fallback);
+  }
+
+  return Math.max(minimum, normalizedValue);
+}
+
 function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
   const input = config && typeof config === 'object' ? config : {};
   const merged = {
@@ -400,6 +560,11 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
     relationshipSearchTargetUsername: normalizeInstagramUsername(input?.relationshipSearchTargetUsername || merged.relationshipSearchTargetUsername || ''),
     relationshipSearchTargetMaxItems: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxItems, merged.relationshipSearchTargetMaxItems),
     relationshipSearchTargetMaxScrollRounds: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxScrollRounds, merged.relationshipSearchTargetMaxScrollRounds),
+    scriptWatchdogEnabled: input?.scriptWatchdogEnabled !== false && input?.script_watchdog_enabled !== false,
+    scriptStallTimeoutMs: normalizeNumberAtLeast(input?.scriptStallTimeoutMs || input?.nodeStallTimeoutMs, merged.scriptStallTimeoutMs || 900000, 60000),
+    browserDisconnectAbort: input?.browserDisconnectAbort !== false && input?.browser_disconnect_abort !== false,
+    publicConnectionCandidateMaxAttempts: Math.floor(normalizeNumberAtLeast(input?.publicConnectionCandidateMaxAttempts, merged.publicConnectionCandidateMaxAttempts || 8, 1)),
+    publicConnectionCandidateMaxDurationMs: normalizeNumberAtLeast(input?.publicConnectionCandidateMaxDurationMs, merged.publicConnectionCandidateMaxDurationMs || 1200000, 60000),
     skipDebugArtifacts: input?.skipDebugArtifacts === true || input?.skip_debug_artifacts === true,
     blockHeavyResources: input?.blockHeavyResources === true || input?.block_heavy_resources === true,
     accountPool: Array.isArray(input.accountPool) ? input.accountPool : [],
@@ -494,6 +659,11 @@ function loadRuntimeConfig(configPath) {
     relationshipSearchTargetUsername: '',
     relationshipSearchTargetMaxItems: 0,
     relationshipSearchTargetMaxScrollRounds: 60,
+    scriptWatchdogEnabled: true,
+    scriptStallTimeoutMs: 900000,
+    browserDisconnectAbort: true,
+    publicConnectionCandidateMaxAttempts: 8,
+    publicConnectionCandidateMaxDurationMs: 1200000,
     skipDebugArtifacts: false,
     blockHeavyResources: false,
     accountPool: [],
@@ -3555,8 +3725,18 @@ async function collectBatchCandidateConnectionUntilDefinitive(
 ) {
   let attempt = 0;
   let lastConnection = null;
+  const startedAt = Date.now();
+  const maxAttempts = Math.floor(
+    normalizeNumberAtLeast(runtimeState.runtimeConfig.publicConnectionCandidateMaxAttempts, 8, 1),
+  );
+  const maxDurationMs = normalizeNumberAtLeast(
+    runtimeState.runtimeConfig.publicConnectionCandidateMaxDurationMs,
+    1200000,
+    60000,
+  );
 
   while (true) {
+    assertScriptAlive();
     attempt++;
 
     if (attempt > 1) {
@@ -3588,6 +3768,13 @@ async function collectBatchCandidateConnectionUntilDefinitive(
     }
 
     const pendingReason = describeBatchCandidatePendingReason(connection);
+
+    if (attempt >= maxAttempts || Date.now() - startedAt >= maxDurationMs) {
+      throw new ScraperAbortError(
+        `Node-Scraper abgebrochen: Kandidat @${candidate.username} konnte nach ${attempt} Versuch(en) nicht eindeutig geprueft werden (${pendingReason}).`,
+        'CANDIDATE_STALLED',
+      );
+    }
 
     if (attempt === 1 || attempt % 5 === 0) {
       notes.push(`Kandidat @${candidate.username} wurde noch nicht abgeschlossen; ${pendingReason}. Naechster Versuch folgt in derselben Session.`);
@@ -4022,6 +4209,7 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
   const notes = [];
   const consoleMessages = [];
   let runtimeConfig = loadRuntimeConfig(runtimeConfigPath);
+  configureScriptWatchdog(runtimeConfig);
   const debugLogPath = initializeRunDebug(operationMode, username, runtimeConfig);
   const profileUrl = isLoginSessionMode
     ? 'https://www.instagram.com/'
@@ -4118,9 +4306,27 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
       }
     }
 
+    scriptWatchdog.browser = browser;
+    browser.on('disconnected', () => {
+      if (!scriptWatchdog.intentionalBrowserClose && scriptWatchdog.browserDisconnectAbort) {
+        requestScriptAbort(
+          'Node-Scraper abgebrochen: Verbindung zu Chrome/Puppeteer wurde getrennt.',
+          'BROWSER_DISCONNECTED',
+        );
+      }
+    });
+
     page = await browser.newPage();
     page.setDefaultTimeout(0);
     page.setDefaultNavigationTimeout(0);
+    page.on('close', () => {
+      if (!scriptWatchdog.intentionalBrowserClose && scriptWatchdog.browserDisconnectAbort) {
+        requestScriptAbort(
+          'Node-Scraper abgebrochen: Browser-Seite wurde unerwartet geschlossen.',
+          'PAGE_CLOSED',
+        );
+      }
+    });
 
     page.on('console', (message) => {
       const text = normalizeText(message.text());
@@ -4559,6 +4765,8 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
     flushRunDebug(responsePayload);
     console.log(JSON.stringify(responsePayload));
   } catch (error) {
+    const aborted = error instanceof ScraperAbortError || error?.name === 'ScraperAbortError';
+
     if (initialHtml && !runtimeConfig.skipDebugArtifacts) {
       fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
     }
@@ -4570,7 +4778,9 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
     const responsePayload = {
       ok: false,
       statusLevel: 'error',
-      statusMessage: 'Instagram-Scrape fehlgeschlagen.',
+      statusMessage: aborted
+        ? error.message
+        : 'Instagram-Scrape fehlgeschlagen.',
       username,
       error: normalizeText(error.message),
       finalUrl,
@@ -4588,9 +4798,13 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
 
     process.exitCode = 1;
   } finally {
+    scriptWatchdog.intentionalBrowserClose = true;
+
     if (browser) {
       await closeBrowserSoftly(browser);
     }
+
+    stopScriptWatchdog();
 
     if (cleanupBrowserProfileOnExit) {
       cleanupDirectory(activeBrowserUserDataDir);

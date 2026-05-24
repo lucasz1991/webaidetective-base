@@ -38,6 +38,16 @@ function loadRuntimeConfig() {
 const runtimeConfig = loadRuntimeConfig();
 const candidateLimit = 0;
 
+function normalizeNumberAtLeast(value, fallback, minimum) {
+  const normalizedValue = Number(value ?? fallback);
+
+  if (!Number.isFinite(normalizedValue)) {
+    return Math.max(minimum, fallback);
+  }
+
+  return Math.max(minimum, normalizedValue);
+}
+
 function normalizeItem(item) {
   if (!item || typeof item !== 'object') {
     return null;
@@ -101,8 +111,13 @@ function writeChildRuntimeConfig() {
     relationshipSearchTargetMaxItems: Math.max(0, Number(runtimeConfig.relationshipSearchTargetMaxItems || 0)),
     relationshipSearchTargetMaxScrollRounds: Math.max(10, Number(runtimeConfig.relationshipSearchTargetMaxScrollRounds || 60)),
     relationshipSearchWaitMs: Math.max(500, Number(runtimeConfig.relationshipSearchWaitMs || 500)),
-    publicConnectionRetryDelayMs: Math.max(1500, Number(runtimeConfig.publicConnectionRetryDelayMs || 6000)),
-    publicConnectionRetryMaxDelayMs: Math.max(10000, Number(runtimeConfig.publicConnectionRetryMaxDelayMs || 90000)),
+    publicConnectionRetryDelayMs: normalizeNumberAtLeast(runtimeConfig.publicConnectionRetryDelayMs, 6000, 1500),
+    publicConnectionRetryMaxDelayMs: normalizeNumberAtLeast(runtimeConfig.publicConnectionRetryMaxDelayMs, 90000, 10000),
+    publicConnectionCandidateMaxAttempts: Math.floor(normalizeNumberAtLeast(runtimeConfig.publicConnectionCandidateMaxAttempts, 8, 1)),
+    publicConnectionCandidateMaxDurationMs: normalizeNumberAtLeast(runtimeConfig.publicConnectionCandidateMaxDurationMs, 1200000, 60000),
+    scriptWatchdogEnabled: runtimeConfig.scriptWatchdogEnabled !== false,
+    scriptStallTimeoutMs: normalizeNumberAtLeast(runtimeConfig.scriptStallTimeoutMs || runtimeConfig.nodeStallTimeoutMs, 900000, 60000),
+    browserDisconnectAbort: runtimeConfig.browserDisconnectAbort !== false,
     navigationTimeoutMs: Math.max(30000, Math.min(Number(runtimeConfig.navigationTimeoutMs || 30000), 45000)),
     postLoginWaitMs: Math.max(500, Math.min(Number(runtimeConfig.postLoginWaitMs || 500), 1000)),
     skipDebugArtifacts: true,
@@ -131,27 +146,77 @@ function runScraper(username, operationMode, childRuntimeConfigPath) {
     });
     const stdoutChunks = [];
     const stderrChunks = [];
+    const stallTimeoutMs = normalizeNumberAtLeast(runtimeConfig.scriptStallTimeoutMs || runtimeConfig.nodeStallTimeoutMs, 900000, 60000);
+    let lastOutputAt = Date.now();
+    let killedByWatchdog = false;
+    let settled = false;
+    const markOutput = () => {
+      lastOutputAt = Date.now();
+    };
+    const clearWatchdog = () => {
+      if (watchdogInterval) {
+        clearInterval(watchdogInterval);
+      }
+    };
+    const watchdogInterval = runtimeConfig.scriptWatchdogEnabled === false
+      ? null
+      : setInterval(() => {
+        if (settled || killedByWatchdog) {
+          return;
+        }
+
+        const idleMs = Date.now() - lastOutputAt;
+
+        if (idleMs < stallTimeoutMs) {
+          return;
+        }
+
+        killedByWatchdog = true;
+        const message = `Public-Profile-Verbindungsscan abgebrochen: Child-Node-Skript hat seit ${Math.round(idleMs / 1000)} Sekunden keinen Output geliefert.`;
+        process.stderr.write(`[SCRAPER ABORT] ${JSON.stringify({
+          at: new Date().toISOString(),
+          code: 'CHILD_SCRIPT_STALLED',
+          message,
+          idleMs,
+        })}\n`);
+        child.kill('SIGTERM');
+        setTimeout(() => {
+          if (!settled) {
+            child.kill('SIGKILL');
+          }
+        }, 5000).unref?.();
+      }, Math.min(30000, Math.max(5000, Math.floor(stallTimeoutMs / 6))));
+
+    watchdogInterval?.unref?.();
 
     child.stdout.on('data', (chunk) => {
+      markOutput();
       stdoutChunks.push(chunk);
     });
 
     child.stderr.on('data', (chunk) => {
+      markOutput();
       stderrChunks.push(chunk);
       process.stderr.write(chunk);
     });
 
     child.on('error', (error) => {
+      settled = true;
+      clearWatchdog();
       resolve({
         ok: false,
         code: null,
         payload: null,
         stderr: stderrChunks.map((chunk) => chunk.toString('utf8')).join(''),
-        error: error.message,
+        error: killedByWatchdog
+          ? 'Child-Node-Skript wurde wegen Stillstand beendet.'
+          : error.message,
       });
     });
 
     child.on('close', (code) => {
+      settled = true;
+      clearWatchdog();
       const stdout = stdoutChunks.map((chunk) => chunk.toString('utf8')).join('').trim();
       const stderr = stderrChunks.map((chunk) => chunk.toString('utf8')).join('').trim();
       let payload = null;
@@ -166,11 +231,13 @@ function runScraper(username, operationMode, childRuntimeConfigPath) {
       }
 
       resolve({
-        ok: code === 0 && payload !== null && !parseError,
+        ok: !killedByWatchdog && code === 0 && payload !== null && !parseError,
         code,
         payload,
         stderr,
-        error: parseError,
+        error: killedByWatchdog
+          ? 'Child-Node-Skript wurde wegen Stillstand beendet.'
+          : parseError,
       });
     });
   });

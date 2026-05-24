@@ -308,6 +308,8 @@ class InstagramScraper
 
         $stdout = '';
         $stderr = '';
+        $lastOutputAt = microtime(true);
+        $processStallTimeoutSeconds = max(60, (int) ($scanControl['processStallTimeoutSeconds'] ?? 900));
 
         try {
             while ($process->isRunning()) {
@@ -315,11 +317,13 @@ class InstagramScraper
                 $stderrChunk = $process->getIncrementalErrorOutput();
 
                 if ($stdoutChunk !== '') {
+                    $lastOutputAt = microtime(true);
                     $stdout .= $stdoutChunk;
                     $onOutput(SymfonyProcess::OUT, $stdoutChunk);
                 }
 
                 if ($stderrChunk !== '') {
+                    $lastOutputAt = microtime(true);
                     $stderr .= $stderrChunk;
                     $onOutput(SymfonyProcess::ERR, $stderrChunk);
                 }
@@ -333,6 +337,21 @@ class InstagramScraper
 
                     throw new TrackedPersonInstagramScanCancelledException(
                         'Instagram-Scan wurde abgebrochen, weil fuer diese Person ein neuer Scan gestartet wurde.'
+                    );
+                }
+
+                if (
+                    $coordinator
+                    && (microtime(true) - $lastOutputAt) >= $processStallTimeoutSeconds
+                ) {
+                    $process->stop(1);
+
+                    if ($pid > 0) {
+                        $coordinator->terminateProcessTree($pid);
+                    }
+
+                    throw new \RuntimeException(
+                        'Node.js-Scraper wurde beendet, weil seit '.$processStallTimeoutSeconds.' Sekunden kein Output mehr kam.'
                     );
                 }
 
