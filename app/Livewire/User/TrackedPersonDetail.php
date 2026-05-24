@@ -2,6 +2,7 @@
 
 namespace App\Livewire\User;
 
+use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Jobs\MonitorTrackedPersonInstagram;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
@@ -158,6 +159,15 @@ class TrackedPersonDetail extends Component
             ]);
 
             $scans = app(TrackedPersonInstagramPublicProfileScanService::class)->scan($trackedPerson, $progress);
+        } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            $this->streamInstagramProgress([
+                'phase' => 'done',
+                'percent' => 100,
+                'message' => 'Vorheriger Scan wurde beendet, weil ein neuer Scan gestartet wurde.',
+            ]);
+            $this->setDetailStatus('Vorheriger Instagram-Scan wurde beendet, weil ein neuer Scan gestartet wurde.', 'partial');
+
+            return;
         } catch (\Throwable $exception) {
             $this->streamInstagramProgress([
                 'phase' => 'error',
@@ -169,12 +179,11 @@ class TrackedPersonDetail extends Component
             return;
         }
 
-        $foundCount = $scans
-            ->filter(fn ($scan) => $scan->public_profile_follows_target || $scan->target_follows_public_profile)
-            ->count();
+        $inferredFollowersCount = $scans->sum(fn ($scan) => count(data_get($scan->raw_payload, 'inferredFollowers', [])));
+        $inferredFollowingCount = $scans->sum(fn ($scan) => count(data_get($scan->raw_payload, 'inferredFollowing', [])));
 
         $this->setDetailStatus(
-            'Public-Profile-Verbindungsscan abgeschlossen: '.$foundCount.' direkte Verbindung(en) gefunden.',
+            'Public-Profile-Verbindungsscan abgeschlossen: '.$inferredFollowersCount.' moegliche Follower und '.$inferredFollowingCount.' moegliche Gefolgt-Profile gefunden.',
             $scans->contains(fn ($scan) => $scan->status_level === 'error') ? 'partial' : 'success',
         );
         $this->dispatch('tracked-person-refresh');
@@ -212,6 +221,15 @@ class TrackedPersonDetail extends Component
             ]);
 
             $snapshot = $trackedPerson->analyzeInstagram($progress, $fullScan);
+        } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            $this->streamInstagramProgress([
+                'phase' => 'done',
+                'percent' => 100,
+                'message' => 'Vorheriger Scan wurde beendet, weil ein neuer Scan gestartet wurde.',
+            ]);
+            $this->setDetailStatus('Vorheriger Instagram-Scan wurde beendet, weil ein neuer Scan gestartet wurde.', 'partial');
+
+            return;
         } catch (\Throwable $exception) {
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'error',
@@ -267,9 +285,36 @@ class TrackedPersonDetail extends Component
             default => 'Analyse',
         };
         $message = (string) ($state['message'] ?? 'Instagram-Analyse laeuft.');
+        $loaded = $state['loaded'] ?? null;
+        $expected = $state['expected'] ?? null;
+        $foundFollowers = $state['foundFollowers'] ?? null;
+        $foundFollowing = $state['foundFollowing'] ?? null;
+        $liveCounts = '';
+
+        if ($loaded !== null || $expected !== null || $foundFollowers !== null || $foundFollowing !== null) {
+            $liveParts = [];
+
+            if ($loaded !== null && $expected !== null) {
+                $liveParts[] = 'Geprueft: '
+                    .number_format((int) $loaded, 0, ',', '.')
+                    .' / '
+                    .number_format((int) $expected, 0, ',', '.');
+            }
+
+            if ($foundFollowers !== null || $foundFollowing !== null) {
+                $liveParts[] = 'Gefunden: '
+                    .number_format((int) $foundFollowers, 0, ',', '.')
+                    .' Follower / '
+                    .number_format((int) $foundFollowing, 0, ',', '.')
+                    .' Gefolgt';
+            }
+
+            $liveCounts = implode(' · ', $liveParts);
+        }
 
         $this->stream('instagram-progress-phase', e($phase), true);
         $this->stream('instagram-progress-message', e($message), true);
+        $this->stream('instagram-progress-live-counts', e($liveCounts), true);
         $this->stream('instagram-progress-percent', $percent.'%', true);
         $this->stream(
             'instagram-progress-bar',
@@ -389,6 +434,10 @@ class TrackedPersonDetail extends Component
                     ->with('publicProfile')
                     ->latest('analyzed_at')
                     ->limit(20),
+                'instagramInferredConnections' => fn ($query) => $query
+                    ->with('publicProfile')
+                    ->latest('last_seen_at')
+                    ->limit(100),
                 'latestInstagramSnapshot.media' => fn ($query) => $query->orderBy('sort_order'),
                 'instagramSnapshots' => fn ($query) => $query
                     ->where('has_changes', true)

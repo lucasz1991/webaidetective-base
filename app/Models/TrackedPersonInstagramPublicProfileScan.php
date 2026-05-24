@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class TrackedPersonInstagramPublicProfileScan extends Model
 {
@@ -71,12 +72,18 @@ class TrackedPersonInstagramPublicProfileScan extends Model
         return $this->belongsTo(User::class);
     }
 
+    public function inferredConnections(): HasMany
+    {
+        return $this->hasMany(TrackedPersonInstagramInferredConnection::class, 'scan_id');
+    }
+
     public function getRelationLabelAttribute(): string
     {
         return match ($this->relation_type) {
             'mutual' => 'Gegenseitig bestaetigt',
             'public_follows_target' => 'Profil folgt dieser Person',
             'target_follows_public' => 'Person folgt diesem Profil',
+            'candidate_search' => 'Teilrekonstruktion aus bekannten Listen',
             'none' => 'Keine direkte Listenverbindung',
             default => 'Ungeklaert',
         };

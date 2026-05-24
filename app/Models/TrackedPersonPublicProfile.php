@@ -50,6 +50,11 @@ class TrackedPersonPublicProfile extends Model
         return $this->hasMany(TrackedPersonInstagramPublicProfileScan::class, 'public_profile_id');
     }
 
+    public function instagramInferredConnections(): HasMany
+    {
+        return $this->hasMany(TrackedPersonInstagramInferredConnection::class, 'public_profile_id');
+    }
+
     public function latestInstagramConnectionScan(): HasOne
     {
         return $this->hasOne(TrackedPersonInstagramPublicProfileScan::class, 'public_profile_id')

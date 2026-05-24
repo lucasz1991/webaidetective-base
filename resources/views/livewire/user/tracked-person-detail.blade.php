@@ -102,6 +102,14 @@
         };
         $latestFollowerStats = $relationshipStats($latestFollowersList, $latestFollowerItems);
         $latestFollowingStats = $relationshipStats($latestFollowingList, $latestFollowingItems);
+        $inferredInstagramFollowers = $trackedPerson->instagramInferredConnections
+            ->where('relationship_type', 'follows_target')
+            ->unique('candidate_username')
+            ->values();
+        $inferredInstagramFollowing = $trackedPerson->instagramInferredConnections
+            ->where('relationship_type', 'followed_by_target')
+            ->unique('candidate_username')
+            ->values();
         $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
         $latestProfileVisibility = data_get($latestSnapshot?->raw_payload, 'extractedProfile.profileVisibility');
         $latestProfileVisibilityLabel = match ($latestProfileVisibility) {
@@ -135,6 +143,7 @@
             <p class="mt-2 text-sm leading-6 text-slate-600" wire:stream="instagram-progress-message">
                 Profil, Kennzahlen und Listen werden abgearbeitet.
             </p>
+            <div class="mt-2 text-xs font-semibold text-slate-500" wire:stream="instagram-progress-live-counts"></div>
             <div class="mt-5">
                 <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
                     <span>Fortschritt</span>
@@ -974,25 +983,30 @@
                                         <p class="mt-2 whitespace-pre-wrap text-xs text-slate-500">{{ $publicProfile->notes }}</p>
                                     @endif
                                     @if($latestConnectionScan)
+                                        @php
+                                            $latestInferredFollowerCount = count(data_get($latestConnectionScan->raw_payload, 'inferredFollowers', []));
+                                            $latestInferredFollowingCount = count(data_get($latestConnectionScan->raw_payload, 'inferredFollowing', []));
+                                        @endphp
                                         <div class="mt-3 rounded-xl border px-3 py-2 text-xs {{ $connectionStatusClass }}">
                                             <div class="flex flex-wrap items-center gap-2">
-                                                <span class="font-semibold">{{ $latestConnectionScan->relation_label }}</span>
+                                                <span class="font-semibold">Teilrekonstruktion</span>
                                                 <span>{{ $latestConnectionScan->analyzed_at ? $latestConnectionScan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</span>
                                             </div>
                                             <div class="mt-2 flex flex-wrap gap-2">
-                                                @if($latestConnectionScan->public_profile_follows_target)
-                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">Profil folgt dieser Person</span>
+                                                @if($latestInferredFollowerCount > 0)
+                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">{{ $latestInferredFollowerCount }} moegliche Follower</span>
                                                 @endif
-                                                @if($latestConnectionScan->target_follows_public_profile)
-                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">Person folgt diesem Profil</span>
+                                                @if($latestInferredFollowingCount > 0)
+                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">{{ $latestInferredFollowingCount }} moeglich gefolgt</span>
                                                 @endif
-                                                @if(! $latestConnectionScan->public_profile_follows_target && ! $latestConnectionScan->target_follows_public_profile)
-                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">Keine direkte Listenverbindung</span>
+                                                @if($latestInferredFollowerCount === 0 && $latestInferredFollowingCount === 0)
+                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">Keine Treffer in Kandidatenlisten</span>
                                                 @endif
                                             </div>
                                             <div class="mt-2 text-[11px]">
-                                                Follower geprueft: {{ $latestConnectionScan->followers_observed_count ?? 0 }}
-                                                / Gefolgt geprueft: {{ $latestConnectionScan->following_observed_count ?? 0 }}
+                                                Kandidaten: {{ data_get($latestConnectionScan->raw_payload, 'candidatesChecked', 0) }}
+                                                / private oder gesperrte Profile: {{ data_get($latestConnectionScan->raw_payload, 'candidatesSkippedPrivate', 0) }}
+                                                / Rate-Limit: {{ data_get($latestConnectionScan->raw_payload, 'candidatesRateLimited', 0) }}
                                             </div>
                                         </div>
                                     @endif
@@ -1076,6 +1090,8 @@
                     <div class="mt-3 space-y-2">
                         @forelse($trackedPerson->instagramPublicProfileScans as $connectionScan)
                             @php
+                                $scanInferredFollowerCount = count(data_get($connectionScan->raw_payload, 'inferredFollowers', []));
+                                $scanInferredFollowingCount = count(data_get($connectionScan->raw_payload, 'inferredFollowing', []));
                                 $scanStatusClass = match ($connectionScan->status_level) {
                                     'success' => 'border-emerald-200 bg-white text-emerald-900',
                                     'partial' => 'border-amber-200 bg-white text-amber-950',
@@ -1098,8 +1114,9 @@
                                     <div class="text-right text-slate-500">
                                         <div>{{ $connectionScan->analyzed_at ? $connectionScan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</div>
                                         <div class="mt-1">
-                                            Follower {{ $connectionScan->followers_observed_count ?? 0 }}
-                                            / Gefolgt {{ $connectionScan->following_observed_count ?? 0 }}
+                                            Kandidaten {{ data_get($connectionScan->raw_payload, 'candidatesChecked', 0) }}
+                                            / Treffer {{ $scanInferredFollowerCount + $scanInferredFollowingCount }}
+                                            / Rate-Limit {{ data_get($connectionScan->raw_payload, 'candidatesRateLimited', 0) }}
                                         </div>
                                     </div>
                                 </div>
@@ -1107,6 +1124,59 @@
                         @empty
                             <p class="text-sm text-slate-500">Noch keine Public-Profile-Listenverbindungen analysiert.</p>
                         @endforelse
+                    </div>
+                </div>
+
+                <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h4 class="text-sm font-bold text-slate-900">Teilweise rekonstruierte private Listen</h4>
+                        <span class="text-xs text-slate-500">
+                            {{ $inferredInstagramFollowers->count() }} Follower / {{ $inferredInstagramFollowing->count() }} Gefolgt
+                        </span>
+                    </div>
+                    <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                        <div class="rounded-xl border border-slate-200 bg-white p-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Moegliche Follower des privaten Profils</div>
+                            <div class="mt-3 space-y-2">
+                                @forelse($inferredInstagramFollowers->take(40) as $connection)
+                                    <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs">
+                                        <div>
+                                            <div class="font-semibold text-slate-900">{{ $connection->display_handle }}</div>
+                                            @if($connection->candidate_display_name)
+                                                <div class="text-slate-500">{{ $connection->candidate_display_name }}</div>
+                                            @endif
+                                            <div class="text-slate-500">Quelle: {{ '@'.$connection->source_public_username }}</div>
+                                        </div>
+                                        <div class="text-right text-slate-500">
+                                            {{ $connection->last_seen_at ? $connection->last_seen_at->timezone(config('app.timezone'))->diffForHumans() : '-' }}
+                                        </div>
+                                    </div>
+                                @empty
+                                    <p class="text-sm text-slate-500">Noch keine moeglichen Follower ueber bekannte Profile gefunden.</p>
+                                @endforelse
+                            </div>
+                        </div>
+                        <div class="rounded-xl border border-slate-200 bg-white p-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Moeglich vom privaten Profil gefolgt</div>
+                            <div class="mt-3 space-y-2">
+                                @forelse($inferredInstagramFollowing->take(40) as $connection)
+                                    <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs">
+                                        <div>
+                                            <div class="font-semibold text-slate-900">{{ $connection->display_handle }}</div>
+                                            @if($connection->candidate_display_name)
+                                                <div class="text-slate-500">{{ $connection->candidate_display_name }}</div>
+                                            @endif
+                                            <div class="text-slate-500">Quelle: {{ '@'.$connection->source_public_username }}</div>
+                                        </div>
+                                        <div class="text-right text-slate-500">
+                                            {{ $connection->last_seen_at ? $connection->last_seen_at->timezone(config('app.timezone'))->diffForHumans() : '-' }}
+                                        </div>
+                                    </div>
+                                @empty
+                                    <p class="text-sm text-slate-500">Noch keine moeglich gefolgten Profile ueber bekannte Profile gefunden.</p>
+                                @endforelse
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

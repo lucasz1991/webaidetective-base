@@ -19,8 +19,11 @@ class TrackedPersonInstagramAnalysisService
     public function __construct(
         private readonly InstagramScraper $scraper,
         private readonly InstagramProfileDataExtractor $extractor,
+        private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
     ) {
     }
+
+    private ?array $activeScanControl = null;
 
     public function analyze(
         TrackedPerson $trackedPerson,
@@ -32,16 +35,27 @@ class TrackedPersonInstagramAnalysisService
             throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');
         }
 
+        $scanControl = $this->scanCoordinator->begin(
+            $trackedPerson->id,
+            $fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan',
+        );
+
+        Cache::lock($this->analysisLockKey($trackedPerson), 3600)->forceRelease();
         $lock = Cache::lock($this->analysisLockKey($trackedPerson), 3600);
 
         if (! $lock->get()) {
+            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
             throw new \RuntimeException('Fuer diese Person laeuft bereits eine Instagram-Analyse. Bitte den laufenden Scan abwarten.');
         }
+
+        $this->activeScanControl = $scanControl;
 
         try {
             return $this->analyzeWithLock($trackedPerson, $progress, $fullScan);
         } finally {
             $lock->release();
+            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
+            $this->activeScanControl = null;
         }
     }
 
@@ -74,6 +88,7 @@ class TrackedPersonInstagramAnalysisService
             'percent' => 97,
             'message' => 'Analyseergebnis wird gespeichert.',
         ]);
+        $this->assertActiveScanCurrent();
 
         $snapshot = DB::transaction(function () use (
             $trackedPerson,
@@ -293,7 +308,7 @@ class TrackedPersonInstagramAnalysisService
             $username,
             'mini',
             $progress,
-            $runtimeConfigOverrides,
+            $this->withActiveScanControl($runtimeConfigOverrides),
             $progressStart,
             $progressEnd,
         );
@@ -337,7 +352,7 @@ class TrackedPersonInstagramAnalysisService
                 $username,
                 'profile',
                 $progress,
-                [],
+                $this->withActiveScanControl(),
                 4,
                 24,
             );
@@ -427,9 +442,9 @@ class TrackedPersonInstagramAnalysisService
                     $username,
                     $phase,
                     $progress,
-                    [
+                    $this->withActiveScanControl([
                         $phaseConfig['expected_override'] => max(0, (int) ($phaseConfig['expected'] ?? 0)),
-                    ],
+                    ]),
                     $phaseConfig['start'],
                     $phaseConfig['end'],
                 );
@@ -515,6 +530,8 @@ class TrackedPersonInstagramAnalysisService
 
     private function reportProgress(?callable $progress, array $payload): void
     {
+        $this->assertActiveScanCurrent();
+
         if (! $progress) {
             return;
         }
@@ -526,6 +543,30 @@ class TrackedPersonInstagramAnalysisService
             'loaded' => $payload['loaded'] ?? null,
             'expected' => $payload['expected'] ?? null,
         ]);
+    }
+
+    private function withActiveScanControl(array $runtimeConfigOverrides = []): array
+    {
+        if ($this->activeScanControl === null) {
+            return $runtimeConfigOverrides;
+        }
+
+        return [
+            ...$runtimeConfigOverrides,
+            '_scanControl' => $this->activeScanControl,
+        ];
+    }
+
+    private function assertActiveScanCurrent(): void
+    {
+        if ($this->activeScanControl === null) {
+            return;
+        }
+
+        $this->scanCoordinator->assertCurrent(
+            (int) $this->activeScanControl['trackedPersonId'],
+            (int) $this->activeScanControl['generation'],
+        );
     }
 
     private function buildStoredPayload(

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+const fs = require('fs');
 const { spawn } = require('child_process');
 const path = require('path');
 
@@ -14,28 +15,28 @@ const runtimeConfigPath = process.argv[4] || null;
 const scraperScriptPath = path.join(__dirname, 'scrape-instagram.cjs');
 const nodeBinary = process.execPath || 'node';
 
-function emptyPhase(relationship, error = null) {
-  return {
-    relationship,
-    checked: false,
-    available: false,
-    complete: false,
-    targetFound: false,
-    targetItem: null,
-    observedCount: 0,
-    expectedCount: 0,
-    reportedCount: 0,
-    rateLimited: false,
-    statusLevel: 'error',
-    statusMessage: error || 'Listen-Scan wurde nicht ausgefuehrt.',
-    reason: null,
-    notes: [],
-    warnings: [],
-    screenshotPath: null,
-    debugLogPath: null,
-    error,
-  };
+function progressLog(stage, payload = {}) {
+  process.stderr.write(`[SCRAPER PROGRESS] ${JSON.stringify({
+    stage,
+    relationship: 'public-connections',
+    ...payload,
+  })}\n`);
 }
+
+function loadRuntimeConfig() {
+  if (!runtimeConfigPath || !fs.existsSync(runtimeConfigPath)) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(runtimeConfigPath, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+const runtimeConfig = loadRuntimeConfig();
+const candidateLimit = 0;
 
 function normalizeItem(item) {
   if (!item || typeof item !== 'object') {
@@ -52,48 +53,78 @@ function normalizeItem(item) {
     username,
     displayName: item.displayName ? String(item.displayName).trim() : null,
     profileUrl: item.profileUrl ? String(item.profileUrl) : `https://www.instagram.com/${username}/`,
+    sourceLists: Array.isArray(item.sourceLists) ? item.sourceLists.filter(Boolean) : [],
   };
 }
 
-function extractPhase(payload, relationship) {
-  if (!payload || typeof payload !== 'object') {
-    return emptyPhase(relationship, 'Node-Scraper lieferte kein gueltiges JSON.');
+function buildCandidatePool() {
+  const candidates = new Map();
+  const configuredCandidates = Array.isArray(runtimeConfig.publicConnectionCandidates)
+    ? runtimeConfig.publicConnectionCandidates
+    : [];
+
+  for (const rawCandidate of configuredCandidates) {
+    const candidate = normalizeItem(rawCandidate);
+
+    if (!candidate || candidate.username === targetUsername || candidate.username === publicUsername) {
+      continue;
+    }
+
+    const existing = candidates.get(candidate.username) || {
+      ...candidate,
+      sourceLists: [],
+    };
+
+    for (const sourceList of candidate.sourceLists) {
+      if (!existing.sourceLists.includes(sourceList)) {
+        existing.sourceLists.push(sourceList);
+      }
+    }
+
+    candidates.set(candidate.username, existing);
   }
 
-  const payloadKey = relationship === 'followers' ? 'followersList' : 'followingList';
-  const list = payload.profile && typeof payload.profile === 'object'
-    ? payload.profile[payloadKey] || {}
-    : {};
-  const items = Array.isArray(list.items)
-    ? list.items.map(normalizeItem).filter(Boolean)
-    : [];
-  const targetItem = items.find((item) => item.username === targetUsername) || null;
+  const allCandidates = Array.from(candidates.values())
+    .sort((left, right) => left.username.localeCompare(right.username));
 
-  return {
-    relationship,
-    checked: Boolean(list.attempted || list.available || items.length > 0 || payload.ok),
-    available: Boolean(list.available),
-    complete: Boolean(list.complete),
-    targetFound: Boolean(targetItem),
-    targetItem,
-    observedCount: items.length,
-    expectedCount: Number(list.expectedCount || 0),
-    reportedCount: Number(list.count || items.length || 0),
-    rateLimited: Boolean(list.rateLimited),
-    statusLevel: payload.statusLevel || (payload.ok ? 'success' : 'error'),
-    statusMessage: payload.statusMessage || payload.error || null,
-    reason: list.reason || null,
-    notes: Array.isArray(payload.notes) ? payload.notes : [],
-    warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
-    screenshotPath: payload.screenshotPath || null,
-    debugLogPath: payload.debugLogPath || null,
-    error: payload.error || null,
-  };
+  return allCandidates;
 }
 
-function runScraper(relationship) {
+function writeChildRuntimeConfig() {
+  const childConfig = {
+    ...runtimeConfig,
+    publicConnectionCandidates: buildCandidatePool(),
+    relationshipSearchOnly: true,
+    relationshipSearchTargetUsername: targetUsername,
+    relationshipSearchPartitionQueries: [targetUsername],
+    relationshipSearchMaxDepth: 1,
+    relationshipSearchTargetMaxItems: Math.max(0, Number(runtimeConfig.relationshipSearchTargetMaxItems || 0)),
+    relationshipSearchTargetMaxScrollRounds: Math.max(10, Number(runtimeConfig.relationshipSearchTargetMaxScrollRounds || 60)),
+    relationshipSearchWaitMs: Math.max(500, Number(runtimeConfig.relationshipSearchWaitMs || 500)),
+    publicConnectionRetryDelayMs: Math.max(1500, Number(runtimeConfig.publicConnectionRetryDelayMs || 6000)),
+    publicConnectionRetryMaxDelayMs: Math.max(10000, Number(runtimeConfig.publicConnectionRetryMaxDelayMs || 90000)),
+    navigationTimeoutMs: Math.max(30000, Math.min(Number(runtimeConfig.navigationTimeoutMs || 30000), 45000)),
+    postLoginWaitMs: Math.max(500, Math.min(Number(runtimeConfig.postLoginWaitMs || 500), 1000)),
+    skipDebugArtifacts: true,
+    blockHeavyResources: true,
+    expectedFollowerCount: 0,
+    expectedFollowingCount: 0,
+    followerListMaxItems: 0,
+    followingListMaxItems: 0,
+  };
+  const directory = runtimeConfigPath && fs.existsSync(path.dirname(runtimeConfigPath))
+    ? path.dirname(runtimeConfigPath)
+    : path.dirname(runtimeConfigPath || process.cwd());
+  const filePath = path.join(directory, `instagram-public-connection-batch-${Date.now()}-${process.pid}.json`);
+
+  fs.writeFileSync(filePath, JSON.stringify(childConfig, null, 2), 'utf8');
+
+  return filePath;
+}
+
+function runScraper(username, operationMode, childRuntimeConfigPath) {
   return new Promise((resolve) => {
-    const args = [scraperScriptPath, publicUsername, runtimeConfigPath, relationship];
+    const args = [scraperScriptPath, username, childRuntimeConfigPath, operationMode];
     const child = spawn(nodeBinary, args, {
       cwd: path.resolve(__dirname, '../../..'),
       windowsHide: true,
@@ -115,7 +146,6 @@ function runScraper(relationship) {
         ok: false,
         code: null,
         payload: null,
-        stdout: '',
         stderr: stderrChunks.map((chunk) => chunk.toString('utf8')).join(''),
         error: error.message,
       });
@@ -139,7 +169,6 @@ function runScraper(relationship) {
         ok: code === 0 && payload !== null && !parseError,
         code,
         payload,
-        stdout,
         stderr,
         error: parseError,
       });
@@ -147,73 +176,11 @@ function runScraper(relationship) {
   });
 }
 
-function resolveRelationType(followers, following) {
-  const targetFollowsPublic = Boolean(followers.targetFound);
-  const publicFollowsTarget = Boolean(following.targetFound);
-
-  if (targetFollowsPublic && publicFollowsTarget) {
-    return 'mutual';
-  }
-
-  if (publicFollowsTarget) {
-    return 'public_follows_target';
-  }
-
-  if (targetFollowsPublic) {
-    return 'target_follows_public';
-  }
-
-  if (followers.checked && following.checked) {
-    return 'none';
-  }
-
-  return 'unknown';
-}
-
-function resolveStatusLevel(followers, following) {
-  if (followers.rateLimited || following.rateLimited) {
-    return followers.checked || following.checked ? 'partial' : 'error';
-  }
-
-  if (followers.checked && following.checked) {
-    return 'success';
-  }
-
-  if (followers.checked || following.checked) {
-    return 'partial';
-  }
-
-  return 'error';
-}
-
-function resolveStatusMessage(relationType, followers, following) {
-  if (followers.rateLimited || following.rateLimited) {
-    return 'Instagram hat mindestens eine Verbindungsliste per Rate-Limit blockiert.';
-  }
-
-  return matchRelationMessage(relationType);
-}
-
-function matchRelationMessage(relationType) {
-  switch (relationType) {
-    case 'mutual':
-      return 'Gegenseitige Instagram-Verbindung wurde in den oeffentlichen Listen gefunden.';
-    case 'public_follows_target':
-      return 'Das oeffentliche Profil folgt der beobachteten Person.';
-    case 'target_follows_public':
-      return 'Die beobachtete Person folgt dem oeffentlichen Profil.';
-    case 'none':
-      return 'In den oeffentlichen Listen wurde keine direkte Verbindung gefunden.';
-    default:
-      return 'Die Verbindung konnte nicht sicher geprueft werden.';
-  }
-}
-
 async function main() {
   const startedAt = Date.now();
 
   if (!publicUsername || !targetUsername || !runtimeConfigPath) {
-    const responsePayload = {
+    console.log(JSON.stringify({
       ok: false,
       statusLevel: 'error',
       statusMessage: 'Public-Profile-Verbindungsscan fehlgeschlagen: Username oder Runtime-Config fehlt.',
@@ -222,69 +189,63 @@ async function main() {
       relationType: 'unknown',
       targetFollowsPublicProfile: false,
       publicProfileFollowsTarget: false,
-      followers: emptyPhase('followers', 'Username oder Runtime-Config fehlt.'),
-      following: emptyPhase('following', 'Username oder Runtime-Config fehlt.'),
+      candidatesTotal: 0,
+      candidatesChecked: 0,
+      candidatesSkippedPrivate: 0,
+      inferredFollowers: [],
+      inferredFollowing: [],
       durationMs: Date.now() - startedAt,
       scannedAt: new Date().toISOString(),
-    };
-    console.log(JSON.stringify(responsePayload));
+    }));
     process.exitCode = 1;
 
     return;
   }
 
-  const followersRun = await runScraper('followers');
-  const followers = followersRun.payload
-    ? extractPhase(followersRun.payload, 'followers')
-    : emptyPhase('followers', followersRun.error || 'Followerliste lieferte kein Ergebnis.');
+  const childRuntimeConfigPath = writeChildRuntimeConfig();
 
-  const followingRun = await runScraper('following');
-  const following = followingRun.payload
-    ? extractPhase(followingRun.payload, 'following')
-    : emptyPhase('following', followingRun.error || 'Gefolgt-Liste lieferte kein Ergebnis.');
+  try {
+    const batchRun = await runScraper(publicUsername, 'public-connections-batch', childRuntimeConfigPath);
 
-  const relationType = resolveRelationType(followers, following);
-  const statusLevel = resolveStatusLevel(followers, following);
-  const responsePayload = {
-    ok: statusLevel !== 'error',
-    statusLevel,
-    statusMessage: resolveStatusMessage(relationType, followers, following),
-    publicUsername,
-    targetUsername,
-    relationType,
-    targetFollowsPublicProfile: Boolean(followers.targetFound),
-    publicProfileFollowsTarget: Boolean(following.targetFound),
-    followers,
-    following,
-    notes: [
-      ...followers.notes.map((note) => `followers: ${note}`),
-      ...following.notes.map((note) => `following: ${note}`),
-    ],
-    warnings: [
-      ...followers.warnings.map((warning) => `followers: ${warning}`),
-      ...following.warnings.map((warning) => `following: ${warning}`),
-    ],
-    childProcesses: {
-      followers: {
-        code: followersRun.code,
-        ok: followersRun.ok,
-        error: followersRun.error || null,
-      },
-      following: {
-        code: followingRun.code,
-        ok: followingRun.ok,
-        error: followingRun.error || null,
-      },
-    },
-    durationMs: Date.now() - startedAt,
-    scannedAt: new Date().toISOString(),
-  };
+    if (batchRun.payload) {
+      console.log(JSON.stringify({
+        ...batchRun.payload,
+        publicUsername: batchRun.payload.publicUsername || publicUsername,
+        targetUsername: batchRun.payload.targetUsername || targetUsername,
+      }));
 
-  console.log(JSON.stringify(responsePayload));
+      return;
+    }
+
+    console.log(JSON.stringify({
+      ok: false,
+      statusLevel: 'error',
+      statusMessage: 'Public-Profile-Verbindungsscan fehlgeschlagen: Batch-Scraper lieferte kein Ergebnis.',
+      publicUsername,
+      targetUsername,
+      relationType: 'candidate_search',
+      candidatesTotal: 0,
+      candidatesChecked: 0,
+      candidatesSkippedPrivate: 0,
+      inferredFollowers: [],
+      inferredFollowing: [],
+      error: batchRun.error || batchRun.stderr || null,
+      durationMs: Date.now() - startedAt,
+      scannedAt: new Date().toISOString(),
+    }));
+    process.exitCode = 1;
+  } finally {
+    try {
+      fs.unlinkSync(childRuntimeConfigPath);
+    } catch {
+      // Ignore temp cleanup errors.
+    }
+  }
+
 }
 
 main().catch((error) => {
-  const responsePayload = {
+  console.log(JSON.stringify({
     ok: false,
     statusLevel: 'error',
     statusMessage: 'Public-Profile-Verbindungsscan fehlgeschlagen.',
@@ -293,12 +254,13 @@ main().catch((error) => {
     relationType: 'unknown',
     targetFollowsPublicProfile: false,
     publicProfileFollowsTarget: false,
-    followers: emptyPhase('followers', error.message),
-    following: emptyPhase('following', error.message),
+    candidatesTotal: 0,
+    candidatesChecked: 0,
+    candidatesSkippedPrivate: 0,
+    inferredFollowers: [],
+    inferredFollowing: [],
     error: error.message,
     scannedAt: new Date().toISOString(),
-  };
-
-  console.log(JSON.stringify(responsePayload));
+  }));
   process.exitCode = 1;
 });

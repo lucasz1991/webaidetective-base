@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\Mail;
 use App\Models\TrackedPerson;
 use Illuminate\Bus\Queueable;
@@ -108,6 +109,14 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             ])->save();
 
             $snapshot = $trackedPerson->analyzeInstagram(null, $this->fullScan);
+        } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            Log::info('Instagram-Monitoring-Scan wurde beendet, weil ein neuer Scan fuer dieselbe Person gestartet wurde.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'instagram_username' => $trackedPerson->instagram_username,
+                'full_scan' => $this->fullScan,
+            ]);
+
+            return;
         } catch (\Throwable $exception) {
             if (str_contains($exception->getMessage(), 'laeuft bereits eine Instagram-Analyse')) {
                 Log::info('Monitoring fuer getrackte Person uebersprungen, weil bereits eine Instagram-Analyse laeuft.', [

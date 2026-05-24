@@ -2,21 +2,27 @@
 
 namespace App\Services\TrackedPeople;
 
+use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\TrackedPerson;
+use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramPublicProfileScan;
 use App\Models\TrackedPersonPublicProfile;
 use App\Services\Social\InstagramScraper;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class TrackedPersonInstagramPublicProfileScanService
 {
     public function __construct(
         private readonly InstagramScraper $scraper,
+        private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
     ) {
     }
+
+    private ?array $activeScanControl = null;
 
     public function scan(TrackedPerson $trackedPerson, ?callable $progress = null): Collection
     {
@@ -26,16 +32,27 @@ class TrackedPersonInstagramPublicProfileScanService
             throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');
         }
 
+        $scanControl = $this->scanCoordinator->begin(
+            $trackedPerson->id,
+            'Public-Profile-Verbindungsscan',
+        );
+
+        Cache::lock('tracked-person-instagram-public-profile-scan:'.$trackedPerson->id, 3600)->forceRelease();
         $lock = Cache::lock('tracked-person-instagram-public-profile-scan:'.$trackedPerson->id, 3600);
 
         if (! $lock->get()) {
+            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
             throw new \RuntimeException('Fuer diese Person laeuft bereits ein Public-Profile-Verbindungsscan.');
         }
+
+        $this->activeScanControl = $scanControl;
 
         try {
             return $this->scanWithLock($trackedPerson, $targetUsername, $progress);
         } finally {
             $lock->release();
+            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
+            $this->activeScanControl = null;
         }
     }
 
@@ -76,6 +93,20 @@ class TrackedPersonInstagramPublicProfileScanService
                 continue;
             }
 
+            $candidates = $this->buildStoredCandidateList($trackedPerson, $publicProfile, $publicUsername);
+
+            if ($candidates === []) {
+                $createdScans->push($this->storeFailedScan(
+                    $trackedPerson,
+                    $publicProfile,
+                    $targetUsername,
+                    $publicUsername,
+                    'Fuer dieses bekannte Profil wurden keine gespeicherten Follower-/Gefolgt-Listen gefunden.',
+                ));
+
+                continue;
+            }
+
             $profileStart = (int) floor(($index / $total) * 100);
             $profileEnd = (int) floor((($index + 1) / $total) * 100);
 
@@ -94,9 +125,14 @@ class TrackedPersonInstagramPublicProfileScanService
                         'percent' => $profileStart + (int) floor(((int) ($state['percent'] ?? 0) / 100) * max(1, $profileEnd - $profileStart)),
                         'message' => (string) ($state['message'] ?? 'Verbindung mit @'.$publicUsername.' wird geprueft.'),
                     ]),
+                    $this->withActiveScanControl([
+                        'publicConnectionCandidates' => $candidates,
+                    ]),
                 );
 
                 $createdScans->push($this->storeScan($trackedPerson, $publicProfile, $payload));
+            } catch (TrackedPersonInstagramScanCancelledException $exception) {
+                throw $exception;
             } catch (\Throwable $exception) {
                 $createdScans->push($this->storeFailedScan(
                     $trackedPerson,
@@ -117,11 +153,114 @@ class TrackedPersonInstagramPublicProfileScanService
         return $createdScans->values();
     }
 
+    private function buildStoredCandidateList(
+        TrackedPerson $trackedPerson,
+        TrackedPersonPublicProfile $publicProfile,
+        string $publicUsername,
+    ): array {
+        $linkedTrackedPerson = TrackedPerson::query()
+            ->where('user_id', $trackedPerson->user_id)
+            ->where('id', '!=', $trackedPerson->id)
+            ->get()
+            ->first(function (TrackedPerson $candidate) use ($publicUsername): bool {
+                $candidateUsername = $this->scraper->normalizeInstagramUsername($candidate->instagram_username);
+
+                return $candidateUsername === $publicUsername;
+            });
+
+        if (! $linkedTrackedPerson) {
+            return [];
+        }
+
+        $snapshots = $linkedTrackedPerson
+            ->instagramSnapshots()
+            ->latest('analyzed_at')
+            ->limit(20)
+            ->get();
+
+        if ($snapshots->isEmpty()) {
+            return [];
+        }
+
+        $candidates = [];
+
+        foreach ($snapshots as $snapshot) {
+            foreach ([
+                'followersList' => 'known_profile_followers',
+                'followingList' => 'known_profile_following',
+            ] as $payloadKey => $sourceList) {
+                foreach ($this->loadStoredRelationshipItems($snapshot->raw_payload ?? [], $payloadKey) as $item) {
+                    if (! is_array($item)) {
+                        continue;
+                    }
+
+                    $rawUsername = $item['username'] ?? null;
+
+                    if (! is_scalar($rawUsername)) {
+                        continue;
+                    }
+
+                    $username = $this->scraper->normalizeInstagramUsername((string) $rawUsername);
+
+                    if ($username === null || $username === $publicUsername) {
+                        continue;
+                    }
+
+                    $existing = $candidates[$username] ?? [
+                        'username' => $username,
+                        'displayName' => $this->nullableTrim($item['displayName'] ?? null),
+                        'profileUrl' => $this->nullableTrim($item['profileUrl'] ?? null) ?: 'https://www.instagram.com/'.$username.'/',
+                        'sourceLists' => [],
+                    ];
+
+                    if (! in_array($sourceList, $existing['sourceLists'], true)) {
+                        $existing['sourceLists'][] = $sourceList;
+                    }
+
+                    $candidates[$username] = $existing;
+                }
+            }
+        }
+
+        return array_values($candidates);
+    }
+
+    private function loadStoredRelationshipItems(array $rawPayload, string $payloadKey): array
+    {
+        $relationshipList = data_get($rawPayload, 'extractedProfile.'.$payloadKey, []);
+        $itemsPath = data_get($relationshipList, 'itemsPath');
+
+        if (is_string($itemsPath) && $itemsPath !== '' && Storage::disk('public')->exists($itemsPath)) {
+            try {
+                $decoded = json_decode(Storage::disk('public')->get($itemsPath), true, flags: JSON_THROW_ON_ERROR);
+                $items = data_get($decoded, 'allKnownItems', data_get($decoded, 'items', data_get($decoded, 'activeItems', [])));
+
+                if (is_array($items)) {
+                    return $items;
+                }
+            } catch (\Throwable) {
+                return [];
+            }
+        }
+
+        foreach (['allKnownItems', 'items', 'activeItems', 'observedItems', 'itemsPreview', 'observedPreview', 'removedHistoryPreview'] as $fallbackKey) {
+            $items = data_get($relationshipList, $fallbackKey, []);
+
+            if (is_array($items) && $items !== []) {
+                return $items;
+            }
+        }
+
+        return [];
+    }
+
     private function storeScan(
         TrackedPerson $trackedPerson,
         TrackedPersonPublicProfile $publicProfile,
         array $payload,
     ): TrackedPersonInstagramPublicProfileScan {
+        $this->assertActiveScanCurrent();
+
         $followers = is_array($payload['followers'] ?? null) ? $payload['followers'] : [];
         $following = is_array($payload['following'] ?? null) ? $payload['following'] : [];
         $relationType = $this->normalizeRelationType($payload['relationType'] ?? null);
@@ -167,6 +306,8 @@ class TrackedPersonInstagramPublicProfileScanService
                 'analyzed_at' => $analyzedAt,
             ]);
 
+            $this->storeInferredConnections($trackedPerson, $publicProfile, $scan, $payload, $analyzedAt);
+
             $relationshipType = $this->mapRelationTypeToPublicProfile($relationType);
 
             if ($relationshipType !== null) {
@@ -186,6 +327,8 @@ class TrackedPersonInstagramPublicProfileScanService
         string $publicUsername,
         string $errorMessage,
     ): TrackedPersonInstagramPublicProfileScan {
+        $this->assertActiveScanCurrent();
+
         return TrackedPersonInstagramPublicProfileScan::create([
             'tracked_person_id' => $trackedPerson->id,
             'public_profile_id' => $publicProfile->id,
@@ -203,11 +346,76 @@ class TrackedPersonInstagramPublicProfileScanService
         ]);
     }
 
+    private function storeInferredConnections(
+        TrackedPerson $trackedPerson,
+        TrackedPersonPublicProfile $publicProfile,
+        TrackedPersonInstagramPublicProfileScan $scan,
+        array $payload,
+        \Illuminate\Support\Carbon $analyzedAt,
+    ): void {
+        foreach ([
+            'inferredFollowers' => 'follows_target',
+            'inferredFollowing' => 'followed_by_target',
+        ] as $payloadKey => $relationshipType) {
+            $connections = $payload[$payloadKey] ?? [];
+
+            if (! is_array($connections)) {
+                continue;
+            }
+
+            foreach ($connections as $connection) {
+                if (! is_array($connection)) {
+                    continue;
+                }
+
+                $rawCandidateUsername = $connection['username'] ?? null;
+
+                if (! is_scalar($rawCandidateUsername)) {
+                    continue;
+                }
+
+                $candidateUsername = $this->scraper->normalizeInstagramUsername((string) $rawCandidateUsername);
+
+                if ($candidateUsername === null) {
+                    continue;
+                }
+
+                $existing = TrackedPersonInstagramInferredConnection::query()
+                    ->where('tracked_person_id', $trackedPerson->id)
+                    ->where('public_profile_id', $publicProfile->id)
+                    ->where('relationship_type', $relationshipType)
+                    ->where('candidate_username', $candidateUsername)
+                    ->first();
+
+                TrackedPersonInstagramInferredConnection::updateOrCreate(
+                    [
+                        'tracked_person_id' => $trackedPerson->id,
+                        'public_profile_id' => $publicProfile->id,
+                        'relationship_type' => $relationshipType,
+                        'candidate_username' => $candidateUsername,
+                    ],
+                    [
+                        'scan_id' => $scan->id,
+                        'user_id' => $trackedPerson->user_id,
+                        'source_public_username' => Str::lower((string) ($payload['publicUsername'] ?? $publicProfile->username)),
+                        'candidate_display_name' => $this->nullableTrim($connection['displayName'] ?? null),
+                        'candidate_profile_url' => $this->nullableTrim($connection['profileUrl'] ?? null),
+                        'source_lists' => is_array($connection['sourceLists'] ?? null) ? array_values($connection['sourceLists']) : [],
+                        'evidence' => $connection,
+                        'status' => 'active',
+                        'first_seen_at' => $existing?->first_seen_at ?: $analyzedAt,
+                        'last_seen_at' => $analyzedAt,
+                    ],
+                );
+            }
+        }
+    }
+
     private function normalizeRelationType(mixed $relationType): string
     {
         $relationType = Str::lower(trim((string) $relationType));
 
-        return in_array($relationType, ['mutual', 'public_follows_target', 'target_follows_public', 'none', 'unknown'], true)
+        return in_array($relationType, ['mutual', 'public_follows_target', 'target_follows_public', 'candidate_search', 'none', 'unknown'], true)
             ? $relationType
             : 'unknown';
     }
@@ -232,8 +440,21 @@ class TrackedPersonInstagramPublicProfileScanService
         return is_array($value) && $value !== [] ? $value : null;
     }
 
+    private function nullableTrim(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
+    }
+
     private function reportProgress(?callable $progress, array $payload): void
     {
+        $this->assertActiveScanCurrent();
+
         if (! $progress) {
             return;
         }
@@ -243,5 +464,29 @@ class TrackedPersonInstagramPublicProfileScanService
             'percent' => max(0, min(100, (int) ($payload['percent'] ?? 0))),
             'message' => (string) ($payload['message'] ?? 'Public-Profile-Verbindungsscan laeuft.'),
         ]);
+    }
+
+    private function withActiveScanControl(array $runtimeConfigOverrides = []): array
+    {
+        if ($this->activeScanControl === null) {
+            return $runtimeConfigOverrides;
+        }
+
+        return [
+            ...$runtimeConfigOverrides,
+            '_scanControl' => $this->activeScanControl,
+        ];
+    }
+
+    private function assertActiveScanCurrent(): void
+    {
+        if ($this->activeScanControl === null) {
+            return;
+        }
+
+        $this->scanCoordinator->assertCurrent(
+            (int) $this->activeScanControl['trackedPersonId'],
+            (int) $this->activeScanControl['generation'],
+        );
     }
 }

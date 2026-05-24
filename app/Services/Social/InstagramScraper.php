@@ -2,10 +2,11 @@
 
 namespace App\Services\Social;
 
+use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\Setting;
+use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process as SymfonyProcess;
@@ -34,21 +35,24 @@ class InstagramScraper
             throw new \RuntimeException('Node-Skript nicht gefunden.');
         }
 
+        $scanControl = $this->extractScanControl($runtimeConfigOverrides);
         $runtimeConfigPath = $this->writeRuntimeConfig($runtimeConfigOverrides);
         $stdout = '';
         $stderr = '';
         $stderrBuffer = '';
 
         try {
-            $result = Process::path(base_path())
-                ->forever()
-                ->run([
+            $result = $this->runNodeProcess(
+                [
                     $this->resolveNodeBinary(),
                     $nodeScript,
                     $username,
                     $runtimeConfigPath,
                     $operationMode,
-                ], function (string $type, string $buffer) use (
+                ],
+                $scanControl,
+                $operationMode,
+                function (string $type, string $buffer) use (
                     &$stdout,
                     &$stderr,
                     &$stderrBuffer,
@@ -72,15 +76,16 @@ class InstagramScraper
                         $progressEnd,
                         $progress,
                     );
-                });
+                },
+            );
         } finally {
             if ($runtimeConfigPath && File::exists($runtimeConfigPath)) {
                 File::delete($runtimeConfigPath);
             }
         }
 
-        $output = trim($stdout !== '' ? $stdout : $result->output());
-        $errorOutput = trim($stderr !== '' ? $stderr : $result->errorOutput());
+        $output = trim($stdout !== '' ? $stdout : $result['output']);
+        $errorOutput = trim($stderr !== '' ? $stderr : $result['errorOutput']);
 
         if ($output === '') {
             throw new \RuntimeException(
@@ -96,7 +101,7 @@ class InstagramScraper
             throw new \RuntimeException('Fehler: Unerwartetes Output-Format vom Node-Skript.');
         }
 
-        $payload['_process_successful'] = $result->successful();
+        $payload['_process_successful'] = $result['successful'];
         $payload['_stderr'] = $errorOutput;
         $payload['username'] = $payload['username'] ?? $username;
         $payload['operationMode'] = $payload['operationMode'] ?? $operationMode;
@@ -123,26 +128,30 @@ class InstagramScraper
             throw new \RuntimeException('Node-Skript fuer Public-Profile-Verbindungsscan nicht gefunden.');
         }
 
+        $scanControl = $this->extractScanControl($runtimeConfigOverrides);
         $runtimeConfigPath = $this->writeRuntimeConfig($runtimeConfigOverrides);
         $stdout = '';
         $stderr = '';
         $stderrBuffer = '';
+        $lastProgressPercent = 0;
 
         try {
-            $result = Process::path(base_path())
-                ->forever()
-                ->run([
+            $result = $this->runNodeProcess(
+                [
                     $this->resolveNodeBinary(),
                     $nodeScript,
                     $publicUsername,
                     $targetUsername,
                     $runtimeConfigPath,
-                ], function (string $type, string $buffer) use (
+                ],
+                $scanControl,
+                'public-profile-connections',
+                function (string $type, string $buffer) use (
                     &$stdout,
                     &$stderr,
                     &$stderrBuffer,
+                    &$lastProgressPercent,
                     $progress,
-                    $publicUsername,
                 ) {
                     if ($type === SymfonyProcess::OUT) {
                         $stdout .= $buffer;
@@ -173,31 +182,56 @@ class InstagramScraper
                         }
 
                         $relationship = (string) ($event['relationship'] ?? '');
-                        [$progressStart, $progressEnd] = match ($relationship) {
-                            'followers' => [5, 49],
-                            'following' => [50, 94],
-                            default => [1, 99],
-                        };
-                        $normalized = $this->normalizeProgressEvent(
-                            $event,
-                            $relationship ?: 'public-profile-connections',
-                            $progressStart,
-                            $progressEnd,
-                        );
-                        $normalized['phase'] = 'public-connections';
-                        $normalized['message'] = '@'.$publicUsername.': '.$normalized['message'];
 
-                        $progress($normalized);
+                        if ($relationship === 'public-connections') {
+                            $loaded = (int) ($event['loaded'] ?? 0);
+                            $expected = max(1, (int) ($event['expectedCount'] ?? 1));
+                            $percent = min(99, max(1, (int) floor(($loaded / $expected) * 100)));
+                            $percent = max($lastProgressPercent, $percent);
+                            $lastProgressPercent = $percent;
+                            $foundFollowers = (int) ($event['foundFollowers'] ?? 0);
+                            $foundFollowing = (int) ($event['foundFollowing'] ?? 0);
+                            $message = trim((string) ($event['message'] ?? ''));
+
+                            if ($message === '') {
+                                $message = 'Kandidaten geprueft: '
+                                    .number_format($loaded, 0, ',', '.')
+                                    .' von '
+                                    .number_format($expected, 0, ',', '.')
+                                    .'. Gefunden: '
+                                    .number_format($foundFollowers, 0, ',', '.')
+                                    .' Follower, '
+                                    .number_format($foundFollowing, 0, ',', '.')
+                                    .' Gefolgt.';
+                            }
+
+                            $progress([
+                                'phase' => 'public-connections',
+                                'stage' => (string) ($event['stage'] ?? 'public-connections'),
+                                'percent' => $percent,
+                                'loaded' => $loaded,
+                                'expected' => $expected,
+                                'foundFollowers' => $foundFollowers,
+                                'foundFollowing' => $foundFollowing,
+                                'rateLimitedCandidates' => (int) ($event['rateLimitedCandidates'] ?? 0),
+                                'message' => $message,
+                            ]);
+
+                            continue;
+                        }
+
+                        continue;
                     }
-                });
+                },
+            );
         } finally {
             if ($runtimeConfigPath && File::exists($runtimeConfigPath)) {
                 File::delete($runtimeConfigPath);
             }
         }
 
-        $output = trim($stdout !== '' ? $stdout : $result->output());
-        $errorOutput = trim($stderr !== '' ? $stderr : $result->errorOutput());
+        $output = trim($stdout !== '' ? $stdout : $result['output']);
+        $errorOutput = trim($stderr !== '' ? $stderr : $result['errorOutput']);
 
         if ($output === '') {
             throw new \RuntimeException(
@@ -213,13 +247,125 @@ class InstagramScraper
             throw new \RuntimeException('Fehler: Unerwartetes Output-Format vom Public-Profile-Verbindungsscan.');
         }
 
-        $payload['_process_successful'] = $result->successful();
+        $payload['_process_successful'] = $result['successful'];
         $payload['_stderr'] = $errorOutput;
         $payload['publicUsername'] = $payload['publicUsername'] ?? $publicUsername;
         $payload['targetUsername'] = $payload['targetUsername'] ?? $targetUsername;
         $payload['operationMode'] = 'public-profile-connections';
 
         return $payload;
+    }
+
+    private function extractScanControl(array &$runtimeConfigOverrides): ?array
+    {
+        $scanControl = $runtimeConfigOverrides['_scanControl'] ?? null;
+        unset($runtimeConfigOverrides['_scanControl']);
+
+        if (! is_array($scanControl)) {
+            return null;
+        }
+
+        $trackedPersonId = (int) ($scanControl['trackedPersonId'] ?? 0);
+        $generation = (int) ($scanControl['generation'] ?? 0);
+
+        if ($trackedPersonId <= 0 || $generation <= 0) {
+            return null;
+        }
+
+        return [
+            'trackedPersonId' => $trackedPersonId,
+            'generation' => $generation,
+            'label' => (string) ($scanControl['label'] ?? 'Instagram-Scan'),
+        ];
+    }
+
+    private function runNodeProcess(
+        array $command,
+        ?array $scanControl,
+        string $label,
+        callable $onOutput,
+    ): array {
+        $process = new SymfonyProcess($command, base_path());
+        $process->setTimeout(null);
+        $process->setIdleTimeout(null);
+        $process->start();
+
+        $coordinator = $scanControl
+            ? app(TrackedPersonInstagramScanCoordinator::class)
+            : null;
+        $trackedPersonId = (int) ($scanControl['trackedPersonId'] ?? 0);
+        $generation = (int) ($scanControl['generation'] ?? 0);
+        $pid = (int) ($process->getPid() ?? 0);
+
+        if ($coordinator && $pid > 0) {
+            $coordinator->registerProcess(
+                $trackedPersonId,
+                $generation,
+                $pid,
+                trim(($scanControl['label'] ?? 'Instagram-Scan').' '.$label),
+            );
+        }
+
+        $stdout = '';
+        $stderr = '';
+
+        try {
+            while ($process->isRunning()) {
+                $stdoutChunk = $process->getIncrementalOutput();
+                $stderrChunk = $process->getIncrementalErrorOutput();
+
+                if ($stdoutChunk !== '') {
+                    $stdout .= $stdoutChunk;
+                    $onOutput(SymfonyProcess::OUT, $stdoutChunk);
+                }
+
+                if ($stderrChunk !== '') {
+                    $stderr .= $stderrChunk;
+                    $onOutput(SymfonyProcess::ERR, $stderrChunk);
+                }
+
+                if ($coordinator && $coordinator->shouldCancel($trackedPersonId, $generation)) {
+                    $process->stop(1);
+
+                    if ($pid > 0) {
+                        $coordinator->terminateProcessTree($pid);
+                    }
+
+                    throw new TrackedPersonInstagramScanCancelledException(
+                        'Instagram-Scan wurde abgebrochen, weil fuer diese Person ein neuer Scan gestartet wurde.'
+                    );
+                }
+
+                usleep(150000);
+            }
+
+            $stdoutChunk = $process->getIncrementalOutput();
+            $stderrChunk = $process->getIncrementalErrorOutput();
+
+            if ($stdoutChunk !== '') {
+                $stdout .= $stdoutChunk;
+                $onOutput(SymfonyProcess::OUT, $stdoutChunk);
+            }
+
+            if ($stderrChunk !== '') {
+                $stderr .= $stderrChunk;
+                $onOutput(SymfonyProcess::ERR, $stderrChunk);
+            }
+
+            if ($coordinator) {
+                $coordinator->assertCurrent($trackedPersonId, $generation);
+            }
+
+            return [
+                'successful' => $process->isSuccessful(),
+                'output' => $stdout !== '' ? $stdout : $process->getOutput(),
+                'errorOutput' => $stderr !== '' ? $stderr : $process->getErrorOutput(),
+            ];
+        } finally {
+            if ($coordinator && $pid > 0) {
+                $coordinator->unregisterProcess($trackedPersonId, $generation, $pid);
+            }
+        }
     }
 
     private function handleProgressOutput(

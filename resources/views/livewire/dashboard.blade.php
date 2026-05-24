@@ -14,7 +14,6 @@
                         Ueberwache Profilstatus, Kennzahlen, Follower- und Gefolgt-Aenderungen an einem Ort.
                     </p>
                 </div>
-
                 <div class="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
                     <div class="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
                         <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Profile</div>
@@ -36,7 +35,6 @@
             </div>
         </div>
     </div>
-
     <main class="container mx-auto px-5 py-6">
         <livewire:user.tracked-people-manager />
     </main>

@@ -111,9 +111,12 @@ const isMiniScanMode = ['mini', 'mini-scan', 'public', 'public-profile'].include
 const isProfileOnlyMode = isMiniScanMode || ['profile', 'basic', 'grunddaten'].includes(operationMode);
 const isFollowersOnlyMode = operationMode === 'followers';
 const isFollowingOnlyMode = operationMode === 'following';
-const isRelationshipOnlyMode = isFollowersOnlyMode || isFollowingOnlyMode;
-const shouldCollectFollowers = operationMode === 'analyze' || isFollowersOnlyMode;
-const shouldCollectFollowing = operationMode === 'analyze' || isFollowingOnlyMode;
+const isFollowersSearchMode = ['followers-search', 'search-followers'].includes(operationMode);
+const isFollowingSearchMode = ['following-search', 'search-following'].includes(operationMode);
+const isRelationshipSearchOnlyMode = isFollowersSearchMode || isFollowingSearchMode;
+const isRelationshipOnlyMode = isFollowersOnlyMode || isFollowingOnlyMode || isRelationshipSearchOnlyMode;
+const shouldCollectFollowers = operationMode === 'analyze' || isFollowersOnlyMode || isFollowersSearchMode;
+const shouldCollectFollowing = operationMode === 'analyze' || isFollowingOnlyMode || isFollowingSearchMode;
 const DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS = 0;
 const DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS = 100000;
 const RELATIONSHIP_NO_PROGRESS_REOPEN_LIMIT = 2;
@@ -393,6 +396,12 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
     ),
     expectedFollowerCount: normalizeOptionalPositiveInteger(input?.expectedFollowerCount, merged.expectedFollowerCount),
     expectedFollowingCount: normalizeOptionalPositiveInteger(input?.expectedFollowingCount, merged.expectedFollowingCount),
+    relationshipSearchOnly: input?.relationshipSearchOnly === true || input?.relationship_search_only === true,
+    relationshipSearchTargetUsername: normalizeInstagramUsername(input?.relationshipSearchTargetUsername || merged.relationshipSearchTargetUsername || ''),
+    relationshipSearchTargetMaxItems: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxItems, merged.relationshipSearchTargetMaxItems),
+    relationshipSearchTargetMaxScrollRounds: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxScrollRounds, merged.relationshipSearchTargetMaxScrollRounds),
+    skipDebugArtifacts: input?.skipDebugArtifacts === true || input?.skip_debug_artifacts === true,
+    blockHeavyResources: input?.blockHeavyResources === true || input?.block_heavy_resources === true,
     accountPool: Array.isArray(input.accountPool) ? input.accountPool : [],
   };
 }
@@ -481,6 +490,12 @@ function loadRuntimeConfig(configPath) {
     relationshipListMaxScrollRounds: DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS,
     expectedFollowerCount: 0,
     expectedFollowingCount: 0,
+    relationshipSearchOnly: false,
+    relationshipSearchTargetUsername: '',
+    relationshipSearchTargetMaxItems: 0,
+    relationshipSearchTargetMaxScrollRounds: 60,
+    skipDebugArtifacts: false,
+    blockHeavyResources: false,
     accountPool: [],
   };
 
@@ -1575,6 +1590,9 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
   );
   const hasItemLimit = maxItems > 0;
   const targetUsername = normalizeInstagramUsername(username);
+  const searchTargetUsername = normalizeInstagramUsername(
+    options.targetUsername || runtimeConfig.relationshipSearchTargetUsername || '',
+  );
   const queries = getRelationshipSearchPartitionQueries(runtimeConfig);
   const maxSearchDepth = Math.min(
     2,
@@ -1595,6 +1613,10 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
   let stopReason = null;
 
   const targetReached = () => {
+    if (searchTargetUsername && usersByUsername.has(searchTargetUsername)) {
+      return true;
+    }
+
     if (hasItemLimit && usersByUsername.size >= maxItems) {
       return true;
     }
@@ -1609,6 +1631,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     maxItems,
     maxScrollRounds,
     queryCount: queries.length,
+    targetUsername: searchTargetUsername || null,
   });
 
   openAttempts++;
@@ -1764,11 +1787,18 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       if (targetReached()) {
         queryStopReason = expectedCount > 0 && usersByUsername.size >= expectedCount
           ? 'expected-count-reached'
+          : searchTargetUsername && usersByUsername.has(searchTargetUsername)
+          ? 'target-found'
           : 'max-items-reached';
         break;
       }
 
       if (entries.length === 0) {
+        if (searchTargetUsername && queryRounds < 3 && searchRounds < maxScrollRounds) {
+          await sleep(searchWaitMs);
+          continue;
+        }
+
         queryStopReason = 'search-empty';
         break;
       }
@@ -1883,12 +1913,133 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     rounds: searchRounds,
     addedCount,
     openAttempts,
-    stopReason: stopReason || (targetReached() ? 'expected-count-reached' : 'search-partitions-exhausted'),
+    stopReason: stopReason || (
+      searchTargetUsername && usersByUsername.has(searchTargetUsername)
+        ? 'target-found'
+        : (targetReached() ? 'expected-count-reached' : 'search-partitions-exhausted')
+    ),
     rateLimited: false,
     rateLimitText: null,
     maxDepth: maxSearchDepth,
     expandedQueryCount,
   };
+}
+
+async function collectPublicRelationshipSearchOnlyList(page, username, profile, relationship, options = {}) {
+  const runtimeConfig = options.runtimeConfig || {};
+  const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
+  const targetUsername = normalizeInstagramUsername(runtimeConfig.relationshipSearchTargetUsername || options.targetUsername || '');
+  const maxItems = normalizeOptionalPositiveInteger(runtimeConfig.relationshipSearchTargetMaxItems, 0);
+  const maxScrollRounds = Math.max(
+    5,
+    normalizeOptionalPositiveInteger(runtimeConfig.relationshipSearchTargetMaxScrollRounds, 60) || 60,
+  );
+  const result = {
+    attempted: false,
+    available: false,
+    complete: false,
+    count: 0,
+    maxItems,
+    expectedCount: targetUsername ? 1 : 0,
+    items: [],
+    targetUsername: targetUsername || null,
+    targetFound: false,
+    targetItem: null,
+    reason: null,
+    rateLimited: false,
+    rateLimitText: null,
+    openAttempts: 0,
+    scrollRounds: 0,
+    noProgressReopenLimit: 0,
+    searchAttempted: false,
+    searchInputAvailable: false,
+    searchQueries: [],
+    searchRounds: 0,
+    searchAddedCount: 0,
+    searchStopReason: null,
+    searchMaxDepth: 0,
+    searchExpandedQueryCount: 0,
+  };
+
+  if (profile?.isPrivate) {
+    result.reason = 'private-profile';
+    return result;
+  }
+
+  if (profile?.requiresLogin) {
+    result.reason = 'login-required';
+    return result;
+  }
+
+  if (!targetUsername) {
+    result.reason = 'search-target-missing';
+    return result;
+  }
+
+  result.attempted = true;
+  const usersByUsername = new Map();
+  const searchResult = await collectRelationshipSearchPartitions(
+    page,
+    username,
+    normalizedRelationship,
+    {
+      ...options,
+      maxItems,
+      expectedCount: 0,
+      maxScrollRounds,
+      searchMaxScrollRounds: maxScrollRounds,
+      targetUsername,
+      runtimeConfig: {
+        ...runtimeConfig,
+        relationshipSearchPartitionQueries: [targetUsername],
+        relationshipSearchMaxDepth: 1,
+        relationshipSearchTargetUsername: targetUsername,
+      },
+    },
+    usersByUsername,
+  );
+  const items = Array.from(usersByUsername.values());
+  const targetItem = usersByUsername.get(targetUsername) || null;
+
+  result.searchAttempted = Boolean(searchResult.attempted);
+  result.searchInputAvailable = Boolean(searchResult.inputAvailable);
+  result.searchQueries = searchResult.queries || [];
+  result.searchRounds = searchResult.rounds || 0;
+  result.searchAddedCount = searchResult.addedCount || 0;
+  result.searchStopReason = searchResult.stopReason || null;
+  result.searchMaxDepth = searchResult.maxDepth || 0;
+  result.searchExpandedQueryCount = searchResult.expandedQueryCount || 0;
+  result.openAttempts = searchResult.openAttempts || 0;
+  result.scrollRounds = searchResult.rounds || 0;
+  result.rateLimited = Boolean(searchResult.rateLimited);
+  result.rateLimitText = searchResult.rateLimitText || null;
+  result.items = items;
+  result.count = items.length;
+  result.available = items.length > 0;
+  result.targetFound = Boolean(targetItem);
+  result.targetItem = targetItem;
+  result.complete = Boolean(targetItem) && !result.rateLimited;
+  result.reason = result.rateLimited
+    ? 'instagram-rate-limit'
+    : result.targetFound
+    ? null
+    : (searchResult.stopReason || `${normalizedRelationship}-target-not-found`);
+
+  progressLog('relationship-search-complete', {
+    relationship: normalizedRelationship,
+    loaded: result.count,
+    expectedCount: result.expectedCount,
+    maxItems,
+    searchQueries: result.searchQueries.length,
+    searchRounds: result.searchRounds,
+    searchAddedCount: result.searchAddedCount,
+    reason: result.reason,
+    complete: result.complete,
+    targetUsername,
+    targetFound: result.targetFound,
+  });
+
+  return result;
 }
 
 async function collectPublicRelationshipList(page, username, profile, relationship, options = {}) {
@@ -2987,6 +3138,10 @@ async function collectRelationshipListForRuntime(page, username, profile, relati
   const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
   const options = buildRelationshipCollectionOptions(runtimeConfig, normalizedRelationship);
 
+  if (runtimeConfig.relationshipSearchOnly || isRelationshipSearchOnlyMode) {
+    return collectPublicRelationshipSearchOnlyList(page, username, profile, normalizedRelationship, options);
+  }
+
   return normalizedRelationship === 'following'
     ? collectPublicFollowingList(page, username, profile, options)
     : collectPublicFollowersList(page, username, profile, options);
@@ -3169,6 +3324,419 @@ async function collectRelationshipListWithAccountSwitches(page, username, profil
     title: latestTitle,
     finalUrl: latestFinalUrl,
     switched,
+  };
+}
+
+function emptyBatchRelationshipList(relationship, profile, reason = null) {
+  return {
+    relationship: relationship === 'following' ? 'following' : 'followers',
+    checked: false,
+    available: false,
+    complete: false,
+    targetFound: false,
+    targetItem: null,
+    observedCount: 0,
+    expectedCount: 0,
+    reportedCount: 0,
+    rateLimited: false,
+    profileIsPrivate: typeof profile?.isPrivate === 'boolean' ? profile.isPrivate : null,
+    profileRequiresLogin: typeof profile?.requiresLogin === 'boolean' ? profile.requiresLogin : null,
+    reason,
+    searchAttempted: false,
+    searchInputAvailable: false,
+    searchQueries: [],
+    searchStopReason: null,
+    debugLogPath: activeRunDebug?.filePath || null,
+    error: null,
+  };
+}
+
+function summarizeBatchRelationshipList(list, profile, relationship) {
+  const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
+  const items = Array.isArray(list?.items) ? list.items : [];
+
+  return {
+    relationship: normalizedRelationship,
+    checked: Boolean(list?.attempted || list?.searchAttempted || list?.available || items.length > 0),
+    available: Boolean(list?.available),
+    complete: Boolean(list?.complete),
+    targetFound: Boolean(list?.targetFound || list?.targetItem),
+    targetItem: list?.targetItem || null,
+    observedCount: items.length,
+    expectedCount: Number(list?.expectedCount || 0),
+    reportedCount: Number(list?.count || items.length || 0),
+    rateLimited: Boolean(list?.rateLimited),
+    profileIsPrivate: typeof profile?.isPrivate === 'boolean' ? profile.isPrivate : null,
+    profileRequiresLogin: typeof profile?.requiresLogin === 'boolean' ? profile.requiresLogin : null,
+    reason: list?.reason || null,
+    searchAttempted: Boolean(list?.searchAttempted),
+    searchInputAvailable: Boolean(list?.searchInputAvailable),
+    searchQueries: Array.isArray(list?.searchQueries) ? list.searchQueries : [],
+    searchStopReason: list?.searchStopReason || null,
+    debugLogPath: activeRunDebug?.filePath || null,
+    error: null,
+  };
+}
+
+function isBatchRelationshipSearchDefinitive(list) {
+  if (!list || list.rateLimited) {
+    return false;
+  }
+
+  if (list.targetFound) {
+    return true;
+  }
+
+  if (!list.searchAttempted || !list.searchInputAvailable) {
+    return false;
+  }
+
+  return [
+    'search-empty',
+    'search-suggestions-section-reached',
+    'search-bottom-stale',
+    'search-scroll-stale',
+    'search-no-new-items',
+    'search-partitions-exhausted',
+    'target-found',
+    'followers-target-not-found',
+    'following-target-not-found',
+  ].includes(list.searchStopReason || list.reason || '');
+}
+
+function isBatchCandidateConnectionDefinitive(connection) {
+  if (!connection) {
+    return false;
+  }
+
+  if (connection.skippedReason) {
+    return true;
+  }
+
+  return isBatchRelationshipSearchDefinitive(connection.followers)
+    && isBatchRelationshipSearchDefinitive(connection.following);
+}
+
+function describeBatchCandidatePendingReason(connection) {
+  if (!connection) {
+    return 'kein Suchergebnis';
+  }
+
+  const reasons = [];
+
+  if (!isBatchRelationshipSearchDefinitive(connection.followers)) {
+    reasons.push(`Followerliste: ${connection.followers?.reason || connection.followers?.searchStopReason || 'nicht eindeutig durchsucht'}`);
+  }
+
+  if (!isBatchRelationshipSearchDefinitive(connection.following)) {
+    reasons.push(`Gefolgt-Liste: ${connection.following?.reason || connection.following?.searchStopReason || 'nicht eindeutig durchsucht'}`);
+  }
+
+  return reasons.join('; ') || 'nicht eindeutig durchsucht';
+}
+
+function resolvePublicConnectionRetryDelayMs(runtimeConfig = {}, attempt = 1, connection = null) {
+  const rateLimited = Boolean(connection?.followers?.rateLimited || connection?.following?.rateLimited);
+  const configuredBase = Number(runtimeConfig.publicConnectionRetryDelayMs || (rateLimited ? 15000 : 6000));
+  const configuredMax = Number(runtimeConfig.publicConnectionRetryMaxDelayMs || (rateLimited ? 90000 : 30000));
+  const baseDelay = Number.isFinite(configuredBase) ? Math.max(1500, configuredBase) : (rateLimited ? 15000 : 6000);
+  const maxDelay = Number.isFinite(configuredMax) ? Math.max(baseDelay, configuredMax) : (rateLimited ? 90000 : 30000);
+
+  return Math.min(maxDelay, baseDelay * Math.min(Math.max(1, attempt), 6));
+}
+
+function normalizePublicConnectionCandidate(candidate) {
+  if (!candidate || typeof candidate !== 'object') {
+    return null;
+  }
+
+  const candidateUsername = normalizeInstagramUsername(candidate.username);
+
+  if (!candidateUsername) {
+    return null;
+  }
+
+  return {
+    username: candidateUsername,
+    displayName: normalizeText(String(candidate.displayName || '')) || null,
+    profileUrl: normalizeText(String(candidate.profileUrl || '')) || `https://www.instagram.com/${candidateUsername}/`,
+    sourceLists: Array.isArray(candidate.sourceLists)
+      ? candidate.sourceLists.map((sourceList) => normalizeText(String(sourceList || ''))).filter(Boolean)
+      : [],
+  };
+}
+
+function buildBatchCandidateConnection(candidate, candidateFollowers, candidateFollowing) {
+  const candidateFollowsTarget = Boolean(candidateFollowing.targetFound);
+  const targetFollowsCandidate = Boolean(candidateFollowers.targetFound);
+  const skippedReason = candidateFollowers.profileIsPrivate || candidateFollowing.profileIsPrivate
+    ? 'private-profile'
+    : candidateFollowers.profileRequiresLogin || candidateFollowing.profileRequiresLogin
+    ? 'login-required'
+    : null;
+
+  return {
+    username: candidate.username,
+    displayName: candidate.displayName,
+    profileUrl: candidate.profileUrl,
+    sourceLists: candidate.sourceLists,
+    candidateFollowsTarget,
+    targetFollowsCandidate,
+    followerOfPrivateProfile: candidateFollowsTarget,
+    followedByPrivateProfile: targetFollowsCandidate,
+    skippedReason,
+    followers: candidateFollowers,
+    following: candidateFollowing,
+  };
+}
+
+async function collectBatchCandidateConnectionOnce(page, runtimeState, notes, candidate, candidateProfileUrl) {
+  const navigation = await navigateWithSoftTimeout(page, candidateProfileUrl, runtimeState.runtimeConfig, {
+    timeoutMs: Math.max(15000, Math.min(resolveNavigationWaitMs(runtimeState.runtimeConfig), 45000)),
+  });
+
+  if (!navigation.ok) {
+    notes.push(`Kandidat @${candidate.username} konnte nicht stabil geladen werden: ${navigation.error}`);
+  }
+
+  await sleep(750);
+
+  const candidateProfile = await collectProfileInfo(page, candidate.username);
+  let candidateFollowers = emptyBatchRelationshipList('followers', candidateProfile, null);
+  let candidateFollowing = emptyBatchRelationshipList('following', candidateProfile, null);
+
+  if (candidateProfile.isPrivate) {
+    candidateFollowers = emptyBatchRelationshipList('followers', candidateProfile, 'private-profile');
+    candidateFollowing = emptyBatchRelationshipList('following', candidateProfile, 'private-profile');
+  } else if (candidateProfile.requiresLogin) {
+    candidateFollowers = emptyBatchRelationshipList('followers', candidateProfile, 'login-required');
+    candidateFollowing = emptyBatchRelationshipList('following', candidateProfile, 'login-required');
+  } else {
+    const followersResult = await collectRelationshipListWithAccountSwitches(
+      page,
+      candidate.username,
+      candidateProfile,
+      'followers',
+      runtimeState,
+      notes,
+      candidateProfileUrl,
+    );
+    candidateFollowers = summarizeBatchRelationshipList(followersResult.list, followersResult.profile, 'followers');
+
+    if (page.url().includes('/followers')) {
+      await navigateWithSoftTimeout(page, candidateProfileUrl, runtimeState.runtimeConfig, {
+        timeoutMs: Math.max(15000, Math.min(resolveNavigationWaitMs(runtimeState.runtimeConfig), 45000)),
+      });
+      await sleep(350);
+    }
+
+    const followingResult = await collectRelationshipListWithAccountSwitches(
+      page,
+      candidate.username,
+      followersResult.profile || candidateProfile,
+      'following',
+      runtimeState,
+      notes,
+      candidateProfileUrl,
+    );
+    candidateFollowing = summarizeBatchRelationshipList(followingResult.list, followingResult.profile, 'following');
+  }
+
+  return buildBatchCandidateConnection(candidate, candidateFollowers, candidateFollowing);
+}
+
+async function collectBatchCandidateConnectionUntilDefinitive(
+  page,
+  runtimeState,
+  notes,
+  candidate,
+  candidateProfileUrl,
+  progressContext,
+) {
+  let attempt = 0;
+  let lastConnection = null;
+
+  while (true) {
+    attempt++;
+
+    if (attempt > 1) {
+      progressLog('candidate-scan-retry', {
+        relationship: 'public-connections',
+        loaded: progressContext.loaded,
+        expectedCount: progressContext.expectedCount,
+        candidateUsername: candidate.username,
+        attempt,
+        foundFollowers: progressContext.foundFollowers,
+        foundFollowing: progressContext.foundFollowing,
+        rateLimitedCandidates: progressContext.rateLimitedCandidates,
+        message: `Kandidat @${candidate.username} wird erneut geprueft (Versuch ${attempt}); ${describeBatchCandidatePendingReason(lastConnection)}.`,
+      });
+    }
+
+    const connection = await collectBatchCandidateConnectionOnce(
+      page,
+      runtimeState,
+      notes,
+      candidate,
+      candidateProfileUrl,
+    );
+    connection.scanAttempts = attempt;
+    lastConnection = connection;
+
+    if (isBatchCandidateConnectionDefinitive(connection)) {
+      return connection;
+    }
+
+    const pendingReason = describeBatchCandidatePendingReason(connection);
+
+    if (attempt === 1 || attempt % 5 === 0) {
+      notes.push(`Kandidat @${candidate.username} wurde noch nicht abgeschlossen; ${pendingReason}. Naechster Versuch folgt in derselben Session.`);
+    }
+
+    await closeInstagramDialog(page);
+    await sleep(resolvePublicConnectionRetryDelayMs(runtimeState.runtimeConfig, attempt, connection));
+  }
+}
+
+function resolvePublicConnectionBatchStatus(candidatesTotal, candidatesChecked, candidateConnections) {
+  if (candidatesTotal === 0) {
+    return 'partial';
+  }
+
+  if (candidatesChecked === 0) {
+    return 'error';
+  }
+
+  return candidateConnections.length > 0 ? 'success' : 'partial';
+}
+
+function resolvePublicConnectionBatchMessage(inferredFollowers, inferredFollowing, candidatesTotal, candidatesChecked, privateSkipped, rateLimitedCandidates = 0) {
+  if (inferredFollowers.length > 0 || inferredFollowing.length > 0) {
+    return `Teilrekonstruktion abgeschlossen: ${inferredFollowers.length} moegliche Follower und ${inferredFollowing.length} moegliche Gefolgt-Profile gefunden.`;
+  }
+
+  if (candidatesChecked > 0) {
+    return `Teilrekonstruktion abgeschlossen; ${candidatesChecked} von ${candidatesTotal} gespeicherten Kandidaten wurden geprueft, ${privateSkipped} private/gesperrte Profile uebersprungen, ${rateLimitedCandidates} per Rate-Limit blockiert.`;
+  }
+
+  return 'Keine gespeicherten Kandidatenlisten fuer dieses bekannte Profil gefunden.';
+}
+
+async function runPublicConnectionBatch(page, runtimeState, notes, publicUsername, targetUsername) {
+  const candidates = Array.isArray(runtimeState.runtimeConfig.publicConnectionCandidates)
+    ? runtimeState.runtimeConfig.publicConnectionCandidates
+      .map(normalizePublicConnectionCandidate)
+      .filter(Boolean)
+      .filter((candidate) => candidate.username !== publicUsername && candidate.username !== targetUsername)
+    : [];
+  const candidateConnections = [];
+  const checkedConnections = [];
+  let foundFollowersCount = 0;
+  let foundFollowingCount = 0;
+  let rateLimitedCandidates = 0;
+
+  progressLog('candidate-pool-ready', {
+    relationship: 'public-connections',
+    loaded: 0,
+    expectedCount: candidates.length,
+    foundFollowers: foundFollowersCount,
+    foundFollowing: foundFollowingCount,
+    rateLimitedCandidates,
+    message: `${candidates.length} gespeicherte Kandidaten aus @${publicUsername} werden gegen @${targetUsername} geprueft.`,
+  });
+
+  for (let index = 0; index < candidates.length; index++) {
+    const candidate = candidates[index];
+    const candidateProfileUrl = `https://www.instagram.com/${candidate.username}/`;
+
+    progressLog('candidate-scan-start', {
+      relationship: 'public-connections',
+      loaded: index,
+      expectedCount: candidates.length,
+      candidateUsername: candidate.username,
+      foundFollowers: foundFollowersCount,
+      foundFollowing: foundFollowingCount,
+      rateLimitedCandidates,
+      message: `Kandidat @${candidate.username} wird geprueft (${index + 1}/${candidates.length}). Gefunden: ${foundFollowersCount} Follower, ${foundFollowingCount} Gefolgt.`,
+    });
+
+    const connection = await collectBatchCandidateConnectionUntilDefinitive(
+      page,
+      runtimeState,
+      notes,
+      candidate,
+      candidateProfileUrl,
+      {
+        loaded: index,
+        expectedCount: candidates.length,
+        foundFollowers: foundFollowersCount,
+        foundFollowing: foundFollowingCount,
+        rateLimitedCandidates,
+      },
+    );
+    checkedConnections.push(connection);
+
+    if (connection.followerOfPrivateProfile || connection.followedByPrivateProfile) {
+      candidateConnections.push(connection);
+    }
+
+    if (connection.followerOfPrivateProfile) {
+      foundFollowersCount++;
+    }
+
+    if (connection.followedByPrivateProfile) {
+      foundFollowingCount++;
+    }
+
+    if (connection.followers.rateLimited || connection.following.rateLimited) {
+      rateLimitedCandidates++;
+    }
+
+    progressLog('candidate-scan-complete', {
+      relationship: 'public-connections',
+      loaded: index + 1,
+      expectedCount: candidates.length,
+      candidateUsername: candidate.username,
+      targetFoundInFollowers: connection.followedByPrivateProfile,
+      targetFoundInFollowing: connection.followerOfPrivateProfile,
+      skippedReason: connection.skippedReason,
+      foundFollowers: foundFollowersCount,
+      foundFollowing: foundFollowingCount,
+      rateLimitedCandidates,
+      message: `Kandidat @${candidate.username} abgeschlossen (${index + 1}/${candidates.length}). Gefunden: ${foundFollowersCount} Follower, ${foundFollowingCount} Gefolgt.`,
+    });
+
+    notes.push(`Kandidat @${candidate.username} eindeutig geprueft nach ${connection.scanAttempts || 1} Versuch(en).`);
+  }
+
+  const inferredFollowers = candidateConnections.filter((connection) => connection.followerOfPrivateProfile);
+  const inferredFollowing = candidateConnections.filter((connection) => connection.followedByPrivateProfile);
+  const privateSkipped = checkedConnections.filter((connection) => connection.skippedReason).length;
+  const statusLevel = resolvePublicConnectionBatchStatus(candidates.length, checkedConnections.length, candidateConnections);
+
+  return {
+    ok: statusLevel !== 'error',
+    statusLevel,
+    statusMessage: resolvePublicConnectionBatchMessage(
+      inferredFollowers,
+      inferredFollowing,
+      candidates.length,
+      checkedConnections.length,
+      privateSkipped,
+      rateLimitedCandidates,
+    ),
+    publicUsername,
+    targetUsername,
+    relationType: 'candidate_search',
+    targetFollowsPublicProfile: false,
+    publicProfileFollowsTarget: false,
+    candidatesTotal: candidates.length,
+    candidatesChecked: checkedConnections.length,
+    candidatesSkippedPrivate: privateSkipped,
+    candidatesRateLimited: rateLimitedCandidates,
+    inferredFollowers,
+    inferredFollowing,
+    checkedPreview: checkedConnections.slice(0, 25),
   };
 }
 
@@ -3575,12 +4143,20 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
 
     page.on('requestfailed', (request) => {
       const requestUrl = request.url();
+      const failureText = normalizeText(request.failure()?.errorText || 'requestfailed');
+
+      if (
+        runtimeConfig.blockHeavyResources
+        && failureText === 'net::ERR_FAILED'
+        && ['image', 'media', 'font'].includes(request.resourceType())
+      ) {
+        return;
+      }
 
       if (!/instagram|facebook/i.test(requestUrl)) {
         return;
       }
 
-      const failureText = normalizeText(request.failure()?.errorText || 'requestfailed');
       const message = `requestfailed: ${failureText} ${requestUrl}`;
       consoleMessages.push(message);
       recordRunDebug('requestfailed', {
@@ -3605,6 +4181,19 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
         resourceType: response.request().resourceType(),
       });
     });
+
+    if (runtimeConfig.blockHeavyResources) {
+      await page.setRequestInterception(true);
+      page.on('request', (request) => {
+        if (['image', 'media', 'font'].includes(request.resourceType())) {
+          request.abort().catch(() => {});
+
+          return;
+        }
+
+        request.continue().catch(() => {});
+      });
+    }
 
     await page.setExtraHTTPHeaders({
       'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
@@ -3729,6 +4318,46 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
       usedAccountKeys: new Set([getScraperAccountKey(runtimeConfig)].filter(Boolean)),
       cookieSaveDisabled: false,
     };
+
+    if (operationMode === 'public-connections-batch') {
+      const targetUsername = normalizeInstagramUsername(runtimeConfig.relationshipSearchTargetUsername || '');
+      const batchPayload = await runPublicConnectionBatch(
+        page,
+        runtimeState,
+        notes,
+        username,
+        targetUsername,
+      );
+      const responsePayload = {
+        ...batchPayload,
+        username,
+        finalUrl: page.url(),
+        htmlBytes: 0,
+        htmlPath: null,
+        htmlPreview: '',
+        notes: dedupe(notes),
+        cookieDiagnostics,
+        loginDiagnostics,
+        profile: null,
+        profileUrl,
+        screenshotPath: null,
+        scrapedAt: new Date().toISOString(),
+        screenshotMode: null,
+        title: await page.title().catch(() => null),
+        warnings: dedupe([
+          ...consoleMessages,
+          ...(cookieDiagnostics.warnings || []),
+          ...(loginDiagnostics.warnings || []),
+        ]),
+        durationMs: Date.now() - startedAt,
+        operationMode,
+        debugLogPath,
+      };
+      flushRunDebug(responsePayload);
+      console.log(JSON.stringify(responsePayload));
+
+      return;
+    }
 
     progressLog('profile-opening', {
       relationship: null,
@@ -3878,7 +4507,9 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
       loginDiagnostics,
     });
 
-    fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
+    if (!runtimeConfig.skipDebugArtifacts) {
+      fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
+    }
 
     if (isMiniScanMode && !miniScanUsesSession) {
       notes.push('Cookies wurden im Mini-Scan nicht geladen oder gespeichert.');
@@ -3898,7 +4529,9 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
       notes.push('Cookies wurden nicht gespeichert, weil die Session offenbar nicht gueltig war.');
     }
 
-    debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
+    debugScreenshotPath = runtimeConfig.skipDebugArtifacts
+      ? null
+      : await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
 
     const responsePayload = {
       ok: outcome.ok,
@@ -3907,7 +4540,7 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
       username,
       finalUrl,
       htmlBytes: Buffer.byteLength(initialHtml, 'utf8'),
-      htmlPath: artifacts.htmlPath,
+      htmlPath: runtimeConfig.skipDebugArtifacts ? null : artifacts.htmlPath,
       htmlPreview: initialHtml.slice(0, 4000),
       notes: dedupe(notes),
       cookieDiagnostics,
@@ -3926,11 +4559,13 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
     flushRunDebug(responsePayload);
     console.log(JSON.stringify(responsePayload));
   } catch (error) {
-    if (initialHtml) {
+    if (initialHtml && !runtimeConfig.skipDebugArtifacts) {
       fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
     }
 
-    debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
+    debugScreenshotPath = runtimeConfig.skipDebugArtifacts
+      ? null
+      : await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
 
     const responsePayload = {
       ok: false,
@@ -3939,7 +4574,7 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
       username,
       error: normalizeText(error.message),
       finalUrl,
-      htmlPath: initialHtml ? artifacts.htmlPath : null,
+      htmlPath: initialHtml && !runtimeConfig.skipDebugArtifacts ? artifacts.htmlPath : null,
       notes: dedupe(notes),
       screenshotPath: debugScreenshotPath,
       screenshotMode: debugScreenshotPath ? 'page' : null,
