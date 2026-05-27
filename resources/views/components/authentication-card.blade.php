@@ -1,7 +1,15 @@
-<div class="min-h-screen flex flex-col sm:justify-center items-center pt-6 sm:pt-0 bg-gray-100">
-    
+<x-layouts.auth-layout>
+    <x-slot name="title">
+        webaiDetective
+    </x-slot>
 
-    <div class="w-full sm:max-w-md mt-6 px-6 py-4 bg-white shadow-md overflow-hidden sm:rounded-lg">
-        {{ $slot }}
-    </div>
-</div>
+    <x-slot name="description">
+        Sichere Anmeldung fuer deinen gebuchten Monitoring-Service.
+    </x-slot>
+
+    <x-slot name="form">
+        <div class="space-y-6">
+            {{ $slot }}
+        </div>
+    </x-slot>
+</x-layouts.auth-layout>

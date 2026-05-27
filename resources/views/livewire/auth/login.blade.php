@@ -1,79 +1,100 @@
 <x-layouts.auth-layout>
     <x-slot name="title">
-        CBW Schulnetz
+        webaiDetective
     </x-slot>
+
     <x-slot name="description">
-        
-      Hier finden Sie Infos zu Ihrem Qualiprogramm und Kontaktmöglichkeit zur CBW-Verwaltung
-      
+        Melde dich in deinen gebuchten webaiDetective-Zugang ein, um Monitoring, Auswertung und Benachrichtigungen sicher zu verwalten.
     </x-slot>
+
     <x-slot name="form">
-      <div  class="mt-8 ">
+        @php
+            $inputClass = 'block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100';
+        @endphp
 
-        <form wire:submit.prevent="login">
-        @csrf
+        <div class="mx-auto max-w-md">
+            <div class="mb-6">
+                <p class="text-xs font-semibold uppercase tracking-wide text-teal-700">Willkommen zurueck</p>
+                <h2 class="mt-2 text-2xl font-bold tracking-tight text-slate-950">Einloggen</h2>
+                <p class="mt-2 text-sm leading-6 text-slate-600">
+                    Nutze deinen persoenlichen Service-Zugang fuer Monitoring, Analysen und Benachrichtigungen.
+                </p>
+            </div>
 
-        <div>
-        <x-label for="email" value="E-Mail" />
-        <x-input 
-            id="email" 
-            class="block mt-1 w-full" 
-            type="email" 
-            wire:model="email" 
-            required 
-            autofocus 
-            autocomplete="username" 
-        />
-        <x-input-error for="email" class="mt-2" />
-        </div>
+            <form wire:submit.prevent="login" class="space-y-5">
+                @csrf
 
-        <div class="mt-4">
-        <x-label for="password" value="Passwort" />
-        <x-input 
-            id="password" 
-            class="block mt-1 w-full" 
-            type="password" 
-            wire:model="password" 
-            required 
-            autocomplete="current-password" 
-        />
-        <x-input-error for="password" class="mt-2" />
-        </div>
+                <div>
+                    <label for="email" class="mb-1.5 block text-sm font-semibold text-slate-700">E-Mail</label>
+                    <input
+                        id="email"
+                        class="{{ $inputClass }}"
+                        type="email"
+                        wire:model="email"
+                        required
+                        autofocus
+                        autocomplete="username"
+                        placeholder="name@example.com"
+                    >
+                    <x-input-error for="email" class="mt-2" />
+                </div>
 
-        <div class="block mt-4">
-        <label for="remember_me" class="inline-flex items-center mb-5 cursor-pointer">
-            <input 
-                id="remember_me" 
-                name="remember" 
-                type="checkbox" 
-                wire:model="remember" 
-                class="sr-only peer" 
-            />
-            <div class="relative w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-            <span class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300">Angemeldet bleiben</span>
-        </label>
-        </div>
+                <div>
+                    <div class="mb-1.5 flex items-center justify-between gap-4">
+                        <label for="password" class="block text-sm font-semibold text-slate-700">Passwort</label>
+                        @if (Route::has('password.request'))
+                            <a class="text-sm font-semibold text-teal-700 hover:text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2" href="{{ route('password.request') }}" wire:navigate>
+                                Vergessen?
+                            </a>
+                        @endif
+                    </div>
+                    <input
+                        id="password"
+                        class="{{ $inputClass }}"
+                        type="password"
+                        wire:model="password"
+                        required
+                        autocomplete="current-password"
+                        placeholder="Dein Passwort"
+                    >
+                    <x-input-error for="password" class="mt-2" />
+                </div>
 
-        <div class="flex items-center justify-end mt-4">
-        @if (Route::has('password.request'))
-            <a class="underline text-sm text-gray-600 hover:text-gray-900 rounded-md focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500" href="{{ route('password.request') }}">
-                Hast du dein Passwort vergessen?
-            </a>
-        @endif
-        <div class="flex flex-wrap justify-end gap-3 ml-3 max-md:flex-col max-md:items-end flex-row-reverse">
-          <x-button>
-              Einloggen
-          </x-button>
-          <x-button class="ms-0 md:ms-4" href="{{ route('register') }}" wire:navigate>
-              Registrieren
-          </x-button>
-        </div>
-        </div>
-        </form>
+                <label for="remember_me" class="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-3">
+                    <span>
+                        <span class="block text-sm font-semibold text-slate-800">Angemeldet bleiben</span>
+                        <span class="block text-xs text-slate-500">Sitzung auf diesem Geraet merken</span>
+                    </span>
+                    <span class="relative inline-flex items-center">
+                        <input
+                            id="remember_me"
+                            name="remember"
+                            type="checkbox"
+                            wire:model="remember"
+                            class="peer sr-only"
+                        >
+                        <span class="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-teal-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-teal-500 peer-focus:ring-offset-2"></span>
+                        <span class="absolute left-1 h-4 w-4 rounded-full bg-white shadow transition peer-checked:translate-x-5"></span>
+                    </span>
+                </label>
 
+                <button
+                    type="submit"
+                    wire:loading.attr="disabled"
+                    wire:target="login"
+                    class="inline-flex h-11 w-full items-center justify-center rounded-lg bg-slate-950 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 disabled:cursor-wait disabled:opacity-70"
+                >
+                    <span wire:loading.remove wire:target="login">Einloggen</span>
+                    <span wire:loading wire:target="login">Zugang wird geprueft...</span>
+                </button>
+
+                <p class="text-center text-sm text-slate-600">
+                    Noch kein Konto?
+                    <a href="{{ route('register') }}" wire:navigate class="font-semibold text-teal-700 hover:text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2">
+                        Registrieren
+                    </a>
+                </p>
+            </form>
         </div>
     </x-slot>
 </x-layouts.auth-layout>
-
-
-

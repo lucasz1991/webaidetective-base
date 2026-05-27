@@ -36,7 +36,6 @@ function loadRuntimeConfig() {
 }
 
 const runtimeConfig = loadRuntimeConfig();
-const candidateLimit = 0;
 
 function normalizeNumberAtLeast(value, fallback, minimum) {
   const normalizedValue = Number(value ?? fallback);
@@ -48,8 +47,27 @@ function normalizeNumberAtLeast(value, fallback, minimum) {
   return Math.max(minimum, normalizedValue);
 }
 
+function normalizeIntegerInRange(value, fallback, minimum, maximum) {
+  const normalizedValue = Math.floor(normalizeNumberAtLeast(value, fallback, minimum));
+
+  return Math.min(maximum, Math.max(minimum, normalizedValue));
+}
+
 function normalizeItem(item) {
   if (!item || typeof item !== 'object') {
+    return null;
+  }
+
+  const status = String(item.status || '').trim().toLowerCase();
+
+  if (
+    item.active === false
+    || item.isActive === false
+    || item.removed === true
+    || item.deleted === true
+    || item.removedAt
+    || ['removed', 'deleted', 'inactive'].includes(status)
+  ) {
     return null;
   }
 
@@ -115,6 +133,8 @@ function writeChildRuntimeConfig() {
     publicConnectionRetryMaxDelayMs: normalizeNumberAtLeast(runtimeConfig.publicConnectionRetryMaxDelayMs, 90000, 10000),
     publicConnectionCandidateMaxAttempts: Math.floor(normalizeNumberAtLeast(runtimeConfig.publicConnectionCandidateMaxAttempts, 8, 1)),
     publicConnectionCandidateMaxDurationMs: normalizeNumberAtLeast(runtimeConfig.publicConnectionCandidateMaxDurationMs, 1200000, 60000),
+    publicConnectionDialogMissingMaxAttempts: normalizeIntegerInRange(runtimeConfig.publicConnectionDialogMissingMaxAttempts, 2, 1, 2),
+    relationshipSearchInputMaxAttempts: normalizeIntegerInRange(runtimeConfig.relationshipSearchInputMaxAttempts, 3, 1, 3),
     scriptWatchdogEnabled: runtimeConfig.scriptWatchdogEnabled !== false,
     scriptStallTimeoutMs: normalizeNumberAtLeast(runtimeConfig.scriptStallTimeoutMs || runtimeConfig.nodeStallTimeoutMs, 900000, 60000),
     browserDisconnectAbort: runtimeConfig.browserDisconnectAbort !== false,
@@ -259,6 +279,8 @@ async function main() {
       candidatesTotal: 0,
       candidatesChecked: 0,
       candidatesSkippedPrivate: 0,
+      candidatesFailed: 0,
+      candidateErrorScreenshots: [],
       inferredFollowers: [],
       inferredFollowing: [],
       durationMs: Date.now() - startedAt,
@@ -294,6 +316,8 @@ async function main() {
       candidatesTotal: 0,
       candidatesChecked: 0,
       candidatesSkippedPrivate: 0,
+      candidatesFailed: 0,
+      candidateErrorScreenshots: [],
       inferredFollowers: [],
       inferredFollowing: [],
       error: batchRun.error || batchRun.stderr || null,
@@ -324,6 +348,8 @@ main().catch((error) => {
     candidatesTotal: 0,
     candidatesChecked: 0,
     candidatesSkippedPrivate: 0,
+    candidatesFailed: 0,
+    candidateErrorScreenshots: [],
     inferredFollowers: [],
     inferredFollowing: [],
     error: error.message,

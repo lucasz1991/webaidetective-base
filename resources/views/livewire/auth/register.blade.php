@@ -1,240 +1,232 @@
 <x-layouts.auth-layout>
     <x-slot name="title">
-    CBW Schulnetz
+        Konto erstellen
     </x-slot>
+
     <x-slot name="description">
-    Hier finden Sie Infos zu Ihrem Qualiprogramm und Kontaktmöglichkeit zur CBW-Verwaltung
+        Lege deinen webaiDetective-Zugang an und starte mit strukturiertem Profil-Monitoring, Analyseverlauf und Benachrichtigungen.
     </x-slot>
+
     <x-slot name="form">
-    <div  class="mt-8 grid grid-cols-6 gap-6">
-               
+        @php
+            $inputClass = 'block w-full rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-100';
+            $labelClass = 'mb-1.5 block text-sm font-semibold text-slate-700';
+            $termsUrl = Route::has('terms.show') ? route('terms.show') : (Route::has('terms') ? route('terms') : url('/termsandconditions'));
+            $privacyUrl = Route::has('policy.show') ? route('policy.show') : (Route::has('privacypolicy') ? route('privacypolicy') : url('/privacypolicy'));
+        @endphp
 
+        <div>
+            <div class="mb-6">
+                <p class="text-xs font-semibold uppercase tracking-wide text-teal-700">Neuer Zugang</p>
+                <h2 class="mt-2 text-2xl font-bold tracking-tight text-slate-950">Registrieren</h2>
+                <p class="mt-2 text-sm leading-6 text-slate-600">
+                    Erstelle dein Konto mit sicheren Zugangsdaten und deinen Kontaktdaten.
+                </p>
+            </div>
 
-               <!-- E-Mail und Benutzername -->
-               <div class="col-span-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                   <!-- E-Mail -->
-                   <div>
-                       <label for="email" class="block text-sm font-medium text-gray-700">E-Mail</label>
-                       <input 
-                           type="email" 
-                           id="email" 
-                           name="email" 
-                           wire:model="email"
-                           value="{{ old('email') }}" 
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="E-Mail-Adresse" 
-                        
-                       />
-                       <x-input-error for="email" class="mt-2" />
+            <form wire:submit.prevent="register" class="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                <div>
+                    <label for="email" class="{{ $labelClass }}">E-Mail</label>
+                    <input
+                        type="email"
+                        id="email"
+                        name="email"
+                        wire:model="email"
+                        value="{{ old('email') }}"
+                        class="{{ $inputClass }}"
+                        placeholder="name@example.com"
+                        autocomplete="username"
+                    >
+                    <x-input-error for="email" class="mt-2" />
+                </div>
 
-                   </div>
+                <div>
+                    <label for="username" class="{{ $labelClass }}">Benutzername</label>
+                    <input
+                        type="text"
+                        id="username"
+                        name="username"
+                        wire:model="username"
+                        value="{{ old('username') }}"
+                        class="{{ $inputClass }}"
+                        placeholder="Benutzername"
+                        autocomplete="username"
+                    >
+                    <x-input-error for="username" class="mt-2" />
+                </div>
 
-                   <!-- Benutzername -->
-                   <div>
-                       <label for="username" class="block text-sm font-medium text-gray-700">Benutzername</label>
-                       <input 
-                           type="text" 
-                           id="username" 
-                           name="username" 
-                           wire:model="username"
-                           value="{{ old('username') }}" 
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="Benutzername" 
-                        
-                       />
-                       <x-input-error for="username" class="mt-2" />
+                <div>
+                    <label for="password" class="{{ $labelClass }}">Passwort</label>
+                    <input
+                        type="password"
+                        id="password"
+                        name="password"
+                        wire:model="password"
+                        class="{{ $inputClass }}"
+                        placeholder="Mindestens 10 Zeichen"
+                        autocomplete="new-password"
+                    >
+                    <x-input-error for="password" class="mt-2" />
+                </div>
 
-                   </div>
-               </div>
+                <div>
+                    <label for="password_confirmation" class="{{ $labelClass }}">Passwort bestaetigen</label>
+                    <input
+                        type="password"
+                        id="password_confirmation"
+                        name="password_confirmation"
+                        wire:model="password_confirmation"
+                        class="{{ $inputClass }}"
+                        placeholder="Passwort wiederholen"
+                        autocomplete="new-password"
+                    >
+                    <x-input-error for="password_confirmation" class="mt-2" />
+                </div>
 
-               <div class="col-span-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                   <!-- Passwort -->
-                   <div class="">
-                       <label for="password" class="block text-sm font-medium text-gray-700">Passwort</label>
-                       <input 
-                           type="password" 
-                           id="password" 
-                           name="password" 
-                           wire:model="password"
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="Passwort" 
-                         
-                       />
-                       <x-input-error for="password" class="mt-2" />
+                <div>
+                    <label for="first_name" class="{{ $labelClass }}">Vorname</label>
+                    <input
+                        type="text"
+                        id="first_name"
+                        name="first_name"
+                        wire:model="first_name"
+                        value="{{ old('first_name') }}"
+                        class="{{ $inputClass }}"
+                        placeholder="Vorname"
+                        autocomplete="given-name"
+                    >
+                    <x-input-error for="first_name" class="mt-2" />
+                </div>
 
-                   </div>
-   
-                   <!-- Passwort bestätigen -->
-                   <div class="">
-                       <label for="password_confirmation" class="block text-sm font-medium text-gray-700">Passwort bestätigen</label>
-                       <input 
-                           type="password" 
-                           id="password_confirmation" 
-                           name="password_confirmation" 
-                           wire:model="password_confirmation"
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="Passwort bestätigen" 
-                          
-                       />
-                       <x-input-error for="password_confirmation" class="mt-2" />
+                <div>
+                    <label for="last_name" class="{{ $labelClass }}">Nachname</label>
+                    <input
+                        type="text"
+                        id="last_name"
+                        name="last_name"
+                        wire:model="last_name"
+                        value="{{ old('last_name') }}"
+                        class="{{ $inputClass }}"
+                        placeholder="Nachname"
+                        autocomplete="family-name"
+                    >
+                    <x-input-error for="last_name" class="mt-2" />
+                </div>
 
-                   </div>
-               </div>
-                   </hr>
-               <!-- Persönliche Daten -->
-               <div class="col-span-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                   <!-- Vorname -->
-                   <div>
-                       <label for="first_name" class="block text-sm font-medium text-gray-700">Vorname</label>
-                       <input 
-                           type="text" 
-                           id="first_name" 
-                           name="first_name" 
-                           wire:model="first_name"
-                           value="{{ old('first_name') }}" 
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="Vorname" 
-                         
-                       />
-                       <x-input-error for="first_name" class="mt-2" />
+                <div>
+                    <label for="phone_number" class="{{ $labelClass }}">Telefonnummer</label>
+                    <input
+                        type="tel"
+                        id="phone_number"
+                        name="phone_number"
+                        wire:model="phone_number"
+                        value="{{ old('phone_number') }}"
+                        class="{{ $inputClass }}"
+                        placeholder="Telefonnummer"
+                        autocomplete="tel"
+                    >
+                    <x-input-error for="phone_number" class="mt-2" />
+                </div>
 
-                   </div>
+                <div>
+                    <label for="street" class="{{ $labelClass }}">Strasse</label>
+                    <input
+                        type="text"
+                        id="street"
+                        name="street"
+                        wire:model="street"
+                        value="{{ old('street') }}"
+                        class="{{ $inputClass }}"
+                        placeholder="Strasse und Hausnummer"
+                        autocomplete="street-address"
+                    >
+                    <x-input-error for="street" class="mt-2" />
+                </div>
 
-                   <!-- Nachname -->
-                   <div>
-                       <label for="last_name" class="block text-sm font-medium text-gray-700">Nachname</label>
-                       <input 
-                           type="text" 
-                           id="last_name" 
-                           name="last_name" 
-                           wire:model="last_name"
-                           value="{{ old('last_name') }}" 
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="Nachname" 
-                          
-                       />
-                       <x-input-error for="last_name" class="mt-2" />
+                <div>
+                    <label for="city" class="{{ $labelClass }}">Stadt</label>
+                    <input
+                        type="text"
+                        id="city"
+                        name="city"
+                        wire:model="city"
+                        value="{{ old('city') }}"
+                        class="{{ $inputClass }}"
+                        placeholder="Stadt"
+                        autocomplete="address-level2"
+                    >
+                    <x-input-error for="city" class="mt-2" />
+                </div>
 
-                   </div>
-               </div>
+                <div class="grid grid-cols-1 gap-5 sm:grid-cols-2">
+                    <div>
+                        <label for="postal_code" class="{{ $labelClass }}">Postleitzahl</label>
+                        <input
+                            type="text"
+                            id="postal_code"
+                            name="postal_code"
+                            wire:model="postal_code"
+                            value="{{ old('postal_code') }}"
+                            class="{{ $inputClass }}"
+                            placeholder="PLZ"
+                            autocomplete="postal-code"
+                        >
+                        <x-input-error for="postal_code" class="mt-2" />
+                    </div>
 
-               <!-- Kontaktinformationen -->
-               <div class="col-span-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                   <!-- Telefonnummer -->
-                   <div>
-                       <label for="phone_number" class="block text-sm font-medium text-gray-700">Telefonnummer</label>
-                       <input 
-                           type="tel" 
-                           id="phone_number" 
-                           name="phone_number"
-                           wire:model="phone_number" 
-                           value="{{ old('phone_number') }}" 
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="Telefonnummer" 
-                          
-                       />
-                       <x-input-error for="phone_number" class="mt-2" />
+                    <div>
+                        <label for="country" class="{{ $labelClass }}">Land</label>
+                        <input
+                            type="text"
+                            id="country"
+                            name="country"
+                            wire:model="country"
+                            value="{{ old('country') }}"
+                            class="{{ $inputClass }}"
+                            placeholder="Land"
+                            autocomplete="country-name"
+                        >
+                        <x-input-error for="country" class="mt-2" />
+                    </div>
+                </div>
 
-                   </div>
+                <div class="sm:col-span-2">
+                    <label for="terms" class="flex cursor-pointer gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                        <span class="relative mt-0.5 inline-flex items-center">
+                            <input wire:model="terms" id="terms" name="terms" type="checkbox" class="peer sr-only">
+                            <span class="h-6 w-11 rounded-full bg-slate-300 transition peer-checked:bg-teal-600 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-teal-500 peer-focus:ring-offset-2"></span>
+                            <span class="absolute left-1 h-4 w-4 rounded-full bg-white shadow transition peer-checked:translate-x-5"></span>
+                        </span>
+                        <span class="text-sm leading-6 text-slate-700">
+                            Ich stimme den
+                            <a href="{{ $termsUrl }}" class="font-semibold text-teal-700 hover:text-teal-900">Allgemeinen Geschaeftsbedingungen</a>
+                            und der
+                            <a href="{{ $privacyUrl }}" class="font-semibold text-teal-700 hover:text-teal-900">Datenschutzerklaerung</a>
+                            zu.
+                        </span>
+                    </label>
+                    <x-input-error for="terms" class="mt-2" />
+                </div>
 
-                   <!-- Straße -->
-                   <div>
-                       <label for="street" class="block text-sm font-medium text-gray-700">Straße</label>
-                       <input 
-                           type="text" 
-                           id="street" 
-                           name="street" 
-                           wire:model="street"
-                           value="{{ old('street') }}" 
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="Straße" 
-                         
-                       />
-                       <x-input-error for="street" class="mt-2" />
+                <div class="flex flex-col gap-3 sm:col-span-2 sm:flex-row sm:items-center sm:justify-between">
+                    <p class="text-sm text-slate-600">
+                        Du hast schon ein Konto?
+                        <a href="{{ route('login') }}" wire:navigate class="font-semibold text-teal-700 hover:text-teal-900">
+                            Einloggen
+                        </a>
+                    </p>
 
-                   </div>
-               </div>
-
-               <!-- Stadt & Postleitzahl -->
-               <div class="col-span-6 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                   <!-- Stadt -->
-                   <div>
-                       <label for="city" class="block text-sm font-medium text-gray-700">Stadt</label>
-                       <input 
-                           type="text" 
-                           id="city" 
-                           name="city" 
-                           wire:model="city"
-                           value="{{ old('city') }}" 
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="Stadt" 
-                         
-                       />
-                       <x-input-error for="city" class="mt-2" />
-
-                   </div>
-
-                   <!-- Postleitzahl -->
-                   <div>
-                       <label for="postal_code" class="block text-sm font-medium text-gray-700">Postleitzahl</label>
-                       <input 
-                           type="text" 
-                           id="postal_code" 
-                           name="postal_code" 
-                           wire:model="postal_code"
-                           value="{{ old('postal_code') }}" 
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="Postleitzahl" 
-                         
-                       />
-                       <x-input-error for="postal_code" class="mt-2" />
-                   </div>
-                   <!-- Land -->
-                   <div class="">
-                       <label for="country" class="block text-sm font-medium text-gray-700">Land</label>
-                       <input 
-                           type="text" 
-                           id="country" 
-                           name="country" 
-                           wire:model="country"
-                           value="{{ old('country') }}" 
-                           class="w-full rounded-lg border-gray-300 p-3 mt-1 text-sm"
-                           placeholder="Land" 
-                         
-                       />
-                       <x-input-error for="country" class="mt-2" />
-                   </div>
-               </div>
-
-
-               <!-- Datenschutz -->
-               <div class="col-span-6">
-                       <label for="terms" class="inline-flex items-center mb-5 cursor-pointer">
-                           <input wire:model="terms" id="terms" name="terms" type="checkbox" value="" class="sr-only peer">
-                           <div class="relative w-9 min-w-9 h-5 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                           <span class="ms-3 text-sm font-medium text-gray-900 dark:text-gray-300">
-                               Mit der Erstellung eines Kontos stimme ich den
-                             <a href="/termsandconditions" wire:navigate class="text-gray-700 underline">Allgemeinen Geschäftsbedingungen</a>
-                             und der
-                             <a href="/privacypolicy" wire:navigate class="text-gray-700 underline">Datenschutzerklärung</a> zu.
-                               
-                           </span>
-                         </label>
-                       
-               </div>
-
-               <!-- Buttons -->
-               <div class="col-span-6 sm:flex sm:items-center sm:gap-4">
-                   <x-button wire:click="register"  wire:navigate >
-                   
-                       Registrieren
-                   </x-button >
-
-                   <p class="mt-4 text-sm text-gray-500 sm:mt-0">
-                       Du hast schon ein Konto?
-                       <a href="/login" wire:navigate  class="text-gray-700 underline">Einloggen</a>.
-                   </p>
-               </div>
-           </div>
+                    <button
+                        type="submit"
+                        wire:loading.attr="disabled"
+                        wire:target="register"
+                        class="inline-flex h-11 items-center justify-center rounded-lg bg-slate-950 px-5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 disabled:cursor-wait disabled:opacity-70"
+                    >
+                        <span wire:loading.remove wire:target="register">Konto erstellen</span>
+                        <span wire:loading wire:target="register">Konto wird erstellt...</span>
+                    </button>
+                </div>
+            </form>
+        </div>
     </x-slot>
 </x-layouts.auth-layout>

@@ -560,11 +560,13 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
     relationshipSearchTargetUsername: normalizeInstagramUsername(input?.relationshipSearchTargetUsername || merged.relationshipSearchTargetUsername || ''),
     relationshipSearchTargetMaxItems: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxItems, merged.relationshipSearchTargetMaxItems),
     relationshipSearchTargetMaxScrollRounds: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxScrollRounds, merged.relationshipSearchTargetMaxScrollRounds),
+    relationshipSearchInputMaxAttempts: Math.floor(normalizeNumberAtLeast(input?.relationshipSearchInputMaxAttempts, merged.relationshipSearchInputMaxAttempts || 3, 1)),
     scriptWatchdogEnabled: input?.scriptWatchdogEnabled !== false && input?.script_watchdog_enabled !== false,
     scriptStallTimeoutMs: normalizeNumberAtLeast(input?.scriptStallTimeoutMs || input?.nodeStallTimeoutMs, merged.scriptStallTimeoutMs || 900000, 60000),
     browserDisconnectAbort: input?.browserDisconnectAbort !== false && input?.browser_disconnect_abort !== false,
     publicConnectionCandidateMaxAttempts: Math.floor(normalizeNumberAtLeast(input?.publicConnectionCandidateMaxAttempts, merged.publicConnectionCandidateMaxAttempts || 8, 1)),
     publicConnectionCandidateMaxDurationMs: normalizeNumberAtLeast(input?.publicConnectionCandidateMaxDurationMs, merged.publicConnectionCandidateMaxDurationMs || 1200000, 60000),
+    publicConnectionDialogMissingMaxAttempts: Math.floor(normalizeNumberAtLeast(input?.publicConnectionDialogMissingMaxAttempts, merged.publicConnectionDialogMissingMaxAttempts || 2, 1)),
     skipDebugArtifacts: input?.skipDebugArtifacts === true || input?.skip_debug_artifacts === true,
     blockHeavyResources: input?.blockHeavyResources === true || input?.block_heavy_resources === true,
     accountPool: Array.isArray(input.accountPool) ? input.accountPool : [],
@@ -659,11 +661,13 @@ function loadRuntimeConfig(configPath) {
     relationshipSearchTargetUsername: '',
     relationshipSearchTargetMaxItems: 0,
     relationshipSearchTargetMaxScrollRounds: 60,
+    relationshipSearchInputMaxAttempts: 3,
     scriptWatchdogEnabled: true,
     scriptStallTimeoutMs: 900000,
     browserDisconnectAbort: true,
     publicConnectionCandidateMaxAttempts: 8,
     publicConnectionCandidateMaxDurationMs: 1200000,
+    publicConnectionDialogMissingMaxAttempts: 2,
     skipDebugArtifacts: false,
     blockHeavyResources: false,
     accountPool: [],
@@ -755,6 +759,20 @@ function buildArtifactPaths(username) {
     htmlPath: path.join(artifactBasePath, `profile-page-${stamp}.html`),
     screenshotPath: path.join(artifactBasePath, `instagram-page-${stamp}.png`),
   };
+}
+
+function buildRelatedScreenshotPath(baseScreenshotPath, suffix) {
+  const safeSuffix = normalizeText(String(suffix || 'debug'))
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 90) || 'debug';
+  const directory = path.dirname(baseScreenshotPath);
+  const extension = path.extname(baseScreenshotPath) || '.png';
+  const baseName = path.basename(baseScreenshotPath, extension);
+
+  ensureDirectory(directory);
+
+  return path.join(directory, `${baseName}-${safeSuffix}${extension}`);
 }
 
 function buildCookiePath(runtimeConfig) {
@@ -1507,31 +1525,72 @@ async function scrollFollowerDialog(page) {
 async function relationshipDialogSearchInputAvailable(page) {
   return page.evaluate(() => {
     const dialog = document.querySelector('div[role="dialog"]') || document.body;
-    const inputs = Array.from(dialog.querySelectorAll('input'));
-    const visibleInputs = inputs.filter((input) => {
-      const rect = input.getBoundingClientRect();
-      const style = window.getComputedStyle(input);
+    const normalizeElementText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+    const isVisibleEditable = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
 
-      return rect.width > 0
-        && rect.height > 0
-        && style.display !== 'none'
-        && style.visibility !== 'hidden'
-        && !input.disabled
-        && !input.readOnly;
+      if (
+        rect.width <= 2
+        || rect.height <= 2
+        || style.display === 'none'
+        || style.visibility === 'hidden'
+        || style.opacity === '0'
+      ) {
+        return false;
+      }
+
+      if ('disabled' in element && element.disabled) {
+        return false;
+      }
+
+      if ('readOnly' in element && element.readOnly) {
+        return false;
+      }
+
+      return true;
+    };
+    const editableElements = Array.from(dialog.querySelectorAll([
+      'input',
+      'textarea',
+      '[contenteditable="true"]',
+      '[role="textbox"]',
+      '[aria-label]',
+    ].join(','))).filter((element) => {
+      const tagName = element.tagName.toLowerCase();
+      const role = (element.getAttribute('role') || '').toLowerCase();
+      const contentEditable = (element.getAttribute('contenteditable') || '').toLowerCase();
+
+      if (!['input', 'textarea'].includes(tagName) && role !== 'textbox' && contentEditable !== 'true') {
+        return false;
+      }
+
+      if (tagName === 'input') {
+        const type = (element.getAttribute('type') || 'text').toLowerCase();
+
+        if (!['text', 'search', 'email', ''].includes(type)) {
+          return false;
+        }
+      }
+
+      return isVisibleEditable(element);
     });
-    const preferredInput = visibleInputs.find((input) => {
+    const preferredInput = editableElements.find((input) => {
       const haystack = [
         input.getAttribute('placeholder') || '',
         input.getAttribute('aria-label') || '',
+        input.getAttribute('aria-placeholder') || '',
         input.getAttribute('name') || '',
         input.getAttribute('type') || '',
+        input.getAttribute('role') || '',
+        normalizeElementText(input.textContent || ''),
       ].join(' ');
 
-      return /suchen|suche|search/i.test(haystack);
-    }) || visibleInputs.find((input) => {
+      return /suchen|suche|search|durchsuchen|filter/i.test(haystack);
+    }) || editableElements.find((input) => {
       const type = (input.getAttribute('type') || 'text').toLowerCase();
 
-      return type === 'text' || type === 'search';
+      return type === 'text' || type === 'search' || input.getAttribute('role') === 'textbox';
     });
 
     return Boolean(preferredInput);
@@ -1539,66 +1598,162 @@ async function relationshipDialogSearchInputAvailable(page) {
 }
 
 async function setRelationshipDialogSearchQuery(page, query, waitMs = 900) {
-  const applied = await page.evaluate((value) => {
+  const applySearchQuery = async () => page.evaluate((value) => {
     const dialog = document.querySelector('div[role="dialog"]') || document.body;
-    const inputs = Array.from(dialog.querySelectorAll('input'));
-    const visibleInputs = inputs.filter((input) => {
-      const rect = input.getBoundingClientRect();
-      const style = window.getComputedStyle(input);
+    const normalizeElementText = (text = '') => String(text || '').replace(/\s+/g, ' ').trim();
+    const isVisibleEditable = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
 
-      return rect.width > 0
-        && rect.height > 0
-        && style.display !== 'none'
-        && style.visibility !== 'hidden'
-        && !input.disabled
-        && !input.readOnly;
-    });
-    const input = visibleInputs.find((candidate) => {
+      if (
+        rect.width <= 2
+        || rect.height <= 2
+        || style.display === 'none'
+        || style.visibility === 'hidden'
+        || style.opacity === '0'
+      ) {
+        return false;
+      }
+
+      if ('disabled' in element && element.disabled) {
+        return false;
+      }
+
+      if ('readOnly' in element && element.readOnly) {
+        return false;
+      }
+
+      return true;
+    };
+    const scoreSearchElement = (candidate) => {
+      const tagName = candidate.tagName.toLowerCase();
+      const type = (candidate.getAttribute('type') || 'text').toLowerCase();
+      const role = (candidate.getAttribute('role') || '').toLowerCase();
+      const contentEditable = (candidate.getAttribute('contenteditable') || '').toLowerCase();
+
+      if (!['input', 'textarea'].includes(tagName) && role !== 'textbox' && contentEditable !== 'true') {
+        return -1;
+      }
+
+      if (tagName === 'input' && !['text', 'search', 'email', ''].includes(type)) {
+        return -1;
+      }
+
+      if (!isVisibleEditable(candidate)) {
+        return -1;
+      }
+
       const haystack = [
         candidate.getAttribute('placeholder') || '',
         candidate.getAttribute('aria-label') || '',
+        candidate.getAttribute('aria-placeholder') || '',
         candidate.getAttribute('name') || '',
         candidate.getAttribute('type') || '',
+        candidate.getAttribute('role') || '',
+        normalizeElementText(candidate.textContent || ''),
       ].join(' ');
+      let score = 0;
 
-      return /suchen|suche|search/i.test(haystack);
-    }) || visibleInputs.find((candidate) => {
-      const type = (candidate.getAttribute('type') || 'text').toLowerCase();
+      if (/suchen|suche|search|durchsuchen|filter/i.test(haystack)) {
+        score += 100;
+      }
 
-      return type === 'text' || type === 'search';
-    });
+      if (type === 'search') {
+        score += 35;
+      }
+
+      if (role === 'textbox') {
+        score += 20;
+      }
+
+      const rect = candidate.getBoundingClientRect();
+      const dialogRect = dialog.getBoundingClientRect();
+
+      if (rect.top <= dialogRect.top + Math.max(160, dialogRect.height * 0.28)) {
+        score += 15;
+      }
+
+      if (tagName === 'input' || tagName === 'textarea') {
+        score += 10;
+      }
+
+      return score;
+    };
+    const input = Array.from(dialog.querySelectorAll([
+      'input',
+      'textarea',
+      '[contenteditable="true"]',
+      '[role="textbox"]',
+      '[aria-label]',
+    ].join(',')))
+      .map((candidate) => ({ candidate, score: scoreSearchElement(candidate) }))
+      .filter((entry) => entry.score >= 0)
+      .sort((left, right) => right.score - left.score)[0]?.candidate || null;
 
     if (!input) {
-      return false;
+      return {
+        applied: false,
+        reason: 'search-input-not-found',
+      };
     }
 
-    const nativeValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-
+    input.scrollIntoView({ block: 'center', inline: 'nearest' });
+    input.click();
     input.focus();
 
-    if (nativeValueSetter) {
-      nativeValueSetter.call(input, '');
+    const isContentEditable = (input.getAttribute('contenteditable') || '').toLowerCase() === 'true'
+      || (input.getAttribute('role') || '').toLowerCase() === 'textbox';
+    const nativeValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+    const nativeTextareaValueSetter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+
+    if (isContentEditable && !('value' in input)) {
+      input.textContent = '';
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'deleteContentBackward',
+      }));
+      input.textContent = value;
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        data: value,
+        inputType: 'insertText',
+      }));
     } else {
-      input.value = '';
+      const setter = input.tagName.toLowerCase() === 'textarea'
+        ? nativeTextareaValueSetter
+        : nativeValueSetter;
+
+      if (setter) {
+        setter.call(input, '');
+      } else {
+        input.value = '';
+      }
+
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        inputType: 'deleteContentBackward',
+      }));
+
+      if (setter) {
+        setter.call(input, value);
+      } else {
+        input.value = value;
+      }
+
+      input.dispatchEvent(new InputEvent('beforeinput', {
+        bubbles: true,
+        data: value,
+        inputType: 'insertText',
+      }));
+      input.dispatchEvent(new InputEvent('input', {
+        bubbles: true,
+        data: value,
+        inputType: 'insertText',
+      }));
     }
 
-    input.dispatchEvent(new InputEvent('input', {
-      bubbles: true,
-      inputType: 'deleteContentBackward',
-    }));
-
-    if (nativeValueSetter) {
-      nativeValueSetter.call(input, value);
-    } else {
-      input.value = value;
-    }
-
-    input.dispatchEvent(new InputEvent('input', {
-      bubbles: true,
-      data: value,
-      inputType: 'insertText',
-    }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: value.slice(-1) || 'Backspace' }));
 
     const scrollTargets = Array.from(dialog.querySelectorAll('div, ul, section'))
       .filter((element) => element.scrollHeight > element.clientHeight + 40);
@@ -1607,14 +1762,28 @@ async function setRelationshipDialogSearchQuery(page, query, waitMs = 900) {
       target.scrollTop = 0;
     }
 
-    return true;
+    const currentValue = 'value' in input ? input.value : normalizeElementText(input.textContent || '');
+
+    return {
+      applied: currentValue === value,
+      reason: currentValue === value ? null : 'search-query-not-verified',
+      currentValue,
+    };
   }, String(query || '')).catch(() => false);
 
-  if (applied) {
-    await sleep(query ? waitMs : Math.min(600, waitMs));
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const result = await applySearchQuery();
+
+    if (result && result.applied) {
+      await sleep(query ? waitMs : Math.min(600, waitMs));
+
+      return true;
+    }
+
+    await sleep(350);
   }
 
-  return applied;
+  return false;
 }
 
 async function openInstagramRelationshipDialog(page, username, relationship, runtimeConfig = {}) {
@@ -1772,6 +1941,11 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
   const searchWaitMs = Number.isFinite(configuredSearchWaitMs)
     ? Math.max(500, configuredSearchWaitMs)
     : 900;
+  const searchInputMaxAttempts = Math.floor(normalizeNumberAtLeast(
+    runtimeConfig.relationshipSearchInputMaxAttempts,
+    3,
+    1,
+  ));
   const queryQueue = queries.map((query) => ({ query, depth: 1 }));
   const queuedQueries = new Set(queries);
   const queryStats = [];
@@ -1804,10 +1978,60 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     targetUsername: searchTargetUsername || null,
   });
 
-  openAttempts++;
-  let opened = normalizedRelationship === 'following'
-    ? await openFollowingDialog(page, username, runtimeConfig)
-    : await openFollowersDialog(page, username, runtimeConfig);
+  const openDialog = async () => (normalizedRelationship === 'following'
+    ? openFollowingDialog(page, username, runtimeConfig)
+    : openFollowersDialog(page, username, runtimeConfig));
+  const openDialogWithSearchInput = async () => {
+    while (openAttempts < searchInputMaxAttempts) {
+      openAttempts++;
+
+      const dialogOpened = await openDialog();
+
+      if (!dialogOpened) {
+        return {
+          opened: false,
+          inputAvailable: false,
+          stopReason: 'search-dialog-not-found',
+        };
+      }
+
+      const searchInputAvailable = await relationshipDialogSearchInputAvailable(page);
+
+      if (searchInputAvailable) {
+        return {
+          opened: true,
+          inputAvailable: true,
+          stopReason: null,
+        };
+      }
+
+      progressLog('relationship-search-input-missing', {
+        relationship: normalizedRelationship,
+        loaded: usersByUsername.size,
+        expectedCount,
+        openAttempts,
+        maxAttempts: searchInputMaxAttempts,
+        targetUsername: searchTargetUsername || null,
+        message: `Suchfeld fuer ${normalizedRelationship} nicht gefunden (${openAttempts}/${searchInputMaxAttempts}).`,
+      });
+
+      await closeInstagramDialog(page);
+
+      if (openAttempts < searchInputMaxAttempts) {
+        await sleep(650);
+      }
+    }
+
+    return {
+      opened: true,
+      inputAvailable: false,
+      stopReason: 'search-input-not-found',
+    };
+  };
+
+  let searchDialogState = await openDialogWithSearchInput();
+  let opened = searchDialogState.opened;
+  let inputAvailable = searchDialogState.inputAvailable;
 
   if (!opened) {
     return {
@@ -1823,11 +2047,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     };
   }
 
-  let inputAvailable = await relationshipDialogSearchInputAvailable(page);
-
   if (!inputAvailable) {
-    await closeInstagramDialog(page);
-
     return {
       attempted: true,
       inputAvailable: false,
@@ -1850,13 +2070,11 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
 
     let queryApplied = await setRelationshipDialogSearchQuery(page, query, searchWaitMs);
 
-    if (!queryApplied) {
+    if (!queryApplied && openAttempts < searchInputMaxAttempts) {
       await closeInstagramDialog(page);
-      openAttempts++;
-      opened = normalizedRelationship === 'following'
-        ? await openFollowingDialog(page, username, runtimeConfig)
-        : await openFollowersDialog(page, username, runtimeConfig);
-      inputAvailable = opened ? await relationshipDialogSearchInputAvailable(page) : false;
+      searchDialogState = await openDialogWithSearchInput();
+      opened = searchDialogState.opened;
+      inputAvailable = searchDialogState.inputAvailable;
       queryApplied = opened && inputAvailable
         ? await setRelationshipDialogSearchQuery(page, query, searchWaitMs)
         : false;
@@ -3587,6 +3805,27 @@ function isBatchCandidateConnectionDefinitive(connection) {
     && isBatchRelationshipSearchDefinitive(connection.following);
 }
 
+function isBatchCandidateSearchInputMissing(connection) {
+  if (!connection) {
+    return false;
+  }
+
+  return [connection.followers, connection.following].some((list) => [
+    'search-input-not-found',
+    'search-input-lost',
+  ].includes(list?.searchStopReason || list?.reason || ''));
+}
+
+function isBatchCandidateSearchDialogMissing(connection) {
+  if (!connection) {
+    return false;
+  }
+
+  return [connection.followers, connection.following].some((list) => (
+    list?.searchStopReason || list?.reason || ''
+  ) === 'search-dialog-not-found');
+}
+
 function describeBatchCandidatePendingReason(connection) {
   if (!connection) {
     return 'kein Suchergebnis';
@@ -3603,6 +3842,34 @@ function describeBatchCandidatePendingReason(connection) {
   }
 
   return reasons.join('; ') || 'nicht eindeutig durchsucht';
+}
+
+async function captureCandidateDebugScreenshot(page, baseScreenshotPath, candidate, attempt, reason, notes, bucket = []) {
+  if (!baseScreenshotPath) {
+    return null;
+  }
+
+  const screenshotPath = buildRelatedScreenshotPath(
+    baseScreenshotPath,
+    `candidate-${candidate.username}-attempt-${attempt}`,
+  );
+  const capturedPath = await captureDebugPageScreenshot(page, screenshotPath, notes);
+
+  if (!capturedPath) {
+    return null;
+  }
+
+  const entry = {
+    candidateUsername: candidate.username,
+    attempt,
+    reason,
+    screenshotPath: capturedPath,
+  };
+
+  bucket.push(entry);
+  notes.push(`Debug-Screenshot fuer Kandidat @${candidate.username} gespeichert: ${capturedPath}`);
+
+  return entry;
 }
 
 function resolvePublicConnectionRetryDelayMs(runtimeConfig = {}, attempt = 1, connection = null) {
@@ -3658,6 +3925,32 @@ function buildBatchCandidateConnection(candidate, candidateFollowers, candidateF
     followers: candidateFollowers,
     following: candidateFollowing,
   };
+}
+
+function markBatchCandidateConnectionFailed(connection, candidate, reason, attempt, screenshots = []) {
+  const failureMessage = normalizeText(String(reason || 'candidate-error')) || 'candidate-error';
+  const failedConnection = connection || buildBatchCandidateConnection(
+    candidate,
+    emptyBatchRelationshipList('followers', null, 'candidate-error'),
+    emptyBatchRelationshipList('following', null, 'candidate-error'),
+  );
+
+  failedConnection.skippedReason = 'candidate-error';
+  failedConnection.candidateError = failureMessage;
+  failedConnection.scanAttempts = attempt;
+  failedConnection.debugScreenshotPaths = screenshots.map((entry) => entry.screenshotPath).filter(Boolean);
+
+  for (const list of [failedConnection.followers, failedConnection.following]) {
+    if (!list) {
+      continue;
+    }
+
+    list.reason = list.reason || 'candidate-error';
+    list.searchStopReason = list.searchStopReason || 'candidate-error';
+    list.error = failureMessage;
+  }
+
+  return failedConnection;
 }
 
 async function collectBatchCandidateConnectionOnce(page, runtimeState, notes, candidate, candidateProfileUrl) {
@@ -3725,6 +4018,7 @@ async function collectBatchCandidateConnectionUntilDefinitive(
 ) {
   let attempt = 0;
   let lastConnection = null;
+  const candidateScreenshots = [];
   const startedAt = Date.now();
   const maxAttempts = Math.floor(
     normalizeNumberAtLeast(runtimeState.runtimeConfig.publicConnectionCandidateMaxAttempts, 8, 1),
@@ -3734,6 +4028,11 @@ async function collectBatchCandidateConnectionUntilDefinitive(
     1200000,
     60000,
   );
+  const dialogMissingMaxAttempts = Math.floor(normalizeNumberAtLeast(
+    runtimeState.runtimeConfig.publicConnectionDialogMissingMaxAttempts,
+    2,
+    1,
+  ));
 
   while (true) {
     assertScriptAlive();
@@ -3761,18 +4060,66 @@ async function collectBatchCandidateConnectionUntilDefinitive(
       candidateProfileUrl,
     );
     connection.scanAttempts = attempt;
+    connection.debugScreenshotPaths = candidateScreenshots.map((entry) => entry.screenshotPath);
     lastConnection = connection;
 
     if (isBatchCandidateConnectionDefinitive(connection)) {
+      connection.debugScreenshotPaths = candidateScreenshots.map((entry) => entry.screenshotPath);
       return connection;
     }
 
     const pendingReason = describeBatchCandidatePendingReason(connection);
+    const screenshotEntry = await captureCandidateDebugScreenshot(
+      page,
+      progressContext.screenshotPath,
+      candidate,
+      attempt,
+      pendingReason,
+      notes,
+      progressContext.candidateErrorScreenshots,
+    );
+
+    if (screenshotEntry) {
+      candidateScreenshots.push(screenshotEntry);
+      connection.debugScreenshotPaths = candidateScreenshots.map((entry) => entry.screenshotPath);
+    }
+
+    if (isBatchCandidateSearchDialogMissing(connection) && attempt >= dialogMissingMaxAttempts) {
+      const message = `Kandidat @${candidate.username} wird ausgelassen, weil der Listen-Dialog nach ${dialogMissingMaxAttempts} Versuch(en) nicht gefunden wurde (${pendingReason}).`;
+      notes.push(message);
+
+      return markBatchCandidateConnectionFailed(
+        lastConnection,
+        candidate,
+        message,
+        attempt,
+        candidateScreenshots,
+      );
+    }
+
+    if (isBatchCandidateSearchInputMissing(connection)) {
+      const message = `Kandidat @${candidate.username} konnte nicht geprueft werden, weil das Suchfeld nach 3 Versuch(en) nicht stabil gefunden wurde (${pendingReason}).`;
+      notes.push(message);
+
+      return markBatchCandidateConnectionFailed(
+        lastConnection,
+        candidate,
+        message,
+        attempt,
+        candidateScreenshots,
+      );
+    }
 
     if (attempt >= maxAttempts || Date.now() - startedAt >= maxDurationMs) {
-      throw new ScraperAbortError(
-        `Node-Scraper abgebrochen: Kandidat @${candidate.username} konnte nach ${attempt} Versuch(en) nicht eindeutig geprueft werden (${pendingReason}).`,
-        'CANDIDATE_STALLED',
+      const message = `Kandidat @${candidate.username} konnte nach ${attempt} Versuch(en) nicht eindeutig geprueft werden (${pendingReason}).`;
+      notes.push(message);
+
+      return markBatchCandidateConnectionFailed(
+        lastConnection,
+        candidate,
+        message,
+        attempt,
+        candidateScreenshots,
       );
     }
 
@@ -3797,19 +4144,19 @@ function resolvePublicConnectionBatchStatus(candidatesTotal, candidatesChecked, 
   return candidateConnections.length > 0 ? 'success' : 'partial';
 }
 
-function resolvePublicConnectionBatchMessage(inferredFollowers, inferredFollowing, candidatesTotal, candidatesChecked, privateSkipped, rateLimitedCandidates = 0) {
+function resolvePublicConnectionBatchMessage(inferredFollowers, inferredFollowing, candidatesTotal, candidatesChecked, privateSkipped, rateLimitedCandidates = 0, failedCandidates = 0) {
   if (inferredFollowers.length > 0 || inferredFollowing.length > 0) {
-    return `Teilrekonstruktion abgeschlossen: ${inferredFollowers.length} moegliche Follower und ${inferredFollowing.length} moegliche Gefolgt-Profile gefunden.`;
+    return `Teilrekonstruktion abgeschlossen: ${inferredFollowers.length} moegliche Follower und ${inferredFollowing.length} moegliche Gefolgt-Profile gefunden, ${failedCandidates} Kandidaten mit Fehlern.`;
   }
 
   if (candidatesChecked > 0) {
-    return `Teilrekonstruktion abgeschlossen; ${candidatesChecked} von ${candidatesTotal} gespeicherten Kandidaten wurden geprueft, ${privateSkipped} private/gesperrte Profile uebersprungen, ${rateLimitedCandidates} per Rate-Limit blockiert.`;
+    return `Teilrekonstruktion abgeschlossen; ${candidatesChecked} von ${candidatesTotal} gespeicherten Kandidaten wurden geprueft, ${privateSkipped} private/gesperrte Profile uebersprungen, ${rateLimitedCandidates} per Rate-Limit blockiert, ${failedCandidates} mit Fehlern.`;
   }
 
   return 'Keine gespeicherten Kandidatenlisten fuer dieses bekannte Profil gefunden.';
 }
 
-async function runPublicConnectionBatch(page, runtimeState, notes, publicUsername, targetUsername) {
+async function runPublicConnectionBatch(page, runtimeState, notes, publicUsername, targetUsername, options = {}) {
   const candidates = Array.isArray(runtimeState.runtimeConfig.publicConnectionCandidates)
     ? runtimeState.runtimeConfig.publicConnectionCandidates
       .map(normalizePublicConnectionCandidate)
@@ -3821,6 +4168,8 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
   let foundFollowersCount = 0;
   let foundFollowingCount = 0;
   let rateLimitedCandidates = 0;
+  let failedCandidatesCount = 0;
+  const candidateErrorScreenshots = [];
 
   progressLog('candidate-pool-ready', {
     relationship: 'public-connections',
@@ -3829,6 +4178,7 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
     foundFollowers: foundFollowersCount,
     foundFollowing: foundFollowingCount,
     rateLimitedCandidates,
+    failedCandidates: failedCandidatesCount,
     message: `${candidates.length} gespeicherte Kandidaten aus @${publicUsername} werden gegen @${targetUsername} geprueft.`,
   });
 
@@ -3844,6 +4194,7 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
       foundFollowers: foundFollowersCount,
       foundFollowing: foundFollowingCount,
       rateLimitedCandidates,
+      failedCandidates: failedCandidatesCount,
       message: `Kandidat @${candidate.username} wird geprueft (${index + 1}/${candidates.length}). Gefunden: ${foundFollowersCount} Follower, ${foundFollowingCount} Gefolgt.`,
     });
 
@@ -3859,6 +4210,8 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
         foundFollowers: foundFollowersCount,
         foundFollowing: foundFollowingCount,
         rateLimitedCandidates,
+        screenshotPath: options.screenshotPath || null,
+        candidateErrorScreenshots,
       },
     );
     checkedConnections.push(connection);
@@ -3879,6 +4232,10 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
       rateLimitedCandidates++;
     }
 
+    if (connection.skippedReason === 'candidate-error') {
+      failedCandidatesCount++;
+    }
+
     progressLog('candidate-scan-complete', {
       relationship: 'public-connections',
       loaded: index + 1,
@@ -3890,7 +4247,8 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
       foundFollowers: foundFollowersCount,
       foundFollowing: foundFollowingCount,
       rateLimitedCandidates,
-      message: `Kandidat @${candidate.username} abgeschlossen (${index + 1}/${candidates.length}). Gefunden: ${foundFollowersCount} Follower, ${foundFollowingCount} Gefolgt.`,
+      failedCandidates: failedCandidatesCount,
+      message: `Kandidat @${candidate.username} abgeschlossen (${index + 1}/${candidates.length}). Gefunden: ${foundFollowersCount} Follower, ${foundFollowingCount} Gefolgt, Fehler: ${failedCandidatesCount}.`,
     });
 
     notes.push(`Kandidat @${candidate.username} eindeutig geprueft nach ${connection.scanAttempts || 1} Versuch(en).`);
@@ -3898,7 +4256,7 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
 
   const inferredFollowers = candidateConnections.filter((connection) => connection.followerOfPrivateProfile);
   const inferredFollowing = candidateConnections.filter((connection) => connection.followedByPrivateProfile);
-  const privateSkipped = checkedConnections.filter((connection) => connection.skippedReason).length;
+  const privateSkipped = checkedConnections.filter((connection) => ['private-profile', 'login-required'].includes(connection.skippedReason)).length;
   const statusLevel = resolvePublicConnectionBatchStatus(candidates.length, checkedConnections.length, candidateConnections);
 
   return {
@@ -3911,6 +4269,7 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
       checkedConnections.length,
       privateSkipped,
       rateLimitedCandidates,
+      failedCandidatesCount,
     ),
     publicUsername,
     targetUsername,
@@ -3921,8 +4280,10 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
     candidatesChecked: checkedConnections.length,
     candidatesSkippedPrivate: privateSkipped,
     candidatesRateLimited: rateLimitedCandidates,
+    candidatesFailed: failedCandidatesCount,
     inferredFollowers,
     inferredFollowing,
+    candidateErrorScreenshots,
     checkedPreview: checkedConnections.slice(0, 25),
   };
 }
@@ -4533,7 +4894,11 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
         notes,
         username,
         targetUsername,
+        {
+          screenshotPath: artifacts.screenshotPath,
+        },
       );
+      debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
       const responsePayload = {
         ...batchPayload,
         username,
@@ -4546,9 +4911,9 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
         loginDiagnostics,
         profile: null,
         profileUrl,
-        screenshotPath: null,
+        screenshotPath: debugScreenshotPath,
         scrapedAt: new Date().toISOString(),
-        screenshotMode: null,
+        screenshotMode: debugScreenshotPath ? 'page' : null,
         title: await page.title().catch(() => null),
         warnings: dedupe([
           ...consoleMessages,
@@ -4735,9 +5100,7 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
       notes.push('Cookies wurden nicht gespeichert, weil die Session offenbar nicht gueltig war.');
     }
 
-    debugScreenshotPath = runtimeConfig.skipDebugArtifacts
-      ? null
-      : await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
+    debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
 
     const responsePayload = {
       ok: outcome.ok,
@@ -4771,9 +5134,7 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
       fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
     }
 
-    debugScreenshotPath = runtimeConfig.skipDebugArtifacts
-      ? null
-      : await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
+    debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
 
     const responsePayload = {
       ok: false,
@@ -4783,6 +5144,10 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
         : 'Instagram-Scrape fehlgeschlagen.',
       username,
       error: normalizeText(error.message),
+      candidateUsername: error.candidateUsername || null,
+      candidateErrorScreenshots: Array.isArray(error.candidateDebugScreenshots)
+        ? error.candidateDebugScreenshots
+        : [],
       finalUrl,
       htmlPath: initialHtml && !runtimeConfig.skipDebugArtifacts ? artifacts.htmlPath : null,
       notes: dedupe(notes),

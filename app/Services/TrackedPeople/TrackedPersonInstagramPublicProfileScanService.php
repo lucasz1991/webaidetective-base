@@ -184,74 +184,172 @@ class TrackedPersonInstagramPublicProfileScanService
 
         $candidates = [];
 
-        foreach ($snapshots as $snapshot) {
-            foreach ([
-                'followersList' => 'known_profile_followers',
-                'followingList' => 'known_profile_following',
-            ] as $payloadKey => $sourceList) {
-                foreach ($this->loadStoredRelationshipItems($snapshot->raw_payload ?? [], $payloadKey) as $item) {
-                    if (! is_array($item)) {
-                        continue;
-                    }
-
-                    $rawUsername = $item['username'] ?? null;
-
-                    if (! is_scalar($rawUsername)) {
-                        continue;
-                    }
-
-                    $username = $this->scraper->normalizeInstagramUsername((string) $rawUsername);
-
-                    if ($username === null || $username === $publicUsername) {
-                        continue;
-                    }
-
-                    $existing = $candidates[$username] ?? [
-                        'username' => $username,
-                        'displayName' => $this->nullableTrim($item['displayName'] ?? null),
-                        'profileUrl' => $this->nullableTrim($item['profileUrl'] ?? null) ?: 'https://www.instagram.com/'.$username.'/',
-                        'sourceLists' => [],
-                    ];
-
-                    if (! in_array($sourceList, $existing['sourceLists'], true)) {
-                        $existing['sourceLists'][] = $sourceList;
-                    }
-
-                    $candidates[$username] = $existing;
+        foreach ([
+            'followersList' => 'known_profile_followers',
+            'followingList' => 'known_profile_following',
+        ] as $payloadKey => $sourceList) {
+            foreach ($this->loadLatestActiveRelationshipItems($snapshots, $payloadKey) as $item) {
+                if (! is_array($item)) {
+                    continue;
                 }
+
+                $rawUsername = $item['username'] ?? null;
+
+                if (! is_scalar($rawUsername)) {
+                    continue;
+                }
+
+                $username = $this->scraper->normalizeInstagramUsername((string) $rawUsername);
+
+                if ($username === null || $username === $publicUsername) {
+                    continue;
+                }
+
+                $existing = $candidates[$username] ?? [
+                    'username' => $username,
+                    'displayName' => $this->nullableTrim($item['displayName'] ?? null),
+                    'profileUrl' => $this->nullableTrim($item['profileUrl'] ?? null) ?: 'https://www.instagram.com/'.$username.'/',
+                    'sourceLists' => [],
+                ];
+
+                if (! in_array($sourceList, $existing['sourceLists'], true)) {
+                    $existing['sourceLists'][] = $sourceList;
+                }
+
+                $candidates[$username] = $existing;
             }
         }
 
         return array_values($candidates);
     }
 
+    private function loadLatestActiveRelationshipItems(Collection $snapshots, string $payloadKey): array
+    {
+        foreach ($snapshots as $snapshot) {
+            $rawPayload = is_array($snapshot->raw_payload ?? null) ? $snapshot->raw_payload : [];
+
+            if (! $this->hasStoredRelationshipList($rawPayload, $payloadKey)) {
+                continue;
+            }
+
+            return $this->loadStoredRelationshipItems($rawPayload, $payloadKey);
+        }
+
+        return [];
+    }
+
+    private function hasStoredRelationshipList(array $rawPayload, string $payloadKey): bool
+    {
+        $relationshipList = data_get($rawPayload, 'extractedProfile.'.$payloadKey);
+
+        if (! is_array($relationshipList) || $relationshipList === []) {
+            return false;
+        }
+
+        foreach (['itemsPath', 'activeItems', 'items', 'observedItems', 'itemsPreview', 'observedPreview', 'activeCount', 'count', 'knownCount', 'observedCount'] as $key) {
+            if (array_key_exists($key, $relationshipList)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function loadStoredRelationshipItems(array $rawPayload, string $payloadKey): array
     {
         $relationshipList = data_get($rawPayload, 'extractedProfile.'.$payloadKey, []);
+
+        if (! is_array($relationshipList)) {
+            return [];
+        }
+
         $itemsPath = data_get($relationshipList, 'itemsPath');
 
         if (is_string($itemsPath) && $itemsPath !== '' && Storage::disk('public')->exists($itemsPath)) {
             try {
                 $decoded = json_decode(Storage::disk('public')->get($itemsPath), true, flags: JSON_THROW_ON_ERROR);
-                $items = data_get($decoded, 'allKnownItems', data_get($decoded, 'items', data_get($decoded, 'activeItems', [])));
 
-                if (is_array($items)) {
-                    return $items;
+                if (! is_array($decoded)) {
+                    return [];
                 }
+
+                return $this->loadActiveItemsFromRelationshipPayload($decoded);
             } catch (\Throwable) {
                 return [];
             }
         }
 
-        foreach (['allKnownItems', 'items', 'activeItems', 'observedItems', 'itemsPreview', 'observedPreview', 'removedHistoryPreview'] as $fallbackKey) {
-            $items = data_get($relationshipList, $fallbackKey, []);
+        return $this->loadActiveItemsFromRelationshipPayload($relationshipList);
+    }
 
-            if (is_array($items) && $items !== []) {
-                return $items;
+    private function loadActiveItemsFromRelationshipPayload(array $payload): array
+    {
+        foreach (['activeItems', 'observedItems', 'observedPreview'] as $key) {
+            if (array_key_exists($key, $payload)) {
+                $items = data_get($payload, $key, []);
+
+                return is_array($items) ? $this->filterActiveRelationshipItems($items) : [];
+            }
+        }
+
+        if (! $this->hasHistoricalRelationshipMarkers($payload)) {
+            foreach (['items', 'itemsPreview'] as $key) {
+                if (! array_key_exists($key, $payload)) {
+                    continue;
+                }
+
+                $items = data_get($payload, $key, []);
+
+                return is_array($items) ? $this->filterActiveRelationshipItems($items) : [];
             }
         }
 
         return [];
+    }
+
+    private function hasHistoricalRelationshipMarkers(array $payload): bool
+    {
+        foreach ([
+            'allKnownItems',
+            'allKnownCount',
+            'removedItems',
+            'removedCount',
+            'removedHistoryItems',
+            'removedHistoryCount',
+            'removedHistoryPreview',
+            'currentlyRemovedItems',
+            'currentlyRemovedCount',
+        ] as $key) {
+            if (array_key_exists($key, $payload)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function filterActiveRelationshipItems(array $items): array
+    {
+        return collect($items)
+            ->filter(function ($item): bool {
+                if (! is_array($item)) {
+                    return false;
+                }
+
+                if (filled($item['removedAt'] ?? null)) {
+                    return false;
+                }
+
+                $status = Str::lower((string) ($item['status'] ?? ''));
+
+                if (in_array($status, ['removed', 'deleted', 'inactive'], true)) {
+                    return false;
+                }
+
+                return filled($item['username'] ?? null);
+            })
+            ->values()
+            ->all();
     }
 
     private function storeScan(
@@ -260,6 +358,8 @@ class TrackedPersonInstagramPublicProfileScanService
         array $payload,
     ): TrackedPersonInstagramPublicProfileScan {
         $this->assertActiveScanCurrent();
+
+        $payload = $this->normalizePayloadScreenshotPaths($payload);
 
         $followers = is_array($payload['followers'] ?? null) ? $payload['followers'] : [];
         $following = is_array($payload['following'] ?? null) ? $payload['following'] : [];
@@ -344,6 +444,65 @@ class TrackedPersonInstagramPublicProfileScanService
             ],
             'analyzed_at' => now('UTC'),
         ]);
+    }
+
+    private function normalizePayloadScreenshotPaths(array $payload): array
+    {
+        if (($payload['screenshotPath'] ?? null) !== null) {
+            $payload['screenshotPath'] = $this->normalizePublicScreenshotPath((string) $payload['screenshotPath']);
+        }
+
+        if (is_array($payload['candidateErrorScreenshots'] ?? null)) {
+            $payload['candidateErrorScreenshots'] = array_values(array_filter(array_map(function ($entry): ?array {
+                if (! is_array($entry)) {
+                    return null;
+                }
+
+                $screenshotPath = $this->normalizePublicScreenshotPath((string) ($entry['screenshotPath'] ?? ''));
+
+                if ($screenshotPath === null) {
+                    return null;
+                }
+
+                $entry['screenshotPath'] = $screenshotPath;
+
+                return $entry;
+            }, $payload['candidateErrorScreenshots'])));
+        }
+
+        if (is_array($payload['checkedPreview'] ?? null)) {
+            foreach ($payload['checkedPreview'] as $index => $checkedConnection) {
+                if (! is_array($checkedConnection) || ! is_array($checkedConnection['debugScreenshotPaths'] ?? null)) {
+                    continue;
+                }
+
+                $payload['checkedPreview'][$index]['debugScreenshotPaths'] = array_values(array_filter(array_map(
+                    fn ($screenshotPath): ?string => is_scalar($screenshotPath)
+                        ? $this->normalizePublicScreenshotPath((string) $screenshotPath)
+                        : null,
+                    $checkedConnection['debugScreenshotPaths'],
+                )));
+            }
+        }
+
+        return $payload;
+    }
+
+    private function normalizePublicScreenshotPath(string $rawScreenshotPath): ?string
+    {
+        if ($rawScreenshotPath === '') {
+            return null;
+        }
+
+        $resolvedScreenshotPath = $this->scraper->resolvePublicStoragePath($rawScreenshotPath);
+
+        if ($resolvedScreenshotPath !== null) {
+            return $resolvedScreenshotPath;
+        }
+
+        return Str::contains($rawScreenshotPath, ['\\', ':']) || Str::startsWith($rawScreenshotPath, '/')
+            ? null
+            : $rawScreenshotPath;
     }
 
     private function storeInferredConnections(

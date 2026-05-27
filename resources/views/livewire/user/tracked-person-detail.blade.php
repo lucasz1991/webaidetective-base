@@ -986,6 +986,11 @@
                                         @php
                                             $latestInferredFollowerCount = count(data_get($latestConnectionScan->raw_payload, 'inferredFollowers', []));
                                             $latestInferredFollowingCount = count(data_get($latestConnectionScan->raw_payload, 'inferredFollowing', []));
+                                            $latestConnectionScreenshotPath = data_get($latestConnectionScan->raw_payload, 'screenshotPath');
+                                            $latestCandidateErrorScreenshots = collect(data_get($latestConnectionScan->raw_payload, 'candidateErrorScreenshots', []))
+                                                ->filter(fn ($entry) => is_array($entry) && data_get($entry, 'screenshotPath'))
+                                                ->values();
+                                            $latestCandidateErrorScreenshotPath = data_get($latestCandidateErrorScreenshots->first(), 'screenshotPath');
                                         @endphp
                                         <div class="mt-3 rounded-xl border px-3 py-2 text-xs {{ $connectionStatusClass }}">
                                             <div class="flex flex-wrap items-center gap-2">
@@ -1007,6 +1012,13 @@
                                                 Kandidaten: {{ data_get($latestConnectionScan->raw_payload, 'candidatesChecked', 0) }}
                                                 / private oder gesperrte Profile: {{ data_get($latestConnectionScan->raw_payload, 'candidatesSkippedPrivate', 0) }}
                                                 / Rate-Limit: {{ data_get($latestConnectionScan->raw_payload, 'candidatesRateLimited', 0) }}
+                                                / Fehler: {{ data_get($latestConnectionScan->raw_payload, 'candidatesFailed', 0) }}
+                                                @if($latestConnectionScreenshotPath)
+                                                    / <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($latestConnectionScreenshotPath) }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Screenshot</a>
+                                                @endif
+                                                @if($latestCandidateErrorScreenshotPath)
+                                                    / <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($latestCandidateErrorScreenshotPath) }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Kandidatenfehler {{ $latestCandidateErrorScreenshots->count() }}</a>
+                                                @endif
                                             </div>
                                         </div>
                                     @endif
@@ -1092,6 +1104,11 @@
                             @php
                                 $scanInferredFollowerCount = count(data_get($connectionScan->raw_payload, 'inferredFollowers', []));
                                 $scanInferredFollowingCount = count(data_get($connectionScan->raw_payload, 'inferredFollowing', []));
+                                $scanScreenshotPath = data_get($connectionScan->raw_payload, 'screenshotPath');
+                                $scanCandidateErrorScreenshots = collect(data_get($connectionScan->raw_payload, 'candidateErrorScreenshots', []))
+                                    ->filter(fn ($entry) => is_array($entry) && data_get($entry, 'screenshotPath'))
+                                    ->values();
+                                $scanCandidateErrorScreenshotPath = data_get($scanCandidateErrorScreenshots->first(), 'screenshotPath');
                                 $scanStatusClass = match ($connectionScan->status_level) {
                                     'success' => 'border-emerald-200 bg-white text-emerald-900',
                                     'partial' => 'border-amber-200 bg-white text-amber-950',
@@ -1117,6 +1134,13 @@
                                             Kandidaten {{ data_get($connectionScan->raw_payload, 'candidatesChecked', 0) }}
                                             / Treffer {{ $scanInferredFollowerCount + $scanInferredFollowingCount }}
                                             / Rate-Limit {{ data_get($connectionScan->raw_payload, 'candidatesRateLimited', 0) }}
+                                            / Fehler {{ data_get($connectionScan->raw_payload, 'candidatesFailed', 0) }}
+                                            @if($scanScreenshotPath)
+                                                / <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($scanScreenshotPath) }}" target="_blank" class="font-semibold text-slate-700 underline decoration-slate-300 underline-offset-2">Screenshot</a>
+                                            @endif
+                                            @if($scanCandidateErrorScreenshotPath)
+                                                / <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($scanCandidateErrorScreenshotPath) }}" target="_blank" class="font-semibold text-slate-700 underline decoration-slate-300 underline-offset-2">Kandidatenfehler {{ $scanCandidateErrorScreenshots->count() }}</a>
+                                            @endif
                                         </div>
                                     </div>
                                 </div>

@@ -104,7 +104,7 @@
                     </ul>
                 </div>
 
-                <p class='text-white text-sm md:ml-auto'>&copy; {{ date("Y") }} CBW College Berufliche Weiterbildung GmbH. Alle Rechte vorbehalten.</p>
+                <p class='text-white text-sm md:ml-auto'>&copy; {{ date("Y") }} webaiDetective. Alle Rechte vorbehalten.</p>
             </div>
         </div>
     </div>
