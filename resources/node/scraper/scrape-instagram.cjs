@@ -297,10 +297,31 @@ async function navigateWithSoftTimeout(page, url, runtimeConfig, options = {}) {
       timeout: timeoutMs,
       waitUntil,
     });
+    const status = response?.status?.() ?? null;
+    const ok = response && status < 400;
+
+    if (!ok) {
+      const errorMessage = `HTTP ${status}`;
+      recordRunDebug('navigation-http-error', {
+        url,
+        finalUrl: page.url(),
+        timeoutMs,
+        waitUntil,
+        status,
+      });
+
+      return {
+        ok: false,
+        status,
+        error: errorMessage,
+        finalUrl: page.url(),
+        timeoutMs,
+      };
+    }
 
     return {
       ok: true,
-      status: response?.status?.() ?? null,
+      status,
       finalUrl: page.url(),
       timeoutMs,
     };
@@ -369,6 +390,24 @@ function debugLog(message, data) {
   process.stderr.write(`[SCRAPER DEBUG] ${payload}\n`);
 }
 
+let activeScraperProfile = null;
+
+function summarizeScraperProfile(runtimeConfig = {}) {
+  const profileLabel = normalizeText(String(runtimeConfig.profileLabel || runtimeConfig.profile_label || 'instagram-default')) || 'instagram-default';
+  const loginUsername = normalizeText(String(runtimeConfig.loginUsername || runtimeConfig.login_username || ''));
+  const profileId = normalizeText(String(runtimeConfig.profileId || runtimeConfig.profile_id || ''));
+
+  return {
+    label: profileLabel,
+    loginUsername: loginUsername || null,
+    id: profileId || null,
+  };
+}
+
+function setActiveScraperProfile(runtimeConfig = {}) {
+  activeScraperProfile = summarizeScraperProfile(runtimeConfig);
+}
+
 function progressLog(stage, data = {}) {
   assertScriptAlive();
   markScriptActivity(`progress:${stage}`);
@@ -377,6 +416,12 @@ function progressLog(stage, data = {}) {
     at: new Date().toISOString(),
     mode: operationMode,
     stage,
+    ...(activeScraperProfile ? {
+      scraperProfile: activeScraperProfile,
+      scraperProfileLabel: activeScraperProfile.label,
+      scraperProfileLoginUsername: activeScraperProfile.loginUsername,
+      scraperProfileId: activeScraperProfile.id,
+    } : {}),
     ...data,
   })}\n`);
 }
@@ -564,9 +609,15 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
     scriptWatchdogEnabled: input?.scriptWatchdogEnabled !== false && input?.script_watchdog_enabled !== false,
     scriptStallTimeoutMs: normalizeNumberAtLeast(input?.scriptStallTimeoutMs || input?.nodeStallTimeoutMs, merged.scriptStallTimeoutMs || 900000, 60000),
     browserDisconnectAbort: input?.browserDisconnectAbort !== false && input?.browser_disconnect_abort !== false,
-    publicConnectionCandidateMaxAttempts: Math.floor(normalizeNumberAtLeast(input?.publicConnectionCandidateMaxAttempts, merged.publicConnectionCandidateMaxAttempts || 8, 1)),
+    publicConnectionCandidateMaxAttempts: Math.min(
+      3,
+      Math.floor(normalizeNumberAtLeast(input?.publicConnectionCandidateMaxAttempts, merged.publicConnectionCandidateMaxAttempts || 3, 1)),
+    ),
     publicConnectionCandidateMaxDurationMs: normalizeNumberAtLeast(input?.publicConnectionCandidateMaxDurationMs, merged.publicConnectionCandidateMaxDurationMs || 1200000, 60000),
     publicConnectionDialogMissingMaxAttempts: Math.floor(normalizeNumberAtLeast(input?.publicConnectionDialogMissingMaxAttempts, merged.publicConnectionDialogMissingMaxAttempts || 2, 1)),
+    publicConnectionRateLimitAccountSwitchEnabled: input?.publicConnectionRateLimitAccountSwitchEnabled !== false
+      && input?.public_connection_rate_limit_account_switch_enabled !== false
+      && merged.publicConnectionRateLimitAccountSwitchEnabled !== false,
     skipDebugArtifacts: input?.skipDebugArtifacts === true || input?.skip_debug_artifacts === true,
     blockHeavyResources: input?.blockHeavyResources === true || input?.block_heavy_resources === true,
     accountPool: Array.isArray(input.accountPool) ? input.accountPool : [],
@@ -665,9 +716,10 @@ function loadRuntimeConfig(configPath) {
     scriptWatchdogEnabled: true,
     scriptStallTimeoutMs: 900000,
     browserDisconnectAbort: true,
-    publicConnectionCandidateMaxAttempts: 8,
+    publicConnectionCandidateMaxAttempts: 3,
     publicConnectionCandidateMaxDurationMs: 1200000,
     publicConnectionDialogMissingMaxAttempts: 2,
+    publicConnectionRateLimitAccountSwitchEnabled: true,
     skipDebugArtifacts: false,
     blockHeavyResources: false,
     accountPool: [],
@@ -3040,15 +3092,45 @@ async function performInstagramLogin(page, runtimeConfig) {
     'form button',
   ];
 
-  const loginNavigation = await navigateWithSoftTimeout(
-    page,
-    'https://www.instagram.com/accounts/login/',
-    runtimeConfig,
-    { timeoutMs: Math.min(resolveNavigationWaitMs(runtimeConfig, 120000), isLoginSessionMode ? 15000 : 20000) },
-  );
+  let loginNavigation = null;
+  const loginUrl = 'https://www.instagram.com/accounts/login/';
+  const loginTimeout = Math.min(resolveNavigationWaitMs(runtimeConfig, 120000), isLoginSessionMode ? 15000 : 20000);
+
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    loginNavigation = await navigateWithSoftTimeout(
+      page,
+      loginUrl,
+      runtimeConfig,
+      { timeoutMs: loginTimeout },
+    );
+
+    if (loginNavigation.ok) {
+      break;
+    }
+
+    diagnostics.warnings.push(`Instagram-Login-Seite konnte nicht stabil geladen werden: ${loginNavigation.error}`);
+    recordRunDebug('auto-login-navigation-retry', {
+      attempt,
+      status: loginNavigation.status,
+      error: loginNavigation.error,
+      url: loginUrl,
+    });
+
+    if (loginNavigation.status !== 429 || attempt === 3) {
+      break;
+    }
+
+    await sleep(1500 + attempt * 500);
+  }
 
   if (!loginNavigation.ok) {
-    diagnostics.warnings.push(`Instagram-Login-Seite konnte nicht stabil geladen werden: ${loginNavigation.error}`);
+    const pageDiagnostics = await collectPageDiagnostics(page, { includeCookies: true });
+    diagnostics.finalUrl = pageDiagnostics.url;
+    diagnostics.title = pageDiagnostics.title;
+    diagnostics.bodyPreview = pageDiagnostics.bodyPreview;
+    diagnostics.warnings.push('Instagram-Login-Seite konnte nach mehreren Versuchen nicht geladen werden. Auto-Login wird abgebrochen.');
+    recordRunDebug('auto-login-navigation-failed', pageDiagnostics);
+    return diagnostics;
   }
 
   await dismissCookieConsentIfPresent(page);
@@ -3476,6 +3558,7 @@ async function switchScraperAccountAfterRateLimit(page, runtimeConfig, notes, re
       }
 
       notes.push(`Scraper-Account aktiv: ${toLabel}.`);
+      setActiveScraperProfile(nextRuntimeConfig);
       recordRunDebug('account-switch-success', {
         relationship,
         toProfileLabel: toLabel,
@@ -3826,6 +3909,23 @@ function isBatchCandidateSearchDialogMissing(connection) {
   ) === 'search-dialog-not-found');
 }
 
+function isBatchCandidateRateLimited(connection) {
+  return Boolean(connection?.followers?.rateLimited || connection?.following?.rateLimited);
+}
+
+function hasUnusedRuntimeAccount(runtimeConfig, usedAccountKeys) {
+  return getRuntimeAccountPool(runtimeConfig).some((account) => {
+    const candidate = {
+      ...runtimeConfig,
+      ...account,
+      accountPool: getRuntimeAccountPool(runtimeConfig),
+    };
+    const accountKey = getScraperAccountKey(candidate);
+
+    return accountKey && !usedAccountKeys.has(accountKey);
+  });
+}
+
 function describeBatchCandidatePendingReason(connection) {
   if (!connection) {
     return 'kein Suchergebnis';
@@ -3927,6 +4027,28 @@ function buildBatchCandidateConnection(candidate, candidateFollowers, candidateF
   };
 }
 
+function summarizeBatchCandidateConnectionForProgress(connection) {
+  return {
+    username: connection.username,
+    displayName: connection.displayName || null,
+    profileUrl: connection.profileUrl || `https://www.instagram.com/${connection.username}/`,
+    sourceLists: Array.isArray(connection.sourceLists) ? connection.sourceLists : [],
+  };
+}
+
+function buildPublicConnectionProgressPreviews(candidateConnections) {
+  return {
+    inferredFollowersPreview: candidateConnections
+      .filter((connection) => connection.followerOfPrivateProfile)
+      .slice(-40)
+      .map(summarizeBatchCandidateConnectionForProgress),
+    inferredFollowingPreview: candidateConnections
+      .filter((connection) => connection.followedByPrivateProfile)
+      .slice(-40)
+      .map(summarizeBatchCandidateConnectionForProgress),
+  };
+}
+
 function markBatchCandidateConnectionFailed(connection, candidate, reason, attempt, screenshots = []) {
   const failureMessage = normalizeText(String(reason || 'candidate-error')) || 'candidate-error';
   const failedConnection = connection || buildBatchCandidateConnection(
@@ -4020,8 +4142,9 @@ async function collectBatchCandidateConnectionUntilDefinitive(
   let lastConnection = null;
   const candidateScreenshots = [];
   const startedAt = Date.now();
-  const maxAttempts = Math.floor(
-    normalizeNumberAtLeast(runtimeState.runtimeConfig.publicConnectionCandidateMaxAttempts, 8, 1),
+  const maxAttempts = Math.min(
+    3,
+    Math.floor(normalizeNumberAtLeast(runtimeState.runtimeConfig.publicConnectionCandidateMaxAttempts, 3, 1)),
   );
   const maxDurationMs = normalizeNumberAtLeast(
     runtimeState.runtimeConfig.publicConnectionCandidateMaxDurationMs,
@@ -4047,6 +4170,8 @@ async function collectBatchCandidateConnectionUntilDefinitive(
         attempt,
         foundFollowers: progressContext.foundFollowers,
         foundFollowing: progressContext.foundFollowing,
+        inferredFollowersPreview: progressContext.inferredFollowersPreview || [],
+        inferredFollowingPreview: progressContext.inferredFollowingPreview || [],
         rateLimitedCandidates: progressContext.rateLimitedCandidates,
         message: `Kandidat @${candidate.username} wird erneut geprueft (Versuch ${attempt}); ${describeBatchCandidatePendingReason(lastConnection)}.`,
       });
@@ -4082,6 +4207,53 @@ async function collectBatchCandidateConnectionUntilDefinitive(
     if (screenshotEntry) {
       candidateScreenshots.push(screenshotEntry);
       connection.debugScreenshotPaths = candidateScreenshots.map((entry) => entry.screenshotPath);
+    }
+
+    if (
+      isBatchCandidateRateLimited(connection)
+      && runtimeState.runtimeConfig.publicConnectionRateLimitAccountSwitchEnabled !== false
+      && hasUnusedRuntimeAccount(runtimeState.runtimeConfig, runtimeState.usedAccountKeys)
+      && attempt < maxAttempts
+    ) {
+      progressLog('candidate-rate-limit-account-switch', {
+        relationship: 'public-connections',
+        loaded: progressContext.loaded,
+        expectedCount: progressContext.expectedCount,
+        candidateUsername: candidate.username,
+        attempt,
+        foundFollowers: progressContext.foundFollowers,
+        foundFollowing: progressContext.foundFollowing,
+        inferredFollowersPreview: progressContext.inferredFollowersPreview || [],
+        inferredFollowingPreview: progressContext.inferredFollowingPreview || [],
+        accountPoolSize: getRuntimeAccountPool(runtimeState.runtimeConfig).length,
+        usedAccountCount: runtimeState.usedAccountKeys.size,
+        message: `Rate-Limit bei @${candidate.username}; Scraper-Account wird gewechselt.`,
+      });
+
+      const switchResult = await switchScraperAccountAfterRateLimit(
+        page,
+        runtimeState.runtimeConfig,
+        notes,
+        'public-connections',
+        connection.followers?.rateLimitText || connection.following?.rateLimitText || pendingReason,
+        runtimeState.usedAccountKeys,
+      );
+
+      if (switchResult?.sessionEstablished) {
+        runtimeState.runtimeConfig = switchResult.runtimeConfig;
+        runtimeState.cookieFilePath = buildCookiePath(switchResult.runtimeConfig);
+        runtimeState.cookieDiagnostics = switchResult.cookieDiagnostics;
+        runtimeState.loginDiagnostics = switchResult.loginDiagnostics;
+        await closeInstagramDialog(page);
+        notes.push(`Kandidat @${candidate.username} wird nach Account-Wechsel erneut geprueft.`);
+
+        continue;
+      }
+
+      if (switchResult?.failed) {
+        runtimeState.cookieSaveDisabled = true;
+        notes.push(`Kein weiterer Scraper-Account konnte fuer @${candidate.username} stabil aktiviert werden.`);
+      }
     }
 
     if (isBatchCandidateSearchDialogMissing(connection) && attempt >= dialogMissingMaxAttempts) {
@@ -4157,45 +4329,61 @@ function resolvePublicConnectionBatchMessage(inferredFollowers, inferredFollowin
 }
 
 async function runPublicConnectionBatch(page, runtimeState, notes, publicUsername, targetUsername, options = {}) {
-  const candidates = Array.isArray(runtimeState.runtimeConfig.publicConnectionCandidates)
+  const allCandidates = Array.isArray(runtimeState.runtimeConfig.publicConnectionCandidates)
     ? runtimeState.runtimeConfig.publicConnectionCandidates
       .map(normalizePublicConnectionCandidate)
       .filter(Boolean)
       .filter((candidate) => candidate.username !== publicUsername && candidate.username !== targetUsername)
     : [];
+  const configuredSkipCandidateUsernames = Array.isArray(runtimeState.runtimeConfig.publicConnectionSkipCandidateUsernames)
+    ? runtimeState.runtimeConfig.publicConnectionSkipCandidateUsernames
+      .map((candidateUsername) => normalizeInstagramUsername(candidateUsername))
+      .filter(Boolean)
+    : [];
+  const configuredSkipSet = new Set(configuredSkipCandidateUsernames);
+  const skippedCandidates = allCandidates.filter((candidate) => configuredSkipSet.has(candidate.username));
+  const candidates = allCandidates.filter((candidate) => !configuredSkipSet.has(candidate.username));
+  const expectedTotalCount = skippedCandidates.length + candidates.length;
   const candidateConnections = [];
   const checkedConnections = [];
   let foundFollowersCount = 0;
   let foundFollowingCount = 0;
   let rateLimitedCandidates = 0;
   let failedCandidatesCount = 0;
+  let stoppedForRateLimit = false;
+  let rateLimitedCandidateUsername = null;
   const candidateErrorScreenshots = [];
 
   progressLog('candidate-pool-ready', {
     relationship: 'public-connections',
-    loaded: 0,
-    expectedCount: candidates.length,
+    loaded: skippedCandidates.length,
+    expectedCount: expectedTotalCount,
+    resumeSkippedCount: skippedCandidates.length,
     foundFollowers: foundFollowersCount,
     foundFollowing: foundFollowingCount,
+    ...buildPublicConnectionProgressPreviews(candidateConnections),
     rateLimitedCandidates,
     failedCandidates: failedCandidatesCount,
-    message: `${candidates.length} gespeicherte Kandidaten aus @${publicUsername} werden gegen @${targetUsername} geprueft.`,
+    message: `${candidates.length} offene von ${expectedTotalCount} gespeicherten Kandidaten aus @${publicUsername} werden gegen @${targetUsername} geprueft.`,
   });
 
   for (let index = 0; index < candidates.length; index++) {
     const candidate = candidates[index];
     const candidateProfileUrl = `https://www.instagram.com/${candidate.username}/`;
+    const loadedBeforeCandidate = skippedCandidates.length + checkedConnections.length;
 
     progressLog('candidate-scan-start', {
       relationship: 'public-connections',
-      loaded: index,
-      expectedCount: candidates.length,
+      loaded: loadedBeforeCandidate,
+      expectedCount: expectedTotalCount,
+      resumeSkippedCount: skippedCandidates.length,
       candidateUsername: candidate.username,
       foundFollowers: foundFollowersCount,
       foundFollowing: foundFollowingCount,
+      ...buildPublicConnectionProgressPreviews(candidateConnections),
       rateLimitedCandidates,
       failedCandidates: failedCandidatesCount,
-      message: `Kandidat @${candidate.username} wird geprueft (${index + 1}/${candidates.length}). Gefunden: ${foundFollowersCount} Follower, ${foundFollowingCount} Gefolgt.`,
+      message: `Kandidat @${candidate.username} wird geprueft (${loadedBeforeCandidate + 1}/${expectedTotalCount}). Gefunden: ${foundFollowersCount} Follower, ${foundFollowingCount} Gefolgt.`,
     });
 
     const connection = await collectBatchCandidateConnectionUntilDefinitive(
@@ -4205,16 +4393,16 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
       candidate,
       candidateProfileUrl,
       {
-        loaded: index,
-        expectedCount: candidates.length,
+        loaded: loadedBeforeCandidate,
+        expectedCount: expectedTotalCount,
         foundFollowers: foundFollowersCount,
         foundFollowing: foundFollowingCount,
+        ...buildPublicConnectionProgressPreviews(candidateConnections),
         rateLimitedCandidates,
         screenshotPath: options.screenshotPath || null,
         candidateErrorScreenshots,
       },
     );
-    checkedConnections.push(connection);
 
     if (connection.followerOfPrivateProfile || connection.followedByPrivateProfile) {
       candidateConnections.push(connection);
@@ -4228,9 +4416,35 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
       foundFollowingCount++;
     }
 
-    if (connection.followers.rateLimited || connection.following.rateLimited) {
+    if (isBatchCandidateRateLimited(connection)) {
       rateLimitedCandidates++;
+      stoppedForRateLimit = true;
+      rateLimitedCandidateUsername = candidate.username;
+      connection.skippedReason = 'rate-limited';
+
+      progressLog('candidate-scan-rate-limited', {
+        relationship: 'public-connections',
+        loaded: loadedBeforeCandidate,
+        expectedCount: expectedTotalCount,
+        resumeSkippedCount: skippedCandidates.length,
+        candidateUsername: candidate.username,
+        candidateConnection: connection,
+        targetFoundInFollowers: connection.followedByPrivateProfile,
+        targetFoundInFollowing: connection.followerOfPrivateProfile,
+        skippedReason: connection.skippedReason,
+        stoppedForRateLimit: true,
+        foundFollowers: foundFollowersCount,
+        foundFollowing: foundFollowingCount,
+        ...buildPublicConnectionProgressPreviews(candidateConnections),
+        rateLimitedCandidates,
+        failedCandidates: failedCandidatesCount,
+        message: `Instagram-Rate-Limit bei @${candidate.username}. Scan wird pausiert; bisherige Treffer bleiben gespeichert.`,
+      });
+      notes.push(`Public-Profile-Verbindungsscan bei @${candidate.username} wegen Instagram-Rate-Limit pausiert.`);
+      break;
     }
+
+    checkedConnections.push(connection);
 
     if (connection.skippedReason === 'candidate-error') {
       failedCandidatesCount++;
@@ -4238,14 +4452,17 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
 
     progressLog('candidate-scan-complete', {
       relationship: 'public-connections',
-      loaded: index + 1,
-      expectedCount: candidates.length,
+      loaded: skippedCandidates.length + checkedConnections.length,
+      expectedCount: expectedTotalCount,
+      resumeSkippedCount: skippedCandidates.length,
       candidateUsername: candidate.username,
+      candidateConnection: connection,
       targetFoundInFollowers: connection.followedByPrivateProfile,
       targetFoundInFollowing: connection.followerOfPrivateProfile,
       skippedReason: connection.skippedReason,
       foundFollowers: foundFollowersCount,
       foundFollowing: foundFollowingCount,
+      ...buildPublicConnectionProgressPreviews(candidateConnections),
       rateLimitedCandidates,
       failedCandidates: failedCandidatesCount,
       message: `Kandidat @${candidate.username} abgeschlossen (${index + 1}/${candidates.length}). Gefunden: ${foundFollowersCount} Follower, ${foundFollowingCount} Gefolgt, Fehler: ${failedCandidatesCount}.`,
@@ -4257,16 +4474,24 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
   const inferredFollowers = candidateConnections.filter((connection) => connection.followerOfPrivateProfile);
   const inferredFollowing = candidateConnections.filter((connection) => connection.followedByPrivateProfile);
   const privateSkipped = checkedConnections.filter((connection) => ['private-profile', 'login-required'].includes(connection.skippedReason)).length;
-  const statusLevel = resolvePublicConnectionBatchStatus(candidates.length, checkedConnections.length, candidateConnections);
+  const checkedCandidateUsernames = [
+    ...skippedCandidates.map((candidate) => candidate.username),
+    ...checkedConnections.map((connection) => connection.username),
+  ];
+  const statusLevel = stoppedForRateLimit
+    ? 'partial'
+    : resolvePublicConnectionBatchStatus(expectedTotalCount, checkedCandidateUsernames.length, candidateConnections);
 
   return {
     ok: statusLevel !== 'error',
     statusLevel,
-    statusMessage: resolvePublicConnectionBatchMessage(
+    statusMessage: stoppedForRateLimit
+      ? `Verbindungsscan wegen Instagram-Rate-Limit pausiert: ${checkedCandidateUsernames.length} von ${expectedTotalCount} Kandidaten geprueft.`
+      : resolvePublicConnectionBatchMessage(
       inferredFollowers,
       inferredFollowing,
-      candidates.length,
-      checkedConnections.length,
+      expectedTotalCount,
+      checkedCandidateUsernames.length,
       privateSkipped,
       rateLimitedCandidates,
       failedCandidatesCount,
@@ -4276,11 +4501,15 @@ async function runPublicConnectionBatch(page, runtimeState, notes, publicUsernam
     relationType: 'candidate_search',
     targetFollowsPublicProfile: false,
     publicProfileFollowsTarget: false,
-    candidatesTotal: candidates.length,
-    candidatesChecked: checkedConnections.length,
+    candidatesTotal: expectedTotalCount,
+    candidatesChecked: checkedCandidateUsernames.length,
     candidatesSkippedPrivate: privateSkipped,
     candidatesRateLimited: rateLimitedCandidates,
     candidatesFailed: failedCandidatesCount,
+    stoppedForRateLimit,
+    rateLimitedCandidateUsername,
+    checkedCandidateUsernames,
+    resumeSkippedCount: skippedCandidates.length,
     inferredFollowers,
     inferredFollowing,
     candidateErrorScreenshots,
@@ -4569,7 +4798,8 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
   const startedAt = Date.now();
   const notes = [];
   const consoleMessages = [];
-  let runtimeConfig = loadRuntimeConfig(runtimeConfigPath);
+    let runtimeConfig = loadRuntimeConfig(runtimeConfigPath);
+    setActiveScraperProfile(runtimeConfig);
   configureScriptWatchdog(runtimeConfig);
   const debugLogPath = initializeRunDebug(operationMode, username, runtimeConfig);
   const profileUrl = isLoginSessionMode

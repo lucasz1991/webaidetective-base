@@ -39,6 +39,7 @@ class TrackedPerson extends Model
         'notify_youtube_changes',
         'notify_snapchat_changes',
         'monitoring_enabled',
+        'is_primary',
         'profile_image_path',
         'profile_image_hash',
         'instagram_profile_image_path',
@@ -62,6 +63,7 @@ class TrackedPerson extends Model
         'notify_youtube_changes' => 'boolean',
         'notify_snapchat_changes' => 'boolean',
         'monitoring_enabled' => 'boolean',
+        'is_primary' => 'boolean',
     ];
 
     protected $appends = [

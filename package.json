@@ -25,6 +25,7 @@
         "alpinejs": "^3.14.3",
         "apexcharts": "^4.3.0",
         "chart.js": "^4.4.7",
+        "cytoscape": "^3.33.4",
         "fullcalendar": "^6.1.15",
         "interactjs": "^1.10.27",
         "jquery": "^3.7.1",

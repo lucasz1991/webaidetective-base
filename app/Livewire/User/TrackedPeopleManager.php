@@ -3,6 +3,7 @@
 namespace App\Livewire\User;
 
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Livewire\Component;
 
 class TrackedPeopleManager extends Component
@@ -24,6 +25,8 @@ class TrackedPeopleManager extends Component
     public ?int $selectedTrackedPersonId = null;
     public bool $showDetailModal = false;
     public bool $showCreateForm = false;
+    public ?int $trackedPersonIdPendingDeletion = null;
+    public bool $showDeleteConfirmationModal = false;
     public $managerStatus = null;
     public $managerStatusLevel = 'neutral';
 
@@ -34,19 +37,19 @@ class TrackedPeopleManager extends Component
     protected function rules(): array
     {
         return [
-            'first_name' => ['required', 'string', 'max:255'],
-            'last_name' => ['required', 'string', 'max:255'],
-            'alias' => ['nullable', 'string', 'max:255'],
-            'date_of_birth' => ['nullable', 'date'],
-            'city' => ['nullable', 'string', 'max:255'],
-            'country' => ['nullable', 'string', 'max:255'],
-            'notes' => ['nullable', 'string'],
-            'instagram_username' => ['nullable', 'string', 'max:255'],
-            'tiktok_username' => ['nullable', 'string', 'max:255'],
-            'facebook_username' => ['nullable', 'string', 'max:255'],
-            'x_username' => ['nullable', 'string', 'max:255'],
-            'youtube_username' => ['nullable', 'string', 'max:255'],
-            'snapchat_username' => ['nullable', 'string', 'max:255'],
+            'first_name'            => ['required', 'string', 'max:255'],
+            'last_name'             => ['required', 'string', 'max:255'],
+            'alias'                 => ['nullable', 'string', 'max:255'],
+            'date_of_birth'         => ['nullable', 'date'],
+            'city'                  => ['nullable', 'string', 'max:255'],
+            'country'               => ['nullable', 'string', 'max:255'],
+            'notes'                 => ['nullable', 'string'],
+            'instagram_username'    => ['nullable', 'string', 'max:255'],
+            'tiktok_username'       => ['nullable', 'string', 'max:255'],
+            'facebook_username'     => ['nullable', 'string', 'max:255'],
+            'x_username'            => ['nullable', 'string', 'max:255'],
+            'youtube_username'      => ['nullable', 'string', 'max:255'],
+            'snapchat_username'     => ['nullable', 'string', 'max:255'],
         ];
     }
 
@@ -72,9 +75,83 @@ class TrackedPeopleManager extends Component
         $this->showDetailModal = false;
     }
 
+    public function confirmTrackedPersonDeletion(int $trackedPersonId): void
+    {
+        $user = Auth::user();
+
+        if (! $user || ! $user->trackedPeople()->whereKey($trackedPersonId)->exists()) {
+            return;
+        }
+
+        $this->trackedPersonIdPendingDeletion = $trackedPersonId;
+        $this->showDeleteConfirmationModal = true;
+    }
+
+    public function cancelTrackedPersonDeletion(): void
+    {
+        $this->trackedPersonIdPendingDeletion = null;
+        $this->showDeleteConfirmationModal = false;
+    }
+
+    public function deleteTrackedPerson(): void
+    {
+        $user = Auth::user();
+
+        if (! $user || ! $this->trackedPersonIdPendingDeletion) {
+            $this->cancelTrackedPersonDeletion();
+
+            return;
+        }
+
+        $trackedPerson = $user->trackedPeople()->whereKey($this->trackedPersonIdPendingDeletion)->first();
+
+        if (! $trackedPerson) {
+            $this->cancelTrackedPersonDeletion();
+
+            return;
+        }
+
+        $displayName = $trackedPerson->display_name;
+        $wasPrimary = (bool) $trackedPerson->is_primary;
+
+        try {
+            DB::transaction(function () use ($user, $trackedPerson, $wasPrimary): void {
+                $trackedPerson->delete();
+
+                if ($wasPrimary) {
+                    $user->trackedPeople()
+                        ->orderByRaw('instagram_username IS NULL')
+                        ->orderByDesc('last_instagram_analyzed_at')
+                        ->orderBy('instagram_username')
+                        ->first()
+                        ?->update(['is_primary' => true]);
+                }
+            });
+        } catch (\Throwable $exception) {
+            $this->setManagerStatus(
+                'Person "'.$displayName.'" konnte nicht geloescht werden: '.$exception->getMessage(),
+                'error',
+            );
+
+            return;
+        }
+
+        if ($this->selectedTrackedPersonId === $trackedPerson->id) {
+            $this->selectedTrackedPersonId = null;
+            $this->showDetailModal = false;
+        }
+
+        $this->cancelTrackedPersonDeletion();
+        $this->setManagerStatus(
+            'Person "'.$displayName.'" wurde geloescht.',
+            'success',
+        );
+    }
+
     public function createTrackedPerson(): void
     {
         $validated = $this->validate();
+        $user = Auth::user();
         $validated = [
             'first_name' => trim($validated['first_name']),
             'last_name' => trim($validated['last_name']),
@@ -89,9 +166,10 @@ class TrackedPeopleManager extends Component
             'x_username' => $this->normalizeHandle($validated['x_username'] ?? null),
             'youtube_username' => $this->normalizeHandle($validated['youtube_username'] ?? null),
             'snapchat_username' => $this->normalizeHandle($validated['snapchat_username'] ?? null),
+            'is_primary' => ! $user->trackedPeople()->where('is_primary', true)->exists(),
         ];
 
-        $person = Auth::user()->trackedPeople()->create($validated);
+        $person = $user->trackedPeople()->create($validated);
 
         $this->selectedTrackedPersonId = $person->id;
         $this->showDetailModal = true;

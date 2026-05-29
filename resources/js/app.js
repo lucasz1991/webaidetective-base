@@ -4,11 +4,22 @@ import mask from '@alpinejs/mask';
 import resize from '@alpinejs/resize';
 import intersect from '@alpinejs/intersect'
 import MetisMenu from "metismenujs";
+import './network-map';
 
-Alpine.plugin(collapse);
-Alpine.plugin(mask);
-Alpine.plugin(resize);
-Alpine.plugin(intersect); 
+function registerAlpinePlugins() {
+  if (!window.Alpine || window.Alpine.__webaidetectivePluginsRegistered) {
+    return;
+  }
+
+  window.Alpine.plugin(collapse);
+  window.Alpine.plugin(mask);
+  window.Alpine.plugin(resize);
+  window.Alpine.plugin(intersect);
+  window.Alpine.__webaidetectivePluginsRegistered = true;
+}
+
+document.addEventListener('alpine:init', registerAlpinePlugins);
+registerAlpinePlugins();
 
 
 (function () {

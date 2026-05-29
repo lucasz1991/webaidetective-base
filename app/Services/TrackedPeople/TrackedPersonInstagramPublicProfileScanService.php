@@ -69,14 +69,21 @@ class TrackedPersonInstagramPublicProfileScanService
             throw new \RuntimeException('Es sind keine bekannten oeffentlichen Instagram-Profile hinterlegt.');
         }
 
+        $createdScans = collect();
+        $total = max(1, $publicProfiles->count());
+        $liveInferredFollowers = [];
+        $liveInferredFollowing = [];
+        $pausedForRateLimit = false;
+
         $this->reportProgress($progress, [
             'phase' => 'public-connections',
             'percent' => 1,
             'message' => 'Public-Profile-Verbindungsscan wird vorbereitet.',
+            'foundFollowers' => 0,
+            'foundFollowing' => 0,
+            'inferredFollowers' => [],
+            'inferredFollowing' => [],
         ]);
-
-        $createdScans = collect();
-        $total = max(1, $publicProfiles->count());
 
         foreach ($publicProfiles->values() as $index => $publicProfile) {
             $publicUsername = $this->scraper->normalizeInstagramUsername($publicProfile->username);
@@ -109,28 +116,155 @@ class TrackedPersonInstagramPublicProfileScanService
 
             $profileStart = (int) floor(($index / $total) * 100);
             $profileEnd = (int) floor((($index + 1) / $total) * 100);
+            $scan = $this->startOrResumeProgressScan($trackedPerson, $publicProfile, $targetUsername, $publicUsername, $candidates);
+            $resumePayload = $scan->raw_payload ?? [];
+            $resumeCheckedCandidateUsernames = $this->filterCandidateUsernamesForCandidates(
+                $this->normalizeCandidateUsernames(data_get($resumePayload, 'checkedCandidateUsernames', [])),
+                $candidates,
+            );
+            $resumeProfileInferredFollowers = $this->normalizeProgressConnectionItems(data_get($resumePayload, 'inferredFollowers', []), $publicUsername);
+            $resumeProfileInferredFollowing = $this->normalizeProgressConnectionItems(data_get($resumePayload, 'inferredFollowing', []), $publicUsername);
+
+            $liveInferredFollowers = $this->mergeProgressConnectionItems($liveInferredFollowers, $resumeProfileInferredFollowers);
+            $liveInferredFollowing = $this->mergeProgressConnectionItems($liveInferredFollowing, $resumeProfileInferredFollowing);
 
             $this->reportProgress($progress, [
                 'phase' => 'public-connections',
                 'percent' => max(1, $profileStart),
                 'message' => 'Verbindung mit @'.$publicUsername.' wird geprueft.',
+                'foundFollowers' => count($liveInferredFollowers),
+                'foundFollowing' => count($liveInferredFollowing),
+                'inferredFollowers' => $liveInferredFollowers,
+                'inferredFollowing' => $liveInferredFollowing,
             ]);
 
             try {
+                $currentProfileInferredFollowers = [];
+                $currentProfileInferredFollowing = [];
+                $scanPausedForRateLimit = false;
+
                 $payload = $this->scraper->scanPublicProfileConnection(
                     $publicUsername,
                     $targetUsername,
-                    fn (array $state) => $this->reportProgress($progress, [
-                        'phase' => 'public-connections',
-                        'percent' => $profileStart + (int) floor(((int) ($state['percent'] ?? 0) / 100) * max(1, $profileEnd - $profileStart)),
-                        'message' => (string) ($state['message'] ?? 'Verbindung mit @'.$publicUsername.' wird geprueft.'),
-                    ]),
+                    function (array $state) use (
+                        $progress,
+                        $trackedPerson,
+                        $publicProfile,
+                        $scan,
+                        $targetUsername,
+                        $publicUsername,
+                        $profileStart,
+                        $profileEnd,
+                        $candidates,
+                        &$resumeCheckedCandidateUsernames,
+                        &$resumeProfileInferredFollowers,
+                        &$resumeProfileInferredFollowing,
+                        &$liveInferredFollowers,
+                        &$liveInferredFollowing,
+                        &$currentProfileInferredFollowers,
+                        &$currentProfileInferredFollowing,
+                        &$scanPausedForRateLimit,
+                    ): void {
+                        if (array_key_exists('inferredFollowers', $state)) {
+                            $currentProfileInferredFollowers = $this->normalizeProgressConnectionItems(
+                                $state['inferredFollowers'],
+                                $publicUsername,
+                            );
+                        }
+
+                        if (array_key_exists('inferredFollowing', $state)) {
+                            $currentProfileInferredFollowing = $this->normalizeProgressConnectionItems(
+                                $state['inferredFollowing'],
+                                $publicUsername,
+                            );
+                        }
+
+                        $profileReportedFollowers = $this->mergeProgressConnectionItems(
+                            $resumeProfileInferredFollowers,
+                            $currentProfileInferredFollowers,
+                        );
+                        $profileReportedFollowing = $this->mergeProgressConnectionItems(
+                            $resumeProfileInferredFollowing,
+                            $currentProfileInferredFollowing,
+                        );
+                        $reportedFollowers = $this->mergeProgressConnectionItems(
+                            $liveInferredFollowers,
+                            $profileReportedFollowers,
+                        );
+                        $reportedFollowing = $this->mergeProgressConnectionItems(
+                            $liveInferredFollowing,
+                            $profileReportedFollowing,
+                        );
+                        $scanPausedForRateLimit = $scanPausedForRateLimit || (bool) ($state['stoppedForRateLimit'] ?? false);
+
+                        $this->persistProgressScanState(
+                            $trackedPerson,
+                            $publicProfile,
+                            $scan,
+                            $targetUsername,
+                            $publicUsername,
+                            $state,
+                            $candidates,
+                            $profileReportedFollowers,
+                            $profileReportedFollowing,
+                        );
+
+                        $this->reportProgress($progress, [
+                            'phase' => 'public-connections',
+                            'percent' => $profileStart + (int) floor(((int) ($state['percent'] ?? 0) / 100) * max(1, $profileEnd - $profileStart)),
+                            'loaded' => $state['loaded'] ?? null,
+                            'expected' => $state['expected'] ?? null,
+                            'foundFollowers' => count($reportedFollowers),
+                            'foundFollowing' => count($reportedFollowing),
+                            'rateLimitedCandidates' => $state['rateLimitedCandidates'] ?? null,
+                            'message' => (string) ($state['message'] ?? 'Verbindung mit @'.$publicUsername.' wird geprueft.'),
+                            'inferredFollowers' => $reportedFollowers,
+                            'inferredFollowing' => $reportedFollowing,
+                            'scraperProfileLabel' => $state['scraperProfileLabel'] ?? null,
+                            'scraperProfileLoginUsername' => $state['scraperProfileLoginUsername'] ?? null,
+                            'scraperProfileId' => $state['scraperProfileId'] ?? null,
+                            'scraperProfileSwitchTarget' => $state['scraperProfileSwitchTarget'] ?? null,
+                        ]);
+                    },
                     $this->withActiveScanControl([
                         'publicConnectionCandidates' => $candidates,
+                        'publicConnectionSkipCandidateUsernames' => $resumeCheckedCandidateUsernames,
                     ]),
                 );
 
-                $createdScans->push($this->storeScan($trackedPerson, $publicProfile, $payload));
+                $freshScanPayload = $scan->fresh()?->raw_payload ?? [];
+                $payload = $this->mergeFinalPayloadWithProgress(
+                    is_array($freshScanPayload) ? $freshScanPayload : [],
+                    $payload,
+                    $publicUsername,
+                    $candidates,
+                );
+                $liveInferredFollowers = $this->mergeProgressConnectionItems(
+                    $liveInferredFollowers,
+                    $this->normalizeProgressConnectionItems($payload['inferredFollowers'] ?? [], $publicUsername),
+                );
+                $liveInferredFollowing = $this->mergeProgressConnectionItems(
+                    $liveInferredFollowing,
+                    $this->normalizeProgressConnectionItems($payload['inferredFollowing'] ?? [], $publicUsername),
+                );
+                $createdScans->push($this->storeScan($trackedPerson, $publicProfile, $payload, $scan));
+
+                $this->reportProgress($progress, [
+                    'phase' => 'public-connections',
+                    'percent' => max(1, $profileEnd),
+                    'message' => ((bool) ($payload['stoppedForRateLimit'] ?? false))
+                        ? 'Verbindung mit @'.$publicUsername.' wegen Instagram-Rate-Limit pausiert.'
+                        : 'Verbindung mit @'.$publicUsername.' abgeschlossen.',
+                    'foundFollowers' => count($liveInferredFollowers),
+                    'foundFollowing' => count($liveInferredFollowing),
+                    'inferredFollowers' => $liveInferredFollowers,
+                    'inferredFollowing' => $liveInferredFollowing,
+                ]);
+
+                if ((bool) ($payload['stoppedForRateLimit'] ?? false) || $scanPausedForRateLimit) {
+                    $pausedForRateLimit = true;
+                    break;
+                }
             } catch (TrackedPersonInstagramScanCancelledException $exception) {
                 throw $exception;
             } catch (\Throwable $exception) {
@@ -140,6 +274,7 @@ class TrackedPersonInstagramPublicProfileScanService
                     $targetUsername,
                     $publicUsername,
                     $exception->getMessage(),
+                    $scan,
                 ));
             }
         }
@@ -147,7 +282,13 @@ class TrackedPersonInstagramPublicProfileScanService
         $this->reportProgress($progress, [
             'phase' => 'done',
             'percent' => 100,
-            'message' => 'Public-Profile-Verbindungsscan abgeschlossen.',
+            'message' => $pausedForRateLimit
+                ? 'Public-Profile-Verbindungsscan wegen Instagram-Rate-Limit pausiert. Spaeter erneut starten zum Fortsetzen.'
+                : 'Public-Profile-Verbindungsscan abgeschlossen.',
+            'foundFollowers' => count($liveInferredFollowers),
+            'foundFollowing' => count($liveInferredFollowing),
+            'inferredFollowers' => $liveInferredFollowers,
+            'inferredFollowing' => $liveInferredFollowing,
         ]);
 
         return $createdScans->values();
@@ -221,6 +362,277 @@ class TrackedPersonInstagramPublicProfileScanService
         }
 
         return array_values($candidates);
+    }
+
+    private function startOrResumeProgressScan(
+        TrackedPerson $trackedPerson,
+        TrackedPersonPublicProfile $publicProfile,
+        string $targetUsername,
+        string $publicUsername,
+        array $candidates,
+    ): TrackedPersonInstagramPublicProfileScan {
+        $resumableScan = TrackedPersonInstagramPublicProfileScan::query()
+            ->where('tracked_person_id', $trackedPerson->id)
+            ->where('public_profile_id', $publicProfile->id)
+            ->where('target_username', Str::lower($targetUsername))
+            ->where('public_username', Str::lower($publicUsername))
+            ->latest('updated_at')
+            ->limit(10)
+            ->get()
+            ->first(function (TrackedPersonInstagramPublicProfileScan $scan): bool {
+                $payload = is_array($scan->raw_payload ?? null) ? $scan->raw_payload : [];
+
+                return (bool) data_get($payload, 'isResumable', false)
+                    && in_array(data_get($payload, 'progressStatus'), ['in_progress', 'rate_limited'], true);
+            });
+
+        if ($resumableScan) {
+            $payload = is_array($resumableScan->raw_payload ?? null) ? $resumableScan->raw_payload : [];
+            $resumableScan->forceFill([
+                'status_level' => 'partial',
+                'status_message' => 'Verbindungsscan wird ab gespeichertem Kandidatenstand fortgesetzt.',
+                'raw_payload' => [
+                    ...$payload,
+                    'progressStatus' => 'in_progress',
+                    'isResumable' => true,
+                    'resumedAt' => now('UTC')->toISOString(),
+                    'candidatesTotal' => count($candidates),
+                    'candidatesChecked' => count($this->filterCandidateUsernamesForCandidates(
+                        $this->normalizeCandidateUsernames(data_get($payload, 'checkedCandidateUsernames', [])),
+                        $candidates,
+                    )),
+                ],
+                'analyzed_at' => now('UTC'),
+            ])->save();
+
+            return $resumableScan->fresh();
+        }
+
+        return TrackedPersonInstagramPublicProfileScan::create([
+            'tracked_person_id' => $trackedPerson->id,
+            'public_profile_id' => $publicProfile->id,
+            'user_id' => $trackedPerson->user_id,
+            'target_username' => Str::lower($targetUsername),
+            'public_username' => Str::lower($publicUsername),
+            'relation_type' => 'candidate_search',
+            'status_level' => 'partial',
+            'status_message' => 'Verbindungsscan laeuft; Kandidatenfortschritt wird gespeichert.',
+            'raw_payload' => [
+                'ok' => false,
+                'progressStatus' => 'in_progress',
+                'isResumable' => true,
+                'relationType' => 'candidate_search',
+                'targetUsername' => Str::lower($targetUsername),
+                'publicUsername' => Str::lower($publicUsername),
+                'candidatesTotal' => count($candidates),
+                'candidatesChecked' => 0,
+                'checkedCandidateUsernames' => [],
+                'inferredFollowers' => [],
+                'inferredFollowing' => [],
+                'checkedPreview' => [],
+                'startedAt' => now('UTC')->toISOString(),
+            ],
+            'analyzed_at' => now('UTC'),
+        ]);
+    }
+
+    private function persistProgressScanState(
+        TrackedPerson $trackedPerson,
+        TrackedPersonPublicProfile $publicProfile,
+        TrackedPersonInstagramPublicProfileScan $scan,
+        string $targetUsername,
+        string $publicUsername,
+        array $state,
+        array $candidates,
+        array $inferredFollowers,
+        array $inferredFollowing,
+    ): void {
+        $this->assertActiveScanCurrent();
+
+        $freshScan = $scan->fresh();
+        $payload = is_array($freshScan?->raw_payload) ? $freshScan->raw_payload : [];
+        $checkedCandidateUsernames = $this->filterCandidateUsernamesForCandidates(
+            $this->normalizeCandidateUsernames(data_get($payload, 'checkedCandidateUsernames', [])),
+            $candidates,
+        );
+        $candidateUsername = $this->scraper->normalizeInstagramUsername((string) ($state['candidateUsername'] ?? ''));
+        $stage = (string) ($state['stage'] ?? '');
+        $stoppedForRateLimit = (bool) ($state['stoppedForRateLimit'] ?? false);
+
+        if ($stage === 'candidate-scan-complete' && $candidateUsername !== null && ! in_array($candidateUsername, $checkedCandidateUsernames, true)) {
+            $checkedCandidateUsernames[] = $candidateUsername;
+        }
+
+        $checkedPreview = $this->mergeCheckedConnectionPreviews(
+            data_get($payload, 'checkedPreview', []),
+            is_array($state['candidateConnection'] ?? null) && $stage === 'candidate-scan-complete'
+                ? [$state['candidateConnection']]
+                : [],
+        );
+        $candidateErrorScreenshots = array_values(array_filter(data_get($payload, 'candidateErrorScreenshots', []), 'is_array'));
+        $progressStatus = $stoppedForRateLimit ? 'rate_limited' : 'in_progress';
+        $statusMessage = $stoppedForRateLimit
+            ? 'Verbindungsscan wegen Instagram-Rate-Limit pausiert. Er kann spaeter fortgesetzt werden.'
+            : (string) ($state['message'] ?? 'Verbindungsscan laeuft; Kandidatenfortschritt wird gespeichert.');
+
+        $payload = [
+            ...$payload,
+            'ok' => false,
+            'progressStatus' => $progressStatus,
+            'isResumable' => true,
+            'relationType' => 'candidate_search',
+            'targetUsername' => Str::lower($targetUsername),
+            'publicUsername' => Str::lower($publicUsername),
+            'candidatesTotal' => count($candidates),
+            'candidatesChecked' => count($checkedCandidateUsernames),
+            'checkedCandidateUsernames' => $checkedCandidateUsernames,
+            'candidateErrorScreenshots' => $candidateErrorScreenshots,
+            'checkedPreview' => $checkedPreview,
+            'inferredFollowers' => $inferredFollowers,
+            'inferredFollowing' => $inferredFollowing,
+            'foundFollowers' => count($inferredFollowers),
+            'foundFollowing' => count($inferredFollowing),
+            'lastProgressStage' => $stage,
+            'lastProgressMessage' => (string) ($state['message'] ?? ''),
+            'lastProgressAt' => now('UTC')->toISOString(),
+            'stoppedForRateLimit' => $stoppedForRateLimit,
+            'rateLimitedCandidateUsername' => $stoppedForRateLimit ? $candidateUsername : data_get($payload, 'rateLimitedCandidateUsername'),
+        ];
+        $payload = $this->normalizePayloadScreenshotPaths($payload);
+
+        $scan->forceFill([
+            'status_level' => 'partial',
+            'status_message' => $statusMessage,
+            'raw_payload' => $payload,
+            'analyzed_at' => now('UTC'),
+        ])->save();
+
+        $this->storeInferredConnections($trackedPerson, $publicProfile, $scan, $payload, now('UTC'));
+    }
+
+    private function mergeFinalPayloadWithProgress(
+        array $progressPayload,
+        array $finalPayload,
+        string $publicUsername,
+        array $candidates,
+    ): array {
+        $checkedCandidateUsernames = $this->filterCandidateUsernamesForCandidates($this->normalizeCandidateUsernames([
+            ...$this->normalizeCandidateUsernames(data_get($progressPayload, 'checkedCandidateUsernames', [])),
+            ...$this->normalizeCandidateUsernames(data_get($finalPayload, 'checkedCandidateUsernames', [])),
+        ]), $candidates);
+        $inferredFollowers = $this->mergeProgressConnectionItems(
+            $this->normalizeProgressConnectionItems(data_get($progressPayload, 'inferredFollowers', []), $publicUsername),
+            $this->normalizeProgressConnectionItems(data_get($finalPayload, 'inferredFollowers', []), $publicUsername),
+        );
+        $inferredFollowing = $this->mergeProgressConnectionItems(
+            $this->normalizeProgressConnectionItems(data_get($progressPayload, 'inferredFollowing', []), $publicUsername),
+            $this->normalizeProgressConnectionItems(data_get($finalPayload, 'inferredFollowing', []), $publicUsername),
+        );
+        $stoppedForRateLimit = (bool) ($finalPayload['stoppedForRateLimit'] ?? data_get($progressPayload, 'stoppedForRateLimit', false));
+        $progressCandidateErrorScreenshots = data_get($progressPayload, 'candidateErrorScreenshots', []);
+        $finalCandidateErrorScreenshots = data_get($finalPayload, 'candidateErrorScreenshots', []);
+        $progressCandidateErrorScreenshots = is_array($progressCandidateErrorScreenshots) ? $progressCandidateErrorScreenshots : [];
+        $finalCandidateErrorScreenshots = is_array($finalCandidateErrorScreenshots) ? $finalCandidateErrorScreenshots : [];
+
+        return [
+            ...$progressPayload,
+            ...$finalPayload,
+            'progressStatus' => $stoppedForRateLimit ? 'rate_limited' : 'completed',
+            'isResumable' => $stoppedForRateLimit,
+            'candidatesTotal' => count($candidates),
+            'candidatesChecked' => count($checkedCandidateUsernames),
+            'checkedCandidateUsernames' => $checkedCandidateUsernames,
+            'checkedPreview' => $this->mergeCheckedConnectionPreviews(
+                data_get($progressPayload, 'checkedPreview', []),
+                data_get($finalPayload, 'checkedPreview', []),
+            ),
+            'candidateErrorScreenshots' => array_values(array_filter([
+                ...$progressCandidateErrorScreenshots,
+                ...$finalCandidateErrorScreenshots,
+            ], 'is_array')),
+            'inferredFollowers' => $inferredFollowers,
+            'inferredFollowing' => $inferredFollowing,
+            'foundFollowers' => count($inferredFollowers),
+            'foundFollowing' => count($inferredFollowing),
+            'stoppedForRateLimit' => $stoppedForRateLimit,
+            'completedAt' => $stoppedForRateLimit ? null : now('UTC')->toISOString(),
+            'pausedAt' => $stoppedForRateLimit ? now('UTC')->toISOString() : data_get($progressPayload, 'pausedAt'),
+        ];
+    }
+
+    private function normalizeCandidateUsernames(mixed $candidateUsernames): array
+    {
+        if (! is_array($candidateUsernames)) {
+            return [];
+        }
+
+        $normalizedUsernames = [];
+
+        foreach ($candidateUsernames as $candidateUsername) {
+            if (! is_scalar($candidateUsername)) {
+                continue;
+            }
+
+            $normalizedUsername = $this->scraper->normalizeInstagramUsername((string) $candidateUsername);
+
+            if ($normalizedUsername !== null) {
+                $normalizedUsernames[$normalizedUsername] = $normalizedUsername;
+            }
+        }
+
+        return array_values($normalizedUsernames);
+    }
+
+    private function filterCandidateUsernamesForCandidates(array $candidateUsernames, array $candidates): array
+    {
+        $candidateUsernameLookup = [];
+
+        foreach ($candidates as $candidate) {
+            if (! is_array($candidate) || ! is_scalar($candidate['username'] ?? null)) {
+                continue;
+            }
+
+            $username = $this->scraper->normalizeInstagramUsername((string) $candidate['username']);
+
+            if ($username !== null) {
+                $candidateUsernameLookup[$username] = true;
+            }
+        }
+
+        return array_values(array_filter(
+            $candidateUsernames,
+            static fn (string $candidateUsername): bool => isset($candidateUsernameLookup[$candidateUsername]),
+        ));
+    }
+
+    private function mergeCheckedConnectionPreviews(mixed ...$connectionGroups): array
+    {
+        $connections = [];
+
+        foreach ($connectionGroups as $connectionGroup) {
+            if (! is_array($connectionGroup)) {
+                continue;
+            }
+
+            foreach ($connectionGroup as $connection) {
+                if (! is_array($connection) || ! is_scalar($connection['username'] ?? null)) {
+                    continue;
+                }
+
+                $username = $this->scraper->normalizeInstagramUsername((string) $connection['username']);
+
+                if ($username === null) {
+                    continue;
+                }
+
+                $connections[$username] = [
+                    ...$connection,
+                    'username' => $username,
+                ];
+            }
+        }
+
+        return array_slice(array_values($connections), -100);
     }
 
     private function loadLatestActiveRelationshipItems(Collection $snapshots, string $payloadKey): array
@@ -356,6 +768,7 @@ class TrackedPersonInstagramPublicProfileScanService
         TrackedPerson $trackedPerson,
         TrackedPersonPublicProfile $publicProfile,
         array $payload,
+        ?TrackedPersonInstagramPublicProfileScan $existingScan = null,
     ): TrackedPersonInstagramPublicProfileScan {
         $this->assertActiveScanCurrent();
 
@@ -378,8 +791,9 @@ class TrackedPersonInstagramPublicProfileScanService
             $targetFollowsPublic,
             $publicFollowsTarget,
             $analyzedAt,
+            $existingScan,
         ) {
-            $scan = TrackedPersonInstagramPublicProfileScan::create([
+            $scanData = [
                 'tracked_person_id' => $trackedPerson->id,
                 'public_profile_id' => $publicProfile->id,
                 'user_id' => $trackedPerson->user_id,
@@ -404,7 +818,10 @@ class TrackedPersonInstagramPublicProfileScanService
                 'status_message' => (string) ($payload['statusMessage'] ?? 'Verbindungsscan abgeschlossen.'),
                 'raw_payload' => $payload,
                 'analyzed_at' => $analyzedAt,
-            ]);
+            ];
+
+            $scan = $existingScan ?: new TrackedPersonInstagramPublicProfileScan();
+            $scan->forceFill($scanData)->save();
 
             $this->storeInferredConnections($trackedPerson, $publicProfile, $scan, $payload, $analyzedAt);
 
@@ -426,10 +843,18 @@ class TrackedPersonInstagramPublicProfileScanService
         string $targetUsername,
         string $publicUsername,
         string $errorMessage,
+        ?TrackedPersonInstagramPublicProfileScan $existingScan = null,
     ): TrackedPersonInstagramPublicProfileScan {
         $this->assertActiveScanCurrent();
 
-        return TrackedPersonInstagramPublicProfileScan::create([
+        $payload = [
+            ...($existingScan && is_array($existingScan->raw_payload ?? null) ? $existingScan->raw_payload : []),
+            'ok' => false,
+            'progressStatus' => 'failed',
+            'isResumable' => false,
+            'error' => $errorMessage,
+        ];
+        $scanData = [
             'tracked_person_id' => $trackedPerson->id,
             'public_profile_id' => $publicProfile->id,
             'user_id' => $trackedPerson->user_id,
@@ -438,12 +863,14 @@ class TrackedPersonInstagramPublicProfileScanService
             'relation_type' => 'unknown',
             'status_level' => 'error',
             'status_message' => 'Verbindungsscan fehlgeschlagen: '.$errorMessage,
-            'raw_payload' => [
-                'ok' => false,
-                'error' => $errorMessage,
-            ],
+            'raw_payload' => $payload,
             'analyzed_at' => now('UTC'),
-        ]);
+        ];
+
+        $scan = $existingScan ?: new TrackedPersonInstagramPublicProfileScan();
+        $scan->forceFill($scanData)->save();
+
+        return $scan;
     }
 
     private function normalizePayloadScreenshotPaths(array $payload): array
@@ -610,6 +1037,89 @@ class TrackedPersonInstagramPublicProfileScanService
         return $value !== '' ? $value : null;
     }
 
+    private function normalizeProgressConnectionItems(mixed $connections, string $sourcePublicUsername): array
+    {
+        if (! is_array($connections)) {
+            return [];
+        }
+
+        $normalizedConnections = [];
+        $sourcePublicUsername = $this->scraper->normalizeInstagramUsername($sourcePublicUsername) ?? Str::lower($sourcePublicUsername);
+
+        foreach (array_slice($connections, 0, 80) as $connection) {
+            if (! is_array($connection) || ! is_scalar($connection['username'] ?? null)) {
+                continue;
+            }
+
+            $candidateUsername = $this->scraper->normalizeInstagramUsername((string) $connection['username']);
+
+            if ($candidateUsername === null) {
+                continue;
+            }
+
+            $connectionSourceUsername = $this->scraper->normalizeInstagramUsername(
+                (string) ($connection['sourcePublicUsername'] ?? $connection['source_public_username'] ?? $sourcePublicUsername),
+            ) ?? $sourcePublicUsername;
+            $sourceLists = is_array($connection['sourceLists'] ?? null)
+                ? array_values(array_unique(array_map(
+                    static fn ($sourceList): string => trim((string) $sourceList),
+                    array_filter($connection['sourceLists'], 'is_scalar'),
+                )))
+                : [];
+
+            $normalizedConnections[] = [
+                'username' => $candidateUsername,
+                'displayName' => $this->nullableTrim($connection['displayName'] ?? $connection['candidate_display_name'] ?? null),
+                'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? $connection['candidate_profile_url'] ?? null)
+                    ?: 'https://www.instagram.com/'.$candidateUsername.'/',
+                'sourcePublicUsername' => $connectionSourceUsername,
+                'sourceLists' => array_values(array_filter($sourceLists)),
+            ];
+        }
+
+        return $normalizedConnections;
+    }
+
+    private function mergeProgressConnectionItems(array ...$connectionGroups): array
+    {
+        $mergedConnections = [];
+
+        foreach ($connectionGroups as $connections) {
+            foreach ($connections as $connection) {
+                if (! is_array($connection) || ! is_scalar($connection['username'] ?? null)) {
+                    continue;
+                }
+
+                $username = $this->scraper->normalizeInstagramUsername((string) $connection['username']);
+
+                if ($username === null) {
+                    continue;
+                }
+
+                $sourcePublicUsername = $this->scraper->normalizeInstagramUsername(
+                    (string) ($connection['sourcePublicUsername'] ?? ''),
+                ) ?? '';
+                $key = $sourcePublicUsername.'|'.$username;
+
+                $mergedConnections[$key] = [
+                    'username' => $username,
+                    'displayName' => $this->nullableTrim($connection['displayName'] ?? null),
+                    'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? null)
+                        ?: 'https://www.instagram.com/'.$username.'/',
+                    'sourcePublicUsername' => $sourcePublicUsername,
+                    'sourceLists' => is_array($connection['sourceLists'] ?? null)
+                        ? array_values(array_unique(array_map(
+                            static fn ($sourceList): string => trim((string) $sourceList),
+                            array_filter($connection['sourceLists'], 'is_scalar'),
+                        )))
+                        : [],
+                ];
+            }
+        }
+
+        return array_slice(array_values($mergedConnections), -80);
+    }
+
     private function reportProgress(?callable $progress, array $payload): void
     {
         $this->assertActiveScanCurrent();
@@ -618,11 +1128,12 @@ class TrackedPersonInstagramPublicProfileScanService
             return;
         }
 
-        $progress([
-            'phase' => $payload['phase'] ?? 'public-connections',
-            'percent' => max(0, min(100, (int) ($payload['percent'] ?? 0))),
-            'message' => (string) ($payload['message'] ?? 'Public-Profile-Verbindungsscan laeuft.'),
-        ]);
+        $progressPayload = $payload;
+        $progressPayload['phase'] = $payload['phase'] ?? 'public-connections';
+        $progressPayload['percent'] = max(0, min(100, (int) ($payload['percent'] ?? 0)));
+        $progressPayload['message'] = (string) ($payload['message'] ?? 'Public-Profile-Verbindungsscan laeuft.');
+
+        $progress($progressPayload);
     }
 
     private function withActiveScanControl(array $runtimeConfigOverrides = []): array

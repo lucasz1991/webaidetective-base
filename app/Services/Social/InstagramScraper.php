@@ -191,6 +191,14 @@ class InstagramScraper
                             $lastProgressPercent = $percent;
                             $foundFollowers = (int) ($event['foundFollowers'] ?? 0);
                             $foundFollowing = (int) ($event['foundFollowing'] ?? 0);
+                            $hasInferredFollowers = array_key_exists('inferredFollowersPreview', $event) || array_key_exists('inferredFollowers', $event);
+                            $hasInferredFollowing = array_key_exists('inferredFollowingPreview', $event) || array_key_exists('inferredFollowing', $event);
+                            $inferredFollowers = $this->normalizeConnectionProgressItems(
+                                $event['inferredFollowersPreview'] ?? $event['inferredFollowers'] ?? null,
+                            );
+                            $inferredFollowing = $this->normalizeConnectionProgressItems(
+                                $event['inferredFollowingPreview'] ?? $event['inferredFollowing'] ?? null,
+                            );
                             $message = trim((string) ($event['message'] ?? ''));
 
                             if ($message === '') {
@@ -205,17 +213,38 @@ class InstagramScraper
                                     .' Gefolgt.';
                             }
 
-                            $progress([
+                            $progressPayload = [
                                 'phase' => 'public-connections',
                                 'stage' => (string) ($event['stage'] ?? 'public-connections'),
                                 'percent' => $percent,
                                 'loaded' => $loaded,
                                 'expected' => $expected,
+                                'candidateUsername' => $this->normalizeInstagramUsername((string) ($event['candidateUsername'] ?? '')),
+                                'candidateConnection' => $this->normalizeCandidateConnectionProgress($event['candidateConnection'] ?? null),
+                                'targetFoundInFollowers' => (bool) ($event['targetFoundInFollowers'] ?? false),
+                                'targetFoundInFollowing' => (bool) ($event['targetFoundInFollowing'] ?? false),
+                                'skippedReason' => is_scalar($event['skippedReason'] ?? null) ? trim((string) $event['skippedReason']) : null,
+                                'stoppedForRateLimit' => (bool) ($event['stoppedForRateLimit'] ?? false),
                                 'foundFollowers' => $foundFollowers,
                                 'foundFollowing' => $foundFollowing,
                                 'rateLimitedCandidates' => (int) ($event['rateLimitedCandidates'] ?? 0),
                                 'message' => $message,
-                            ]);
+                            ];
+
+                            if ($hasInferredFollowers) {
+                                $progressPayload['inferredFollowers'] = $inferredFollowers;
+                            }
+
+                            if ($hasInferredFollowing) {
+                                $progressPayload['inferredFollowing'] = $inferredFollowing;
+                            }
+
+                            $progressPayload = [
+                                ...$progressPayload,
+                                ...$this->normalizeScraperProfileProgress($event),
+                            ];
+
+                            $progress($progressPayload);
 
                             continue;
                         }
@@ -432,6 +461,99 @@ class InstagramScraper
         return is_array($payload) ? $payload : null;
     }
 
+    private function normalizeConnectionProgressItems(mixed $items): array
+    {
+        if (! is_array($items)) {
+            return [];
+        }
+
+        $normalizedItems = [];
+
+        foreach (array_slice($items, 0, 40) as $item) {
+            if (! is_array($item) || ! is_scalar($item['username'] ?? null)) {
+                continue;
+            }
+
+            $username = $this->normalizeInstagramUsername((string) $item['username']);
+
+            if ($username === null) {
+                continue;
+            }
+
+            $normalizedItems[] = [
+                'username' => $username,
+                'displayName' => is_scalar($item['displayName'] ?? null) ? trim((string) $item['displayName']) : null,
+                'profileUrl' => is_scalar($item['profileUrl'] ?? null)
+                    ? trim((string) $item['profileUrl'])
+                    : 'https://www.instagram.com/'.$username.'/',
+                'sourceLists' => is_array($item['sourceLists'] ?? null) ? array_values(array_filter($item['sourceLists'], 'is_scalar')) : [],
+            ];
+        }
+
+        return $normalizedItems;
+    }
+
+    private function normalizeCandidateConnectionProgress(mixed $connection): ?array
+    {
+        if (! is_array($connection) || ! is_scalar($connection['username'] ?? null)) {
+            return null;
+        }
+
+        $username = $this->normalizeInstagramUsername((string) $connection['username']);
+
+        if ($username === null) {
+            return null;
+        }
+
+        return [
+            'username' => $username,
+            'displayName' => $this->nullableTrim($connection['displayName'] ?? null),
+            'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? null)
+                ?: 'https://www.instagram.com/'.$username.'/',
+            'sourceLists' => is_array($connection['sourceLists'] ?? null)
+                ? array_values(array_filter($connection['sourceLists'], 'is_scalar'))
+                : [],
+            'followerOfPrivateProfile' => (bool) ($connection['followerOfPrivateProfile'] ?? false),
+            'followedByPrivateProfile' => (bool) ($connection['followedByPrivateProfile'] ?? false),
+            'candidateFollowsTarget' => (bool) ($connection['candidateFollowsTarget'] ?? false),
+            'targetFollowsCandidate' => (bool) ($connection['targetFollowsCandidate'] ?? false),
+            'skippedReason' => $this->nullableTrim($connection['skippedReason'] ?? null),
+            'scanAttempts' => is_numeric($connection['scanAttempts'] ?? null) ? max(1, (int) $connection['scanAttempts']) : null,
+            'followers' => is_array($connection['followers'] ?? null) ? $connection['followers'] : null,
+            'following' => is_array($connection['following'] ?? null) ? $connection['following'] : null,
+            'debugScreenshotPaths' => is_array($connection['debugScreenshotPaths'] ?? null)
+                ? array_values(array_filter($connection['debugScreenshotPaths'], 'is_scalar'))
+                : [],
+        ];
+    }
+
+    private function normalizeScraperProfileProgress(array $event): array
+    {
+        $profile = is_array($event['scraperProfile'] ?? null) ? $event['scraperProfile'] : [];
+        $label = $this->nullableTrim($event['scraperProfileLabel'] ?? $profile['label'] ?? null);
+        $loginUsername = $this->nullableTrim($event['scraperProfileLoginUsername'] ?? $profile['loginUsername'] ?? null);
+        $profileId = $this->nullableTrim($event['scraperProfileId'] ?? $profile['id'] ?? null);
+        $switchTarget = $this->nullableTrim($event['toProfileLabel'] ?? null);
+
+        return array_filter([
+            'scraperProfileLabel' => $label,
+            'scraperProfileLoginUsername' => $loginUsername,
+            'scraperProfileId' => $profileId,
+            'scraperProfileSwitchTarget' => $switchTarget,
+        ], static fn ($value): bool => $value !== null && $value !== '');
+    }
+
+    private function nullableTrim(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
+    }
+
     private function normalizeProgressEvent(array $event, string $operationMode, int $progressStart, int $progressEnd): array
     {
         $phase = $event['relationship'] ?? $operationMode;
@@ -471,6 +593,7 @@ class InstagramScraper
             'openAttempt' => $openAttempt,
             'query' => $query,
             'message' => $this->buildProgressMessage($phase, $stage, $loaded, $expected, $openAttempt, $query),
+            ...$this->normalizeScraperProfileProgress($event),
         ];
     }
 

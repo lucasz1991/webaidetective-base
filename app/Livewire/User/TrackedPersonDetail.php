@@ -158,6 +158,10 @@ class TrackedPersonDetail extends Component
                 'phase' => 'public-connections',
                 'percent' => 1,
                 'message' => 'Public-Profile-Verbindungsscan wird vorbereitet.',
+                'foundFollowers' => 0,
+                'foundFollowing' => 0,
+                'inferredFollowers' => [],
+                'inferredFollowing' => [],
             ]);
 
             $scans = app(TrackedPersonInstagramPublicProfileScanService::class)->scan($trackedPerson, $progress);
@@ -183,10 +187,14 @@ class TrackedPersonDetail extends Component
 
         $inferredFollowersCount = $scans->sum(fn ($scan) => count(data_get($scan->raw_payload, 'inferredFollowers', [])));
         $inferredFollowingCount = $scans->sum(fn ($scan) => count(data_get($scan->raw_payload, 'inferredFollowing', [])));
+        $pausedForRateLimit = $scans->contains(fn ($scan) => (bool) data_get($scan->raw_payload, 'stoppedForRateLimit', false));
 
         $this->setDetailStatus(
-            'Public-Profile-Verbindungsscan abgeschlossen: '.$inferredFollowersCount.' moegliche Follower und '.$inferredFollowingCount.' moegliche Gefolgt-Profile gefunden.',
-            $scans->contains(fn ($scan) => $scan->status_level === 'error') ? 'partial' : 'success',
+            ($pausedForRateLimit
+                ? 'Public-Profile-Verbindungsscan wegen Instagram-Rate-Limit pausiert. Spaeter erneut starten, um ab dem gespeicherten Kandidatenstand fortzusetzen: '
+                : 'Public-Profile-Verbindungsscan abgeschlossen: ')
+            .$inferredFollowersCount.' moegliche Follower und '.$inferredFollowingCount.' moegliche Gefolgt-Profile gefunden.',
+            $pausedForRateLimit || $scans->contains(fn ($scan) => $scan->status_level === 'error') ? 'partial' : 'success',
         );
         $this->dispatch('tracked-person-refresh');
     }
@@ -316,6 +324,7 @@ class TrackedPersonDetail extends Component
         }
 
         $this->stream('instagram-progress-phase', e($phase), true);
+        $this->streamInstagramScraperProfile($state);
         $this->stream('instagram-progress-message', e($message), true);
         $this->stream('instagram-progress-live-counts', e($liveCounts), true);
         $this->stream('instagram-progress-percent', $percent.'%', true);
@@ -324,6 +333,144 @@ class TrackedPersonDetail extends Component
             '<div class="h-full rounded-full bg-pink-600 transition-all duration-300" style="width: '.$percent.'%"></div>',
             true,
         );
+        $this->streamInstagramConnectionResults($state);
+    }
+
+    private function streamInstagramScraperProfile(array $state): void
+    {
+        $label = trim((string) ($state['scraperProfileLabel'] ?? ''));
+        $loginUsername = trim((string) ($state['scraperProfileLoginUsername'] ?? ''));
+        $switchTarget = trim((string) ($state['scraperProfileSwitchTarget'] ?? ''));
+
+        if ($label === '' && $switchTarget === '') {
+            return;
+        }
+
+        $displayLabel = $switchTarget !== ''
+            ? 'Wechselt zu '.$switchTarget
+            : $label;
+
+        if ($loginUsername !== '' && $switchTarget === '') {
+            $displayLabel .= ' (@'.ltrim($loginUsername, '@').')';
+        }
+
+        $this->stream('instagram-progress-scraper-profile', e($displayLabel), true);
+    }
+
+    private function streamInstagramConnectionResults(array $state): void
+    {
+        $hasFollowers = array_key_exists('inferredFollowers', $state);
+        $hasFollowing = array_key_exists('inferredFollowing', $state);
+
+        if (! $hasFollowers && ! $hasFollowing) {
+            if (($state['phase'] ?? null) !== 'public-connections') {
+                $this->stream('instagram-progress-connection-results', '', true);
+            }
+
+            return;
+        }
+
+        $followers = $this->normalizeProgressConnectionItems($state['inferredFollowers'] ?? []);
+        $following = $this->normalizeProgressConnectionItems($state['inferredFollowing'] ?? []);
+
+        $this->stream(
+            'instagram-progress-connection-results',
+            $this->renderProgressConnectionResults($followers, $following),
+            true,
+        );
+    }
+
+    private function normalizeProgressConnectionItems(mixed $items): array
+    {
+        if (! is_array($items)) {
+            return [];
+        }
+
+        $normalizedItems = [];
+
+        foreach (array_slice($items, 0, 40) as $item) {
+            if (! is_array($item) || ! is_scalar($item['username'] ?? null)) {
+                continue;
+            }
+
+            $username = trim((string) $item['username']);
+
+            if ($username === '') {
+                continue;
+            }
+
+            $sourcePublicUsername = is_scalar($item['sourcePublicUsername'] ?? null)
+                ? trim((string) $item['sourcePublicUsername'])
+                : '';
+
+            $normalizedItems[] = [
+                'username' => ltrim($username, '@'),
+                'displayName' => is_scalar($item['displayName'] ?? null) ? trim((string) $item['displayName']) : '',
+                'profileUrl' => is_scalar($item['profileUrl'] ?? null) ? trim((string) $item['profileUrl']) : '',
+                'sourcePublicUsername' => ltrim($sourcePublicUsername, '@'),
+            ];
+        }
+
+        return $normalizedItems;
+    }
+
+    private function renderProgressConnectionResults(array $followers, array $following): string
+    {
+        return '<div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left">'
+            .'<div class="flex items-center justify-between gap-3 text-xs">'
+            .'<span class="font-semibold uppercase tracking-wide text-slate-500">Bisherige Treffer</span>'
+            .'<span class="font-semibold text-slate-700">'
+            .number_format(count($followers), 0, ',', '.').' Follower / '
+            .number_format(count($following), 0, ',', '.').' Gefolgt'
+            .'</span>'
+            .'</div>'
+            .'<div class="mt-3 grid gap-3 sm:grid-cols-2">'
+            .$this->renderProgressConnectionList('Moegliche Follower', $followers)
+            .$this->renderProgressConnectionList('Moeglich gefolgt', $following)
+            .'</div>'
+            .'</div>';
+    }
+
+    private function renderProgressConnectionList(string $label, array $items): string
+    {
+        $html = '<div class="rounded-lg border border-slate-200 bg-white p-2">'
+            .'<div class="flex items-center justify-between gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">'
+            .'<span>'.e($label).'</span>'
+            .'<span>'.number_format(count($items), 0, ',', '.').'</span>'
+            .'</div>';
+
+        if ($items === []) {
+            return $html.'<div class="mt-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">Noch keine Treffer.</div></div>';
+        }
+
+        $html .= '<div class="mt-2 max-h-48 space-y-1 overflow-y-auto pr-1">';
+
+        foreach (array_slice($items, 0, 20) as $item) {
+            $username = e($item['username']);
+            $displayName = trim((string) ($item['displayName'] ?? ''));
+            $sourcePublicUsername = trim((string) ($item['sourcePublicUsername'] ?? ''));
+
+            $html .= '<div class="rounded-md bg-slate-50 px-3 py-2 text-xs">'
+                .'<div class="font-semibold text-slate-900">@'.$username.'</div>';
+
+            if ($displayName !== '') {
+                $html .= '<div class="truncate text-slate-500">'.e($displayName).'</div>';
+            }
+
+            if ($sourcePublicUsername !== '') {
+                $html .= '<div class="mt-1 text-[11px] text-slate-500">Quelle: @'.e($sourcePublicUsername).'</div>';
+            }
+
+            $html .= '</div>';
+        }
+
+        if (count($items) > 20) {
+            $html .= '<div class="px-2 py-1 text-[11px] font-semibold text-slate-500">+'
+                .number_format(count($items) - 20, 0, ',', '.')
+                .' weitere Treffer</div>';
+        }
+
+        return $html.'</div></div>';
     }
 
     private function cancelInstagramScanWhenClientDisconnects(int $trackedPersonId): void

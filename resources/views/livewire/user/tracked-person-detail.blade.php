@@ -127,6 +127,90 @@
         $resolveCountSourceLabel = function ($source) use ($countSourceLabels) {
             return $source ? ($countSourceLabels[$source] ?? $source) : 'keine sichtbaren Werte';
         };
+        $screenshotUrl = fn (string $path) => \Illuminate\Support\Facades\Storage::disk('public')->url($path);
+        $connectionScanScreenshots = function (array $payload) use ($screenshotUrl) {
+            $screenshots = collect();
+            $mainScreenshotPath = data_get($payload, 'screenshotPath');
+
+            if (is_string($mainScreenshotPath) && $mainScreenshotPath !== '') {
+                $screenshots->push([
+                    'label' => 'Scan-Screenshot',
+                    'path' => $mainScreenshotPath,
+                    'url' => $screenshotUrl($mainScreenshotPath),
+                    'meta' => null,
+                ]);
+            }
+
+            foreach (data_get($payload, 'candidateErrorScreenshots', []) as $entry) {
+                $path = is_array($entry) ? data_get($entry, 'screenshotPath') : null;
+
+                if (! is_string($path) || $path === '') {
+                    continue;
+                }
+
+                $screenshots->push([
+                    'label' => 'Kandidatenfehler',
+                    'path' => $path,
+                    'url' => $screenshotUrl($path),
+                    'meta' => trim('@'.data_get($entry, 'candidateUsername', '').' Versuch '.data_get($entry, 'attempt', '-')),
+                ]);
+            }
+
+            foreach (data_get($payload, 'checkedPreview', []) as $connection) {
+                foreach (data_get($connection, 'debugScreenshotPaths', []) as $path) {
+                    if (! is_string($path) || $path === '') {
+                        continue;
+                    }
+
+                    $screenshots->push([
+                        'label' => 'Kandidat',
+                        'path' => $path,
+                        'url' => $screenshotUrl($path),
+                        'meta' => '@'.data_get($connection, 'username', '-'),
+                    ]);
+                }
+            }
+
+            return $screenshots->unique('path')->values();
+        };
+        $snapshotScreenshots = function ($snapshot) use ($screenshotUrl) {
+            $screenshots = collect();
+
+            if (! $snapshot) {
+                return $screenshots;
+            }
+
+            if (is_string($snapshot->screenshot_path) && $snapshot->screenshot_path !== '') {
+                $screenshots->push([
+                    'label' => 'Debug-Screenshot',
+                    'path' => $snapshot->screenshot_path,
+                    'url' => $snapshot->screenshot_url,
+                    'meta' => null,
+                ]);
+            }
+
+            foreach (data_get($snapshot->raw_payload, 'analysisPolicy.scrapePhases', []) as $phase) {
+                $path = data_get($phase, 'screenshotPath');
+
+                if (! is_string($path) || $path === '') {
+                    continue;
+                }
+
+                $screenshots->push([
+                    'label' => match(data_get($phase, 'phase')) {
+                        'profile' => 'Grunddaten',
+                        'followers' => 'Followerliste',
+                        'following' => 'Gefolgt-Liste',
+                        default => data_get($phase, 'phase', 'Phase'),
+                    },
+                    'path' => $path,
+                    'url' => $screenshotUrl($path),
+                    'meta' => data_get($phase, 'statusLevel'),
+                ]);
+            }
+
+            return $screenshots->unique('path')->values();
+        };
     @endphp
 
     <div
@@ -134,16 +218,21 @@
         wire:target="analyzeInstagram,analyzeInstagramMini,scanPublicProfileConnections"
         class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/70 px-4"
     >
-        <div class="w-full max-w-md rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
+        <div class="w-full max-w-2xl rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
             <div class="mx-auto rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-1">
                 <div class="h-10 w-10 animate-spin rounded-full border-4 border-white/70 border-t-slate-950 bg-white"></div>
             </div>
             <div class="mt-4 text-xs font-semibold uppercase tracking-wide text-pink-700" wire:stream="instagram-progress-phase">Start</div>
+            <div class="mt-2 inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                <span class="shrink-0 uppercase tracking-wide text-slate-400">Scraper-Profil</span>
+                <span class="min-w-0 truncate text-slate-900" wire:stream="instagram-progress-scraper-profile">wird ermittelt</span>
+            </div>
             <h3 class="mt-1 text-lg font-bold text-slate-950">Instagram-Scan laeuft</h3>
             <p class="mt-2 text-sm leading-6 text-slate-600" wire:stream="instagram-progress-message">
                 Profil, Kennzahlen und Listen werden abgearbeitet.
             </p>
             <div class="mt-2 text-xs font-semibold text-slate-500" wire:stream="instagram-progress-live-counts"></div>
+            <div wire:stream="instagram-progress-connection-results"></div>
             <div class="mt-5">
                 <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
                     <span>Fortschritt</span>
@@ -991,6 +1080,7 @@
                                                 ->filter(fn ($entry) => is_array($entry) && data_get($entry, 'screenshotPath'))
                                                 ->values();
                                             $latestCandidateErrorScreenshotPath = data_get($latestCandidateErrorScreenshots->first(), 'screenshotPath');
+                                            $latestConnectionScreenshots = $connectionScanScreenshots($latestConnectionScan->raw_payload ?? []);
                                         @endphp
                                         <div class="mt-3 rounded-xl border px-3 py-2 text-xs {{ $connectionStatusClass }}">
                                             <div class="flex flex-wrap items-center gap-2">
@@ -1020,6 +1110,26 @@
                                                     / <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($latestCandidateErrorScreenshotPath) }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Kandidatenfehler {{ $latestCandidateErrorScreenshots->count() }}</a>
                                                 @endif
                                             </div>
+                                            @if($latestConnectionScreenshots->isNotEmpty())
+                                                <details class="mt-3 rounded-xl border border-white/70 bg-white/70 p-2">
+                                                    <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                                                        Screenshots anzeigen ({{ $latestConnectionScreenshots->count() }})
+                                                    </summary>
+                                                    <div class="mt-2 grid gap-2 sm:grid-cols-2">
+                                                        @foreach($latestConnectionScreenshots->take(8) as $screenshot)
+                                                            <a href="{{ $screenshot['url'] }}" target="_blank" class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                                                                <img src="{{ $screenshot['url'] }}" alt="{{ $screenshot['label'] }}" class="h-32 w-full object-cover">
+                                                                <div class="border-t border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
+                                                                    <span class="font-semibold text-slate-800">{{ $screenshot['label'] }}</span>
+                                                                    @if($screenshot['meta'])
+                                                                        <span class="ml-1">{{ $screenshot['meta'] }}</span>
+                                                                    @endif
+                                                                </div>
+                                                            </a>
+                                                        @endforeach
+                                                    </div>
+                                                </details>
+                                            @endif
                                         </div>
                                     @endif
                                 </div>
@@ -1109,6 +1219,7 @@
                                     ->filter(fn ($entry) => is_array($entry) && data_get($entry, 'screenshotPath'))
                                     ->values();
                                 $scanCandidateErrorScreenshotPath = data_get($scanCandidateErrorScreenshots->first(), 'screenshotPath');
+                                $scanScreenshots = $connectionScanScreenshots($connectionScan->raw_payload ?? []);
                                 $scanStatusClass = match ($connectionScan->status_level) {
                                     'success' => 'border-emerald-200 bg-white text-emerald-900',
                                     'partial' => 'border-amber-200 bg-white text-amber-950',
@@ -1144,6 +1255,26 @@
                                         </div>
                                     </div>
                                 </div>
+                                @if($scanScreenshots->isNotEmpty())
+                                    <details class="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-2 text-left">
+                                        <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                                            Screenshots anzeigen ({{ $scanScreenshots->count() }})
+                                        </summary>
+                                        <div class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                            @foreach($scanScreenshots->take(9) as $screenshot)
+                                                <a href="{{ $screenshot['url'] }}" target="_blank" class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                                                    <img src="{{ $screenshot['url'] }}" alt="{{ $screenshot['label'] }}" class="h-28 w-full object-cover">
+                                                    <div class="border-t border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
+                                                        <span class="font-semibold text-slate-800">{{ $screenshot['label'] }}</span>
+                                                        @if($screenshot['meta'])
+                                                            <span class="ml-1">{{ $screenshot['meta'] }}</span>
+                                                        @endif
+                                                    </div>
+                                                </a>
+                                            @endforeach
+                                        </div>
+                                    </details>
+                                @endif
                             </div>
                         @empty
                             <p class="text-sm text-slate-500">Noch keine Public-Profile-Listenverbindungen analysiert.</p>
@@ -1218,6 +1349,7 @@
                             'error' => 'border-rose-200 bg-rose-50 text-rose-900',
                             default => 'border-slate-200 bg-slate-50 text-slate-700',
                         };
+                        $latestSnapshotScreenshots = $snapshotScreenshots($latestSnapshot);
                     @endphp
 
                     <div class="mt-3 rounded-xl border p-3 text-sm {{ $snapshotStatusClass }}">
@@ -1229,6 +1361,27 @@
                             </a>
                         @endif
                     </div>
+
+                    @if($latestSnapshotScreenshots->isNotEmpty())
+                        <details class="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <summary class="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-600">
+                                Scan-Screenshots anzeigen ({{ $latestSnapshotScreenshots->count() }})
+                            </summary>
+                            <div class="mt-3 grid gap-3 sm:grid-cols-2">
+                                @foreach($latestSnapshotScreenshots as $screenshot)
+                                    <a href="{{ $screenshot['url'] }}" target="_blank" class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                                        <img src="{{ $screenshot['url'] }}" alt="{{ $screenshot['label'] }}" class="h-40 w-full object-cover">
+                                        <div class="border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
+                                            <span class="font-semibold text-slate-900">{{ $screenshot['label'] }}</span>
+                                            @if($screenshot['meta'])
+                                                <span class="ml-1">{{ $screenshot['meta'] }}</span>
+                                            @endif
+                                        </div>
+                                    </a>
+                                @endforeach
+                            </div>
+                        </details>
+                    @endif
 
                     <div class="mt-3 grid gap-2 text-sm text-slate-700">
                         <p><span class="font-semibold">Profilname:</span> {{ $latestSnapshot->full_name ?: '—' }}</p>
@@ -1364,6 +1517,9 @@
                 <h3 class="text-lg font-bold text-slate-900">Analyse-Historie</h3>
                 <div class="mt-3 space-y-2">
                     @forelse($trackedPerson->instagramSnapshots as $snapshot)
+                        @php
+                            $historySnapshotScreenshots = $snapshotScreenshots($snapshot);
+                        @endphp
                         <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                             <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div>
@@ -1388,6 +1544,26 @@
                                     <div class="mt-1 font-semibold text-slate-900">{{ $snapshot->posts_count !== null ? number_format($snapshot->posts_count) : '—' }}</div>
                                 </div>
                             </div>
+                            @if($historySnapshotScreenshots->isNotEmpty())
+                                <details class="mt-3 rounded-xl border border-slate-200 bg-white p-2">
+                                    <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                                        Screenshots anzeigen ({{ $historySnapshotScreenshots->count() }})
+                                    </summary>
+                                    <div class="mt-2 grid gap-2 sm:grid-cols-2">
+                                        @foreach($historySnapshotScreenshots->take(4) as $screenshot)
+                                            <a href="{{ $screenshot['url'] }}" target="_blank" class="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 shadow-sm">
+                                                <img src="{{ $screenshot['url'] }}" alt="{{ $screenshot['label'] }}" class="h-28 w-full object-cover">
+                                                <div class="border-t border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
+                                                    <span class="font-semibold text-slate-800">{{ $screenshot['label'] }}</span>
+                                                    @if($screenshot['meta'])
+                                                        <span class="ml-1">{{ $screenshot['meta'] }}</span>
+                                                    @endif
+                                                </div>
+                                            </a>
+                                        @endforeach
+                                    </div>
+                                </details>
+                            @endif
                         </div>
                     @empty
                         <p class="text-sm text-slate-500">Noch keine Verlaufseintraege mit erkannten Aenderungen vorhanden.</p>
