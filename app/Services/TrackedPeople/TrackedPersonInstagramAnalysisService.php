@@ -117,11 +117,20 @@ class TrackedPersonInstagramAnalysisService
             : $this->scrapeMini($trackedPerson->instagram_username, $progress);
         $analyzedAt = now('UTC')->format('Y-m-d H:i:s');
         $persistedWarnings = [];
-        $previousSnapshot = $trackedPerson->instagramSnapshots()
-            ->latest('analyzed_at')
-            ->first();
+        $previousSnapshot = $this->previousComparableSnapshot($trackedPerson);
         $miniScanWithoutCounts = ($attemptInfo['scan_mode'] ?? null) === 'mini'
             && ! (bool) ($attemptInfo['counts_found'] ?? false);
+        $preservedProfileFields = [];
+        $extracted = $this->preserveMissingProfileValues(
+            $extracted,
+            $previousSnapshot,
+            $preservedProfileFields,
+        );
+
+        if ($preservedProfileFields !== []) {
+            $attemptInfo['preserved_profile_fields'] = $preservedProfileFields;
+            $persistedWarnings[] = 'Fehlende Profilwerte wurden aus dem letzten gueltigen Instagram-Snapshot fortgefuehrt, damit ein fehlerhafter Scan den Vergleichsstand nicht leert.';
+        }
 
         $this->reportProgress($progress, [
             'phase' => 'saving',
@@ -180,6 +189,12 @@ class TrackedPersonInstagramAnalysisService
                 ? null
                 : ($profileMedia['storage_path'] ?? null);
             $profileImageHash = $profileMedia['content_hash'] ?? null;
+
+            if ($profileImageHash === null && $previousSnapshot?->profile_image_hash) {
+                $profileImageHash = $previousSnapshot->profile_image_hash;
+                $profileImagePath = $previousSnapshot->profile_image_path;
+            }
+
             $detectedChanges = $miniScanWithoutCounts
                 ? []
                 : $this->detectSnapshotChanges($previousSnapshot, $extracted, $profileImageHash);
@@ -283,9 +298,7 @@ class TrackedPersonInstagramAnalysisService
         $extracted = $this->extractor->extract($payload);
         $analyzedAt = now('UTC')->format('Y-m-d H:i:s');
         $persistedWarnings = [];
-        $previousSnapshot = $trackedPerson->instagramSnapshots()
-            ->latest('analyzed_at')
-            ->first();
+        $previousSnapshot = $this->previousComparableSnapshot($trackedPerson);
 
         $extracted[$otherExtractedKey] = $this->preservedRelationshipListForExtraction($previousSnapshot, $otherType);
 
@@ -310,6 +323,17 @@ class TrackedPersonInstagramAnalysisService
             'relationship' => $relationship,
             'phases' => [$phaseResult],
         ];
+        $preservedProfileFields = [];
+        $extracted = $this->preserveMissingProfileValues(
+            $extracted,
+            $previousSnapshot,
+            $preservedProfileFields,
+        );
+
+        if ($preservedProfileFields !== []) {
+            $attemptInfo['preserved_profile_fields'] = $preservedProfileFields;
+            $persistedWarnings[] = 'Fehlende Profilwerte wurden aus dem letzten gueltigen Instagram-Snapshot fortgefuehrt, damit ein fehlerhafter Listen-Scan den Vergleichsstand nicht leert.';
+        }
 
         $this->reportProgress($progress, [
             'phase' => 'saving',
@@ -368,6 +392,12 @@ class TrackedPersonInstagramAnalysisService
                 ? null
                 : ($profileMedia['storage_path'] ?? null);
             $profileImageHash = $profileMedia['content_hash'] ?? null;
+
+            if ($profileImageHash === null && $previousSnapshot?->profile_image_hash) {
+                $profileImageHash = $previousSnapshot->profile_image_hash;
+                $profileImagePath = $previousSnapshot->profile_image_path;
+            }
+
             $detectedChanges = $this->detectSnapshotChanges($previousSnapshot, $extracted, $profileImageHash);
             $snapshotPayload = $this->buildStoredPayload(
                 $payload,
@@ -926,6 +956,8 @@ class TrackedPersonInstagramAnalysisService
             'usedAttempt' => $attemptInfo['used_attempt'] ?? 1,
             'maxAttempts' => $attemptInfo['max_attempts'] ?? self::MAX_VISIBLE_RETRY_ATTEMPTS,
             'countsFound' => (bool) ($attemptInfo['counts_found'] ?? false),
+            'preservedProfileFields' => $attemptInfo['preserved_profile_fields'] ?? [],
+            'invalidComparisonBaseline' => ! $this->extractedHasComparableProfileValue($extracted, $profileImageHash),
             'monitoringOnly' => 'public-visible-data',
         ];
 
@@ -1004,6 +1036,81 @@ class TrackedPersonInstagramAnalysisService
         $payload['persistedWarnings'] = array_values(array_unique($persistedWarnings));
 
         return $payload;
+    }
+
+    private function previousComparableSnapshot(TrackedPerson $trackedPerson): ?TrackedPersonInstagramSnapshot
+    {
+        return $trackedPerson->instagramSnapshots()
+            ->latest('analyzed_at')
+            ->limit(100)
+            ->get()
+            ->first(fn (TrackedPersonInstagramSnapshot $snapshot): bool => $this->snapshotCanBeComparisonBaseline($snapshot));
+    }
+
+    private function snapshotCanBeComparisonBaseline(TrackedPersonInstagramSnapshot $snapshot): bool
+    {
+        if ((bool) data_get($snapshot->raw_payload, 'analysisPolicy.invalidComparisonBaseline', false)) {
+            return false;
+        }
+
+        foreach ($this->profileComparisonFields() as $field) {
+            if ($snapshot->{$field} !== null && $snapshot->{$field} !== '') {
+                return true;
+            }
+        }
+
+        return $snapshot->profile_image_hash !== null && $snapshot->profile_image_hash !== '';
+    }
+
+    private function preserveMissingProfileValues(
+        array $extracted,
+        ?TrackedPersonInstagramSnapshot $previousSnapshot,
+        array &$preservedFields,
+    ): array {
+        $preservedFields = [];
+
+        if (! $previousSnapshot) {
+            return $extracted;
+        }
+
+        foreach ($this->profileComparisonFields() as $field) {
+            $currentValue = $extracted[$field] ?? null;
+            $previousValue = $previousSnapshot->{$field};
+
+            if (($currentValue !== null && $currentValue !== '') || ($previousValue === null || $previousValue === '')) {
+                continue;
+            }
+
+            $extracted[$field] = $previousValue;
+            $preservedFields[] = $field;
+        }
+
+        return $extracted;
+    }
+
+    private function profileComparisonFields(): array
+    {
+        return [
+            'full_name',
+            'biography',
+            'posts_count',
+            'followers_count',
+            'following_count',
+            'profile_image_url',
+        ];
+    }
+
+    private function extractedHasComparableProfileValue(array $extracted, ?string $profileImageHash): bool
+    {
+        foreach ($this->profileComparisonFields() as $field) {
+            $value = $extracted[$field] ?? null;
+
+            if ($value !== null && $value !== '') {
+                return true;
+            }
+        }
+
+        return $profileImageHash !== null && $profileImageHash !== '';
     }
 
     private function detectSnapshotChanges(
