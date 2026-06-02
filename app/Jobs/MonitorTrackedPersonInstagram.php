@@ -80,7 +80,7 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
         try {
             $this->run();
         } finally {
-            if ($this->fullScan) {
+            if ($this->isFullScan()) {
                 Cache::forget(self::fullScanQueueCacheKey($this->trackedPersonId));
             }
         }
@@ -101,19 +101,20 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
         }
 
         try {
-            $scanLabel = $this->fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan';
+            $fullScan = $this->isFullScan();
+            $scanLabel = $fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan';
 
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'partial',
                 'last_instagram_status_message' => $scanLabel.' laeuft im Hintergrund.',
             ])->save();
 
-            $snapshot = $trackedPerson->analyzeInstagram(null, $this->fullScan);
+            $snapshot = $trackedPerson->analyzeInstagram(null, $fullScan);
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
             Log::info('Instagram-Monitoring-Scan wurde beendet, weil ein neuer Scan fuer dieselbe Person gestartet wurde.', [
                 'tracked_person_id' => $trackedPerson->id,
                 'instagram_username' => $trackedPerson->instagram_username,
-                'full_scan' => $this->fullScan,
+                'full_scan' => $this->isFullScan(),
             ]);
 
             return;
@@ -122,7 +123,7 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
                 Log::info('Monitoring fuer getrackte Person uebersprungen, weil bereits eine Instagram-Analyse laeuft.', [
                     'tracked_person_id' => $trackedPerson->id,
                     'instagram_username' => $trackedPerson->instagram_username,
-                    'full_scan' => $this->fullScan,
+                    'full_scan' => $this->isFullScan(),
                 ]);
 
                 return;
@@ -131,19 +132,19 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             Log::warning('Monitoring fuer getrackte Person fehlgeschlagen.', [
                 'tracked_person_id' => $trackedPerson->id,
                 'instagram_username' => $trackedPerson->instagram_username,
-                'full_scan' => $this->fullScan,
+                'full_scan' => $this->isFullScan(),
                 'error' => $exception->getMessage(),
             ]);
 
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => ($this->fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
+                'last_instagram_status_message' => ($this->isFullScan() ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
             ])->save();
 
             return;
         }
 
-        if (! $this->fullScan && self::shouldRunFullScanAfterSnapshot($snapshot)) {
+        if (! $this->isFullScan() && self::shouldRunFullScanAfterSnapshot($snapshot)) {
             $queued = self::dispatchFullScanIfNotQueued($trackedPerson->id, $this->sendNotifications);
 
             if (! $queued) {
@@ -161,13 +162,18 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
         }
 
         if (! $this->shouldSendInstagramNotification($trackedPerson, $snapshot)) {
-            Log::info('Instagram-Aenderung erkannt, aber Benachrichtigung wurde nicht verschickt.', [
+            Log::info('Instagram-Monitoring-Scan abgeschlossen; keine Benachrichtigung verschickt.', [
                 'tracked_person_id' => $trackedPerson->id,
                 'instagram_username' => $trackedPerson->instagram_username,
+                'snapshot_id' => $snapshot->id,
+                'scan_mode' => data_get($snapshot->raw_payload, 'analysisPolicy.scanMode'),
                 'send_notifications' => $this->sendNotifications,
                 'notify_social_changes' => (bool) $trackedPerson->notify_social_changes,
                 'notify_instagram_changes' => (bool) $trackedPerson->notify_instagram_changes,
                 'has_changes' => (bool) $snapshot->has_changes,
+                'detected_changes_count' => count($snapshot->detected_changes ?? []),
+                'notification_changes' => $this->snapshotHasNotificationChanges($snapshot),
+                'skip_reasons' => $this->notificationSkipReasons($trackedPerson, $snapshot),
             ]);
 
             return;
@@ -176,6 +182,12 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
         $owner = $trackedPerson->user;
 
         if (! $owner) {
+            Log::warning('Instagram-Benachrichtigung konnte nicht erstellt werden, weil kein Besitzer gefunden wurde.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'instagram_username' => $trackedPerson->instagram_username,
+                'snapshot_id' => $snapshot->id,
+            ]);
+
             return;
         }
 
@@ -215,7 +227,12 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
 
     public function uniqueId(): string
     {
-        return $this->trackedPersonId.':'.($this->fullScan ? 'full' : 'mini');
+        return $this->trackedPersonId.':'.($this->isFullScan() ? 'full' : 'mini');
+    }
+
+    private function isFullScan(): bool
+    {
+        return isset($this->fullScan) && $this->fullScan;
     }
 
     private function shouldSendInstagramNotification(TrackedPerson $trackedPerson, $snapshot): bool
@@ -223,7 +240,35 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
         return $this->sendNotifications
             && (bool) $trackedPerson->notify_social_changes
             && (bool) $trackedPerson->notify_instagram_changes
-            && (bool) $snapshot->has_changes;
+            && $this->snapshotHasNotificationChanges($snapshot);
+    }
+
+    private function notificationSkipReasons(TrackedPerson $trackedPerson, $snapshot): array
+    {
+        $reasons = [];
+
+        if (! $this->sendNotifications) {
+            $reasons[] = 'send_notifications_disabled';
+        }
+
+        if (! (bool) $trackedPerson->notify_social_changes) {
+            $reasons[] = 'social_notifications_disabled';
+        }
+
+        if (! (bool) $trackedPerson->notify_instagram_changes) {
+            $reasons[] = 'instagram_notifications_disabled';
+        }
+
+        if (! $this->snapshotHasNotificationChanges($snapshot)) {
+            $reasons[] = 'no_snapshot_changes';
+        }
+
+        return $reasons;
+    }
+
+    private function snapshotHasNotificationChanges($snapshot): bool
+    {
+        return (bool) $snapshot->has_changes || count($snapshot->detected_changes ?? []) > 0;
     }
 
     private static function fullScanQueueCacheKey(int $trackedPersonId): string
