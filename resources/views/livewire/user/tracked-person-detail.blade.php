@@ -17,6 +17,38 @@
         $relationshipSearchText = function ($item) {
             return \Illuminate\Support\Str::lower(trim(data_get($item, 'username', '').' '.data_get($item, 'displayName', '')));
         };
+        $relationshipProfileImages = collect($relationshipProfileImages ?? []);
+        $relationshipProfileImageUrl = function ($item) use ($relationshipProfileImages) {
+            $imageUrl = data_get($item, 'profileImageUrl') ?: data_get($item, 'profile_image_url');
+
+            if (filled($imageUrl)) {
+                return $imageUrl;
+            }
+
+            $username = \Illuminate\Support\Str::lower(ltrim(trim((string) data_get($item, 'username', '')), '@'));
+
+            return $username !== '' ? $relationshipProfileImages->get($username) : null;
+        };
+        $relationshipAvatar = function ($item, string $tone = 'slate') use ($relationshipProfileImageUrl) {
+            $imageUrl = $relationshipProfileImageUrl($item);
+            $username = ltrim(trim((string) data_get($item, 'username', '')), '@');
+            $initial = \Illuminate\Support\Str::upper(\Illuminate\Support\Str::substr($username !== '' ? $username : '?', 0, 1));
+            $toneClass = match ($tone) {
+                'emerald' => 'ring-emerald-200 bg-emerald-50 text-emerald-700',
+                'rose' => 'ring-rose-200 bg-rose-50 text-rose-700',
+                default => 'ring-slate-200 bg-slate-100 text-slate-600',
+            };
+
+            if (filled($imageUrl)) {
+                return new \Illuminate\Support\HtmlString(
+                    '<img src="'.e($imageUrl).'" alt="'.e($username !== '' ? '@'.$username : 'Instagram-Profilbild').'" loading="lazy" referrerpolicy="no-referrer" class="h-11 w-11 shrink-0 rounded-full object-cover ring-2 '.$toneClass.'">',
+                );
+            }
+
+            return new \Illuminate\Support\HtmlString(
+                '<div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-xs font-bold ring-2 '.$toneClass.'">'.e($initial).'</div>',
+            );
+        };
         $relationshipTimestamp = function ($item, array $keys = ['firstSeenAt', 'lastSeenAt', 'removedAt']) {
             foreach ($keys as $key) {
                 $value = data_get($item, $key);
@@ -543,7 +575,8 @@
                                             x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
                                             class="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-white px-4 py-3 text-sm"
                                         >
-                                            <div class="min-w-0">
+                                            {!! $relationshipAvatar($addedFollower, 'emerald') !!}
+                                            <div class="min-w-0 flex-1">
                                                 <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($addedFollower, 'username') }}</div>
                                                 @if(data_get($addedFollower, 'displayName'))
                                                     <div class="mt-0.5 truncate text-slate-500">{{ data_get($addedFollower, 'displayName') }}</div>
@@ -571,7 +604,8 @@
                                             x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
                                             class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm"
                                         >
-                                            <div class="min-w-0">
+                                            {!! $relationshipAvatar($removedFollower, 'rose') !!}
+                                            <div class="min-w-0 flex-1">
                                                 <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedFollower, 'username') }}</div>
                                                 @if(data_get($removedFollower, 'displayName'))
                                                     <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedFollower, 'displayName') }}</div>
@@ -613,7 +647,8 @@
                                     x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
                                     class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm"
                                 >
-                                    <div class="min-w-0">
+                                    {!! $relationshipAvatar($removedFollower, 'rose') !!}
+                                    <div class="min-w-0 flex-1">
                                         <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedFollower, 'username') }}</div>
                                         @if(data_get($removedFollower, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedFollower, 'displayName') }}</div>
@@ -641,7 +676,8 @@
                                     x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
                                     class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm"
                                 >
-                                    <div class="min-w-0">
+                                    {!! $relationshipAvatar($historyFollower) !!}
+                                    <div class="min-w-0 flex-1">
                                         <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($historyFollower, 'username') }}</div>
                                         @if(data_get($historyFollower, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($historyFollower, 'displayName') }}</div>
@@ -666,7 +702,8 @@
                                     x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
                                     class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
                                 >
-                                    <div class="min-w-0">
+                                    {!! $relationshipAvatar($follower) !!}
+                                    <div class="min-w-0 flex-1">
                                         <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($follower, 'username') }}</div>
                                         @if(data_get($follower, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($follower, 'displayName') }}</div>
@@ -770,7 +807,8 @@
                                             x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
                                             class="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-white px-4 py-3 text-sm"
                                         >
-                                            <div class="min-w-0">
+                                            {!! $relationshipAvatar($addedProfile, 'emerald') !!}
+                                            <div class="min-w-0 flex-1">
                                                 <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($addedProfile, 'username') }}</div>
                                                 @if(data_get($addedProfile, 'displayName'))
                                                     <div class="mt-0.5 truncate text-slate-500">{{ data_get($addedProfile, 'displayName') }}</div>
@@ -798,7 +836,8 @@
                                             x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
                                             class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm"
                                         >
-                                            <div class="min-w-0">
+                                            {!! $relationshipAvatar($removedProfile, 'rose') !!}
+                                            <div class="min-w-0 flex-1">
                                                 <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedProfile, 'username') }}</div>
                                                 @if(data_get($removedProfile, 'displayName'))
                                                     <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedProfile, 'displayName') }}</div>
@@ -840,7 +879,8 @@
                                     x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
                                     class="flex items-center justify-between gap-3 rounded-xl border border-rose-100 bg-white px-4 py-3 text-sm"
                                 >
-                                    <div class="min-w-0">
+                                    {!! $relationshipAvatar($removedProfile, 'rose') !!}
+                                    <div class="min-w-0 flex-1">
                                         <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($removedProfile, 'username') }}</div>
                                         @if(data_get($removedProfile, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedProfile, 'displayName') }}</div>
@@ -868,7 +908,8 @@
                                     x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
                                     class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm"
                                 >
-                                    <div class="min-w-0">
+                                    {!! $relationshipAvatar($historyProfile) !!}
+                                    <div class="min-w-0 flex-1">
                                         <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($historyProfile, 'username') }}</div>
                                         @if(data_get($historyProfile, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($historyProfile, 'displayName') }}</div>
@@ -893,7 +934,8 @@
                                     x-show="search === '' || $el.dataset.relationshipSearch.includes(search.toLowerCase())"
                                     class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
                                 >
-                                    <div class="min-w-0">
+                                    {!! $relationshipAvatar($followedProfile) !!}
+                                    <div class="min-w-0 flex-1">
                                         <div class="truncate font-semibold text-slate-900">{{ '@'.data_get($followedProfile, 'username') }}</div>
                                         @if(data_get($followedProfile, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($followedProfile, 'displayName') }}</div>

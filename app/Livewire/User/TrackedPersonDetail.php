@@ -4,14 +4,19 @@ namespace App\Livewire\User;
 
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Jobs\MonitorTrackedPersonInstagram;
+use App\Models\InstagramProfile;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
+use App\Models\TrackedPersonInstagramSnapshot;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Livewire\Component;
 
 class TrackedPersonDetail extends Component
@@ -840,11 +845,13 @@ class TrackedPersonDetail extends Component
                 'extractedProfile.profileVisibility',
             ) === 'public')
             ->values();
+        $relationshipProfileImages = $this->relationshipProfileImagesForSnapshot($trackedPerson->latestInstagramSnapshot);
 
         return view('livewire.user.tracked-person-detail', [
             'trackedPerson' => $trackedPerson,
             'profileImageHistory' => $profileImageHistory,
             'publicProfileCandidates' => $publicProfileCandidates,
+            'relationshipProfileImages' => $relationshipProfileImages,
         ]);
     }
 
@@ -895,6 +902,101 @@ class TrackedPersonDetail extends Component
         $this->publicProfileTrackedPersonId = '';
         $this->publicProfileRelationshipType = 'public_connection';
         $this->publicProfileNotes = '';
+    }
+
+    private function relationshipProfileImagesForSnapshot(?TrackedPersonInstagramSnapshot $snapshot): array
+    {
+        $rawPayload = is_array($snapshot?->raw_payload) ? $snapshot->raw_payload : [];
+        $usernames = collect(['followersList', 'followingList'])
+            ->flatMap(fn (string $payloadKey): Collection => $this->relationshipListUsernames(
+                data_get($rawPayload, 'extractedProfile.'.$payloadKey, []),
+            ))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($usernames->isEmpty()) {
+            return [];
+        }
+
+        return $usernames
+            ->chunk(1000)
+            ->flatMap(fn (Collection $chunk): Collection => InstagramProfile::withTrashed()
+                ->whereIn('username', $chunk->all())
+                ->where(function ($query): void {
+                    $query
+                        ->whereNotNull('profile_image_path')
+                        ->orWhereNotNull('profile_image_url');
+                })
+                ->get(['username', 'profile_image_url', 'profile_image_path']))
+            ->mapWithKeys(function (InstagramProfile $profile): array {
+                $username = Str::lower(ltrim((string) $profile->username, '@'));
+                $imageUrl = $this->profileImageUrlForInstagramProfile($profile);
+
+                return $username !== '' && $imageUrl ? [$username => $imageUrl] : [];
+            })
+            ->all();
+    }
+
+    private function relationshipListUsernames(mixed $relationshipList): Collection
+    {
+        if (! is_array($relationshipList) || $relationshipList === []) {
+            return collect();
+        }
+
+        $items = collect();
+
+        foreach ($this->relationshipListItemKeys() as $key) {
+            $items = $items->merge(collect(data_get($relationshipList, $key, [])));
+        }
+
+        $itemsPath = data_get($relationshipList, 'itemsPath');
+
+        if (is_string($itemsPath) && $itemsPath !== '' && Storage::disk('public')->exists($itemsPath)) {
+            try {
+                $decoded = json_decode(Storage::disk('public')->get($itemsPath), true);
+
+                if (is_array($decoded)) {
+                    foreach ($this->relationshipListItemKeys() as $key) {
+                        $items = $items->merge(collect(data_get($decoded, $key, [])));
+                    }
+                }
+            } catch (\Throwable) {
+                // Snapshot sidecar files are optional for image lookup.
+            }
+        }
+
+        return $items
+            ->filter(fn ($item): bool => is_array($item) && filled($item['username'] ?? null))
+            ->map(fn (array $item): string => Str::lower(ltrim(trim((string) $item['username']), '@')))
+            ->filter()
+            ->values();
+    }
+
+    private function relationshipListItemKeys(): array
+    {
+        return [
+            'items',
+            'activeItems',
+            'observedItems',
+            'observedPreview',
+            'itemsPreview',
+            'addedItems',
+            'removedItems',
+            'currentlyRemovedItems',
+            'removedHistoryItems',
+            'removedHistoryPreview',
+            'allKnownItems',
+        ];
+    }
+
+    private function profileImageUrlForInstagramProfile(InstagramProfile $profile): ?string
+    {
+        if (filled($profile->profile_image_path)) {
+            return Storage::disk('public')->url($profile->profile_image_path);
+        }
+
+        return filled($profile->profile_image_url) ? $profile->profile_image_url : null;
     }
 
     private function nullableTrim(?string $value): ?string

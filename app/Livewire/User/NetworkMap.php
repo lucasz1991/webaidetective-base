@@ -772,7 +772,9 @@ class NetworkMap extends Component
         $existing = $nodesByInstagram->get($username);
 
         if ($existing) {
-            return $existing;
+            $this->mergeRelationshipItemNodeImage($nodes, $nodesByInstagram, $existing, $item);
+
+            return $nodes[$existing['id'] ?? null] ?? $existing;
         }
 
         $person = $peopleByInstagram->get($username);
@@ -780,6 +782,8 @@ class NetworkMap extends Component
         if ($person) {
             $nodeId = $this->ensureTrackedPersonNode($nodes, $person);
             $node = $nodes[$nodeId] ?? null;
+            $this->mergeRelationshipItemNodeImage($nodes, $nodesByInstagram, $node ?? [], $item);
+            $node = $nodes[$nodeId] ?? $node;
             $nodesByInstagram->put($username, $node);
 
             return $node;
@@ -787,7 +791,7 @@ class NetworkMap extends Component
 
         $displayName = $item['displayName'] ?? $item['fullName'] ?? $item['name'] ?? null;
         $profileUrl = $item['profileUrl'] ?? $item['url'] ?? 'https://www.instagram.com/'.$username.'/';
-        $imageUrl = $item['profileImageUrl'] ?? $item['profile_image_url'] ?? null;
+        $imageUrl = $this->profileImageUrlForRelationshipItem($item);
         $node = [
             'id' => 'profile-instagram-'.$username,
             'type' => 'profile',
@@ -807,6 +811,45 @@ class NetworkMap extends Component
         $nodesByInstagram->put($username, $node);
 
         return $node;
+    }
+
+    private function mergeRelationshipItemNodeImage(
+        array &$nodes,
+        Collection $nodesByInstagram,
+        array $existing,
+        mixed $item,
+    ): void {
+        $id = $existing['id'] ?? null;
+
+        if (! $id || ! isset($nodes[$id]) || (bool) ($nodes[$id]['hasImage'] ?? false)) {
+            return;
+        }
+
+        $imageUrl = $this->profileImageUrlForRelationshipItem($item);
+
+        if (! filled($imageUrl)) {
+            return;
+        }
+
+        $nodes[$id]['imageUrl'] = $imageUrl;
+        $nodes[$id]['hasImage'] = true;
+
+        $username = $this->normalizeUsername($nodes[$id]['username'] ?? $existing['username'] ?? '');
+
+        if ($username !== '') {
+            $nodesByInstagram->put($username, $nodes[$id]);
+        }
+    }
+
+    private function profileImageUrlForRelationshipItem(mixed $item): ?string
+    {
+        if (! is_array($item)) {
+            return null;
+        }
+
+        $imageUrl = $item['profileImageUrl'] ?? $item['profile_image_url'] ?? null;
+
+        return filled($imageUrl) ? (string) $imageUrl : null;
     }
 
     private function mergeInstagramProfileNodeDetails(

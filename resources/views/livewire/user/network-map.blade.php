@@ -147,8 +147,13 @@
                         Waehle einen Knoten im Netzwerk aus, um direkte Verknuepfungen zu sehen.
                     </p>
                     <div data-network-detail class="mt-3 hidden">
-                        <div class="text-lg font-bold text-slate-950" data-network-detail-label></div>
-                        <div class="mt-1 text-sm font-semibold text-slate-500" data-network-detail-handle></div>
+                        <div class="flex items-start gap-3">
+                            <div data-network-detail-avatar class="h-12 w-12 shrink-0"></div>
+                            <div class="min-w-0">
+                                <div class="break-words text-lg font-bold text-slate-950" data-network-detail-label></div>
+                                <div class="mt-1 break-words text-sm font-semibold text-slate-500" data-network-detail-handle></div>
+                            </div>
+                        </div>
                         <p class="mt-3 text-sm leading-6 text-slate-600" data-network-detail-text></p>
                         <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
                             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Direkte Kanten</div>

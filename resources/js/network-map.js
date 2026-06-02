@@ -14,6 +14,34 @@ function truncate(value, length = 28) {
     return text.length > length ? `${text.slice(0, length - 1)}...` : text;
 }
 
+function initialFor(value) {
+    const text = String(value || '').replace(/^@/, '').trim();
+
+    return (text.charAt(0) || '?').toUpperCase();
+}
+
+function avatarElement(data, large = false) {
+    const imageUrl = String(data?.imageUrl || '').trim();
+    const element = document.createElement(imageUrl ? 'img' : 'div');
+    const sizeClass = large ? 'h-12 w-12' : 'h-9 w-9';
+    const commonClasses = `${sizeClass} shrink-0 rounded-full ring-2`;
+
+    if (imageUrl) {
+        element.src = imageUrl;
+        element.alt = data?.handle || data?.fullLabel || 'Instagram-Profilbild';
+        element.loading = 'lazy';
+        element.referrerPolicy = 'no-referrer';
+        element.className = `${commonClasses} object-cover ring-slate-200 bg-slate-100`;
+
+        return element;
+    }
+
+    element.className = `${commonClasses} flex items-center justify-center bg-slate-100 text-xs font-bold text-slate-600 ring-slate-200`;
+    element.textContent = initialFor(data?.handle || data?.fullLabel || data?.label);
+
+    return element;
+}
+
 function readGraph(root) {
     const payload = root.querySelector('[data-network-map-payload]');
 
@@ -169,6 +197,8 @@ function updateSelectionPanel(root, cy) {
     empty.classList.add('hidden');
     detail.classList.remove('hidden');
 
+    const detailAvatar = root.querySelector('[data-network-detail-avatar]');
+    detailAvatar?.replaceChildren(avatarElement(node.data(), true));
     root.querySelector('[data-network-detail-label]').textContent = node.data('fullLabel') || node.data('label');
     root.querySelector('[data-network-detail-handle]').textContent = [node.data('role'), node.data('handle') || node.data('type')]
         .filter(Boolean)
@@ -191,6 +221,7 @@ function updateSelectionPanel(root, cy) {
 
     connectedNodes.forEach((connectedNode) => {
         const button = document.createElement('button');
+        const text = document.createElement('span');
         const label = document.createElement('span');
         const handle = document.createElement('span');
         const connection = document.createElement('span');
@@ -201,8 +232,10 @@ function updateSelectionPanel(root, cy) {
         const uniqueEdgeLabels = [...new Set(edgeLabels)];
 
         button.type = 'button';
-        button.className = 'block w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm transition hover:bg-white';
+        button.className = 'flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm transition hover:bg-white';
         button.addEventListener('click', () => setSelected(root, cy, connectedNode.id()));
+
+        text.className = 'min-w-0 flex-1';
 
         label.className = 'block font-semibold text-slate-950';
         label.textContent = connectedNode.data('fullLabel') || connectedNode.data('label');
@@ -213,7 +246,8 @@ function updateSelectionPanel(root, cy) {
         connection.className = 'mt-1 block text-xs font-semibold text-slate-600';
         connection.textContent = uniqueEdgeLabels.join(' + ') || 'Verbindung';
 
-        button.append(label, handle, connection);
+        text.append(label, handle, connection);
+        button.append(avatarElement(connectedNode.data()), text);
         list.append(button);
     });
 }
