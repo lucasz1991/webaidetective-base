@@ -81,6 +81,7 @@ function normalizeItem(item) {
     username,
     displayName: item.displayName ? String(item.displayName).trim() : null,
     profileUrl: item.profileUrl ? String(item.profileUrl) : `https://www.instagram.com/${username}/`,
+    profileImageUrl: item.profileImageUrl || item.profile_image_url ? String(item.profileImageUrl || item.profile_image_url).trim() : null,
     sourceLists: Array.isArray(item.sourceLists) ? item.sourceLists.filter(Boolean) : [],
   };
 }

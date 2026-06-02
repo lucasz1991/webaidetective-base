@@ -94,6 +94,9 @@ class InstagramProfileDataExtractor
                 'username' => Str::lower(trim((string) ($item['username'] ?? ''))),
                 'displayName' => filled($item['displayName'] ?? null) ? trim((string) $item['displayName']) : null,
                 'profileUrl' => filled($item['profileUrl'] ?? null) ? (string) $item['profileUrl'] : null,
+                'profileImageUrl' => filled($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null)
+                    ? (string) ($item['profileImageUrl'] ?? $item['profile_image_url'])
+                    : null,
             ])
             ->unique('username')
             ->values()

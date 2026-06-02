@@ -411,6 +411,7 @@ class InstagramProfileRelationshipStore
         $relatedProfile = $this->ensureProfile($item['username'] ?? null, [
             'display_name' => $item['displayName'] ?? null,
             'profile_url' => $item['profileUrl'] ?? null,
+            'profile_image_url' => $item['profileImageUrl'] ?? $item['profile_image_url'] ?? null,
         ]);
 
         if (! $relatedProfile) {
@@ -467,6 +468,7 @@ class InstagramProfileRelationshipStore
         $relatedProfile = $this->ensureProfile($item['username'] ?? null, [
             'display_name' => $item['displayName'] ?? null,
             'profile_url' => $item['profileUrl'] ?? null,
+            'profile_image_url' => $item['profileImageUrl'] ?? $item['profile_image_url'] ?? null,
         ]);
 
         if (! $relatedProfile) {
@@ -686,6 +688,7 @@ class InstagramProfileRelationshipStore
                     'username' => $username,
                     'displayName' => $this->nullableTrim($item['displayName'] ?? null),
                     'profileUrl' => $this->nullableTrim($item['profileUrl'] ?? null) ?: ($username ? 'https://www.instagram.com/'.$username.'/' : null),
+                    'profileImageUrl' => $this->nullableTrim($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null),
                     'firstSeenAt' => $this->parseTimestamp($item['firstSeenAt'] ?? null)?->toIso8601String(),
                     'lastSeenAt' => $this->parseTimestamp($item['lastSeenAt'] ?? null)?->toIso8601String(),
                     'removedAt' => $this->parseTimestamp($item['removedAt'] ?? null)?->toIso8601String(),

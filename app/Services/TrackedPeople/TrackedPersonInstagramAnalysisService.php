@@ -1377,6 +1377,9 @@ class TrackedPersonInstagramAnalysisService
                     'username' => $username,
                     'displayName' => filled($item['displayName'] ?? null) ? trim((string) $item['displayName']) : null,
                     'profileUrl' => filled($item['profileUrl'] ?? null) ? (string) $item['profileUrl'] : 'https://www.instagram.com/'.$username.'/',
+                    'profileImageUrl' => filled($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null)
+                        ? (string) ($item['profileImageUrl'] ?? $item['profile_image_url'])
+                        : null,
                 ];
 
                 foreach (['firstSeenAt', 'lastSeenAt', 'removedAt'] as $timestampKey) {

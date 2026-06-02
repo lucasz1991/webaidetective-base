@@ -1071,6 +1071,7 @@ class TrackedPersonInstagramPublicProfileScanService
                     [
                         'display_name' => $this->nullableTrim($connection['displayName'] ?? null),
                         'profile_url' => $this->nullableTrim($connection['profileUrl'] ?? null),
+                        'profile_image_url' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
                     ],
                 );
 
@@ -1174,6 +1175,7 @@ class TrackedPersonInstagramPublicProfileScanService
                 'displayName' => $this->nullableTrim($connection['displayName'] ?? $connection['candidate_display_name'] ?? null),
                 'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? $connection['candidate_profile_url'] ?? null)
                     ?: 'https://www.instagram.com/'.$candidateUsername.'/',
+                'profileImageUrl' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
                 'sourcePublicUsername' => $connectionSourceUsername,
                 'sourceLists' => array_values(array_filter($sourceLists)),
             ];
@@ -1208,6 +1210,7 @@ class TrackedPersonInstagramPublicProfileScanService
                     'displayName' => $this->nullableTrim($connection['displayName'] ?? null),
                     'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? null)
                         ?: 'https://www.instagram.com/'.$username.'/',
+                    'profileImageUrl' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
                     'sourcePublicUsername' => $sourcePublicUsername,
                     'sourceLists' => is_array($connection['sourceLists'] ?? null)
                         ? array_values(array_unique(array_map(

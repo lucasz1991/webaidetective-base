@@ -1560,6 +1560,32 @@ async function collectFollowerEntriesFromDialog(page) {
 
       return Boolean(suggestionHeading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
     };
+    const findEntryContainer = (anchor, username) => {
+      const fallback = anchor.closest('div[role="button"], li, article, div') || anchor;
+      const normalizedUsername = String(username || '').toLowerCase();
+
+      for (let element = anchor; element && element !== dialog; element = element.parentElement) {
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+        const rect = element.getBoundingClientRect();
+        const hasProfileImage = Boolean(element.querySelector('img'));
+
+        if (
+          hasProfileImage
+          && (!normalizedUsername || text.toLowerCase().includes(normalizedUsername))
+          && rect.width >= 120
+          && rect.height >= 36
+          && text.length <= 900
+        ) {
+          return element;
+        }
+
+        if (text.length > 900 || rect.height > 420) {
+          break;
+        }
+      }
+
+      return fallback;
+    };
     const anchors = Array.from(dialog.querySelectorAll('a[href]'))
       .filter((anchor) => !isAfterSuggestionHeading(anchor));
 
@@ -1589,11 +1615,26 @@ async function collectFollowerEntriesFromDialog(page) {
           .split('\n')
           .map((line) => line.trim())
           .filter(Boolean);
+        const row = findEntryContainer(anchor, username);
+        const image = Array.from(row.querySelectorAll('img'))
+          .find((candidate) => {
+            const rect = candidate.getBoundingClientRect();
+            const src = candidate.currentSrc || candidate.src || candidate.getAttribute('src') || '';
+
+            return src !== ''
+              && rect.width > 12
+              && rect.height > 12
+              && !/emoji|sprite|blank|transparent/i.test(src);
+          }) || null;
+        const profileImageUrl = image
+          ? (image.currentSrc || image.src || image.getAttribute('src') || null)
+          : null;
 
         return {
           username,
           displayName: textLines.find((line) => line.toLowerCase() !== username.toLowerCase()) || null,
           profileUrl: `https://www.instagram.com/${username}/`,
+          profileImageUrl,
         };
       })
       .filter(Boolean);
@@ -2006,16 +2047,23 @@ function addRelationshipEntriesToMap(entries, usersByUsername, targetUsername) {
   for (const entry of entries) {
     const relatedUsername = normalizeInstagramUsername(entry?.username);
 
-    if (!relatedUsername || relatedUsername === targetUsername || usersByUsername.has(relatedUsername)) {
+    if (!relatedUsername || relatedUsername === targetUsername) {
       continue;
     }
 
-    usersByUsername.set(relatedUsername, {
+    const existing = usersByUsername.get(relatedUsername);
+    const nextEntry = {
       username: relatedUsername,
-      displayName: entry.displayName,
-      profileUrl: entry.profileUrl,
-    });
-    added++;
+      displayName: entry.displayName || existing?.displayName || null,
+      profileUrl: entry.profileUrl || existing?.profileUrl || `https://www.instagram.com/${relatedUsername}/`,
+      profileImageUrl: entry.profileImageUrl || entry.profile_image_url || existing?.profileImageUrl || null,
+    };
+
+    usersByUsername.set(relatedUsername, nextEntry);
+
+    if (!existing) {
+      added++;
+    }
   }
 
   return added;
@@ -3477,6 +3525,7 @@ function summarizeSuggestionPublicListResult(result = {}) {
       username: normalizeInstagramUsername(result.targetItem.username || '') || null,
       displayName: normalizeText(String(result.targetItem.displayName || result.targetItem.fullName || '')) || null,
       profileUrl: normalizeText(String(result.targetItem.profileUrl || result.targetItem.url || '')) || null,
+      profileImageUrl: normalizeText(String(result.targetItem.profileImageUrl || result.targetItem.profile_image_url || '')) || null,
     }
     : null;
 
@@ -5149,6 +5198,7 @@ function normalizePublicConnectionCandidate(candidate) {
     username: candidateUsername,
     displayName: normalizeText(String(candidate.displayName || '')) || null,
     profileUrl: normalizeText(String(candidate.profileUrl || '')) || `https://www.instagram.com/${candidateUsername}/`,
+    profileImageUrl: normalizeText(String(candidate.profileImageUrl || candidate.profile_image_url || '')) || null,
     sourceLists: Array.isArray(candidate.sourceLists)
       ? candidate.sourceLists.map((sourceList) => normalizeText(String(sourceList || ''))).filter(Boolean)
       : [],
@@ -5171,6 +5221,7 @@ function buildBatchCandidateConnection(candidate, candidateFollowers, candidateF
     username: candidate.username,
     displayName: candidate.displayName,
     profileUrl: candidate.profileUrl,
+    profileImageUrl: candidate.profileImageUrl || null,
     sourceLists: candidate.sourceLists,
     candidateFollowsTarget,
     targetFollowsCandidate,
@@ -5188,6 +5239,7 @@ function summarizeBatchCandidateConnectionForProgress(connection) {
     username: connection.username,
     displayName: connection.displayName || null,
     profileUrl: connection.profileUrl || `https://www.instagram.com/${connection.username}/`,
+    profileImageUrl: connection.profileImageUrl || null,
     sourceLists: Array.isArray(connection.sourceLists) ? connection.sourceLists : [],
   };
 }

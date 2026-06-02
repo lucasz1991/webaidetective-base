@@ -573,6 +573,9 @@ class InstagramScraper
                 'profileUrl' => is_scalar($item['profileUrl'] ?? null)
                     ? trim((string) $item['profileUrl'])
                     : 'https://www.instagram.com/'.$username.'/',
+                'profileImageUrl' => is_scalar($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null)
+                    ? trim((string) ($item['profileImageUrl'] ?? $item['profile_image_url']))
+                    : null,
                 'sourceSuggestionUsername' => $this->normalizeInstagramUsername((string) ($item['sourceSuggestionUsername'] ?? $item['sourcePublicUsername'] ?? '')),
                 'sourcePublicUsername' => $this->normalizeInstagramUsername((string) ($item['sourcePublicUsername'] ?? $item['sourceSuggestionUsername'] ?? '')),
                 'sourceLists' => is_array($item['sourceLists'] ?? null) ? array_values(array_filter($item['sourceLists'], 'is_scalar')) : [],
@@ -608,6 +611,7 @@ class InstagramScraper
             'displayName' => $this->nullableTrim($connection['displayName'] ?? null),
             'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? null)
                 ?: 'https://www.instagram.com/'.$username.'/',
+            'profileImageUrl' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
             'sourceLists' => is_array($connection['sourceLists'] ?? null)
                 ? array_values(array_filter($connection['sourceLists'], 'is_scalar'))
                 : [],
