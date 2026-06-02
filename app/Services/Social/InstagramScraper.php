@@ -4,6 +4,7 @@ namespace App\Services\Social;
 
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\Setting;
+use App\Services\Scraper\ScraperProfileDatabaseStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
@@ -81,6 +82,7 @@ class InstagramScraper
             );
         } finally {
             if ($runtimeConfigPath && File::exists($runtimeConfigPath)) {
+                $this->syncScraperProfileCookiesFromRuntimeConfig($runtimeConfigPath);
                 File::delete($runtimeConfigPath);
             }
         }
@@ -259,6 +261,7 @@ class InstagramScraper
             );
         } finally {
             if ($runtimeConfigPath && File::exists($runtimeConfigPath)) {
+                $this->syncScraperProfileCookiesFromRuntimeConfig($runtimeConfigPath);
                 File::delete($runtimeConfigPath);
             }
         }
@@ -733,17 +736,20 @@ class InstagramScraper
         File::ensureDirectoryExists($directory);
 
         $path = $directory.DIRECTORY_SEPARATOR.'instagram-scraper-config-'.Str::uuid().'.json';
-        File::put($path, json_encode([
+        $runtimeConfig = [
             ...$this->buildRuntimeConfig(),
             ...$overrides,
-        ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        ];
+
+        app(ScraperProfileDatabaseStore::class)->hydrateCookieFilesFromRuntimeConfig($runtimeConfig);
+        File::put($path, json_encode($runtimeConfig, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
         return $path;
     }
 
     private function buildRuntimeConfig(): array
     {
-        $settings = Setting::getValue('scraper', 'instagram_profile');
+        $settings = $this->loadScraperProfileSettings();
         $profile = $this->resolveActiveScraperProfile($settings);
         $runtimePassword = $this->resolveRuntimePassword($profile);
 
@@ -772,6 +778,39 @@ class InstagramScraper
             'relationshipListMaxScrollRounds' => max(20, (int) ($profile['relationship_list_max_scroll_rounds'] ?? 100000)),
             'accountPool' => $this->buildRuntimeAccountPool($settings, $profile),
         ];
+    }
+
+    private function loadScraperProfileSettings(): mixed
+    {
+        $settings = Setting::getValue('scraper', 'instagram_profile');
+        $databaseStore = app(ScraperProfileDatabaseStore::class);
+
+        if (! $databaseStore->isAvailable()) {
+            return $settings;
+        }
+
+        if (is_array($settings)) {
+            $databaseStore->importLegacyCollectionIfMissing($settings, storage_path('app'));
+        }
+
+        $databaseCollection = $databaseStore->loadProfileCollection(is_array($settings) ? $settings : null);
+
+        if (is_array($databaseCollection)) {
+            $databaseStore->hydrateCookieFilesFromCollection($databaseCollection, storage_path('app'));
+
+            return $databaseCollection;
+        }
+
+        return $settings;
+    }
+
+    private function syncScraperProfileCookiesFromRuntimeConfig(?string $runtimeConfigPath): void
+    {
+        try {
+            app(ScraperProfileDatabaseStore::class)->syncCookiePayloadsFromRuntimeConfigFile($runtimeConfigPath);
+        } catch (\Throwable) {
+            // Cookie-Sync darf den eigentlichen Scrape nicht ueberdecken.
+        }
     }
 
     private function buildRuntimeAccountPool(mixed $settings, array $selectedProfile): array

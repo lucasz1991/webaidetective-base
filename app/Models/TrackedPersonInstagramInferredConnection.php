@@ -16,7 +16,9 @@ class TrackedPersonInstagramInferredConnection extends Model
         'scan_id',
         'user_id',
         'source_public_username',
+        'source_public_instagram_profile_id',
         'candidate_username',
+        'candidate_instagram_profile_id',
         'candidate_display_name',
         'candidate_profile_url',
         'relationship_type',
@@ -57,6 +59,16 @@ class TrackedPersonInstagramInferredConnection extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function sourcePublicInstagramProfile(): BelongsTo
+    {
+        return $this->belongsTo(InstagramProfile::class, 'source_public_instagram_profile_id');
+    }
+
+    public function candidateInstagramProfile(): BelongsTo
+    {
+        return $this->belongsTo(InstagramProfile::class, 'candidate_instagram_profile_id');
     }
 
     public function getRelationshipLabelAttribute(): string

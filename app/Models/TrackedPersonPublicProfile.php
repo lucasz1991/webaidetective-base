@@ -16,6 +16,7 @@ class TrackedPersonPublicProfile extends Model
     protected $fillable = [
         'tracked_person_id',
         'user_id',
+        'instagram_profile_id',
         'platform',
         'username',
         'display_name',
@@ -43,6 +44,11 @@ class TrackedPersonPublicProfile extends Model
     public function user(): BelongsTo
     {
         return $this->belongsTo(User::class);
+    }
+
+    public function instagramProfile(): BelongsTo
+    {
+        return $this->belongsTo(InstagramProfile::class);
     }
 
     public function instagramConnectionScans(): HasMany

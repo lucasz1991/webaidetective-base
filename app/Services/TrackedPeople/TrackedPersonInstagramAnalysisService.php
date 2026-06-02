@@ -20,6 +20,7 @@ class TrackedPersonInstagramAnalysisService
         private readonly InstagramScraper $scraper,
         private readonly InstagramProfileDataExtractor $extractor,
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
+        private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
     ) {
     }
 
@@ -226,6 +227,14 @@ class TrackedPersonInstagramAnalysisService
 
             $trackedPerson->forceFill($trackedPersonUpdate)->save();
 
+            $this->profileRelationshipStore->syncProfileFromSnapshot(
+                $trackedPerson,
+                $snapshot,
+                $extracted,
+                $payload,
+                $attemptInfo,
+            );
+
             return $snapshot;
         });
 
@@ -403,6 +412,14 @@ class TrackedPersonInstagramAnalysisService
             }
 
             $trackedPerson->forceFill($trackedPersonUpdate)->save();
+
+            $this->profileRelationshipStore->syncProfileFromSnapshot(
+                $trackedPerson,
+                $snapshot,
+                $extracted,
+                $payload,
+                $attemptInfo,
+            );
 
             return $snapshot;
         });

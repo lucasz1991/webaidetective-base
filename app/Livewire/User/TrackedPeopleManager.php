@@ -2,6 +2,7 @@
 
 namespace App\Livewire\User;
 
+use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Livewire\Component;
@@ -170,6 +171,7 @@ class TrackedPeopleManager extends Component
         ];
 
         $person = $user->trackedPeople()->create($validated);
+        app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($person);
 
         $this->selectedTrackedPersonId = $person->id;
         $this->showDetailModal = true;

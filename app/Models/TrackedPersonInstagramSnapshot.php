@@ -15,6 +15,7 @@ class TrackedPersonInstagramSnapshot extends Model
 
     protected $fillable = [
         'tracked_person_id',
+        'instagram_profile_id',
         'instagram_username',
         'full_name',
         'biography',
@@ -49,6 +50,11 @@ class TrackedPersonInstagramSnapshot extends Model
     public function trackedPerson(): BelongsTo
     {
         return $this->belongsTo(TrackedPerson::class);
+    }
+
+    public function instagramProfile(): BelongsTo
+    {
+        return $this->belongsTo(InstagramProfile::class);
     }
 
     public function media(): HasMany

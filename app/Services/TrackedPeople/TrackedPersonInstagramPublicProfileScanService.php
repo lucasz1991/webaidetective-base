@@ -3,6 +3,7 @@
 namespace App\Services\TrackedPeople;
 
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
+use App\Models\InstagramProfileRelationship;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramPublicProfileScan;
@@ -11,6 +12,7 @@ use App\Services\Social\InstagramScraper;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -19,6 +21,7 @@ class TrackedPersonInstagramPublicProfileScanService
     public function __construct(
         private readonly InstagramScraper $scraper,
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
+        private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
     ) {
     }
 
@@ -105,6 +108,12 @@ class TrackedPersonInstagramPublicProfileScanService
 
                 continue;
             }
+
+            $this->profileRelationshipStore->syncTrackedPersonProfile($trackedPerson);
+            $this->profileRelationshipStore->syncPublicProfile($publicProfile, [
+                'display_name' => $publicProfile->display_name,
+                'profile_url' => 'https://www.instagram.com/'.$publicUsername.'/',
+            ]);
 
             $candidates = $this->buildStoredCandidateList($trackedPerson, $publicProfile, $publicUsername);
 
@@ -326,6 +335,12 @@ class TrackedPersonInstagramPublicProfileScanService
             return [];
         }
 
+        $relationalCandidates = $this->buildStoredCandidateListFromProfileRelationships($linkedTrackedPerson, $publicUsername);
+
+        if ($relationalCandidates !== []) {
+            return $relationalCandidates;
+        }
+
         $snapshots = $linkedTrackedPerson
             ->instagramSnapshots()
             ->latest('analyzed_at')
@@ -372,6 +387,63 @@ class TrackedPersonInstagramPublicProfileScanService
 
                 $candidates[$username] = $existing;
             }
+        }
+
+        return array_values($candidates);
+    }
+
+    private function buildStoredCandidateListFromProfileRelationships(
+        TrackedPerson $linkedTrackedPerson,
+        string $publicUsername,
+    ): array {
+        if (
+            ! Schema::hasTable('instagram_profile_relationships')
+            || ! Schema::hasTable('instagram_profiles')
+            || ! $linkedTrackedPerson->current_instagram_profile_id
+        ) {
+            return [];
+        }
+
+        $relationships = InstagramProfileRelationship::query()
+            ->with('relatedInstagramProfile')
+            ->where('source_instagram_profile_id', $linkedTrackedPerson->current_instagram_profile_id)
+            ->where('status', 'active')
+            ->whereIn('list_type', ['followers', 'following'])
+            ->get();
+
+        if ($relationships->isEmpty()) {
+            return [];
+        }
+
+        $candidates = [];
+
+        foreach ($relationships as $relationship) {
+            $relatedProfile = $relationship->relatedInstagramProfile;
+            $username = $this->scraper->normalizeInstagramUsername($relatedProfile?->username);
+
+            if ($username === null || $username === $publicUsername) {
+                continue;
+            }
+
+            $sourceList = $relationship->list_type === 'followers'
+                ? 'known_profile_followers'
+                : 'known_profile_following';
+            $existing = $candidates[$username] ?? [
+                'username' => $username,
+                'displayName' => $this->nullableTrim($relationship->display_name_snapshot)
+                    ?: $this->nullableTrim($relatedProfile?->display_name)
+                    ?: $this->nullableTrim($relatedProfile?->full_name),
+                'profileUrl' => $this->nullableTrim($relationship->profile_url_snapshot)
+                    ?: $this->nullableTrim($relatedProfile?->profile_url)
+                    ?: 'https://www.instagram.com/'.$username.'/',
+                'sourceLists' => [],
+            ];
+
+            if (! in_array($sourceList, $existing['sourceLists'], true)) {
+                $existing['sourceLists'][] = $sourceList;
+            }
+
+            $candidates[$username] = $existing;
         }
 
         return array_values($candidates);
@@ -993,6 +1065,14 @@ class TrackedPersonInstagramPublicProfileScanService
                     ->where('relationship_type', $relationshipType)
                     ->where('candidate_username', $candidateUsername)
                     ->first();
+                $profileColumnData = $this->profileRelationshipStore->profileColumnDataForInferredConnection(
+                    $publicProfile,
+                    $candidateUsername,
+                    [
+                        'display_name' => $this->nullableTrim($connection['displayName'] ?? null),
+                        'profile_url' => $this->nullableTrim($connection['profileUrl'] ?? null),
+                    ],
+                );
 
                 TrackedPersonInstagramInferredConnection::updateOrCreate(
                     [
@@ -1012,6 +1092,7 @@ class TrackedPersonInstagramPublicProfileScanService
                         'status' => 'active',
                         'first_seen_at' => $existing?->first_seen_at ?: $analyzedAt,
                         'last_seen_at' => $analyzedAt,
+                        ...$profileColumnData,
                     ],
                 );
             }

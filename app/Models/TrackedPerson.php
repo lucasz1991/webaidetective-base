@@ -25,6 +25,7 @@ class TrackedPerson extends Model
         'country',
         'notes',
         'instagram_username',
+        'current_instagram_profile_id',
         'tiktok_username',
         'facebook_username',
         'x_username',
@@ -84,6 +85,16 @@ class TrackedPerson extends Model
     public function publicProfiles(): HasMany
     {
         return $this->hasMany(TrackedPersonPublicProfile::class);
+    }
+
+    public function currentInstagramProfile(): BelongsTo
+    {
+        return $this->belongsTo(InstagramProfile::class, 'current_instagram_profile_id');
+    }
+
+    public function instagramProfileLinks(): HasMany
+    {
+        return $this->hasMany(TrackedPersonInstagramProfileLink::class);
     }
 
     public function instagramPublicProfileScans(): HasMany

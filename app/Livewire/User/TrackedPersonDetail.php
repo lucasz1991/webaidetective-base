@@ -6,6 +6,7 @@ use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Jobs\MonitorTrackedPersonInstagram;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
+use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
@@ -120,6 +121,8 @@ class TrackedPersonDetail extends Component
             'notify_youtube_changes' => (bool) $this->notify_youtube_changes,
             'notify_snapchat_changes' => (bool) $this->notify_snapchat_changes,
         ]);
+
+        app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($trackedPerson->fresh());
 
         $freshPerson = $trackedPerson->fresh();
         $this->fillFormFromModel($freshPerson);
@@ -689,6 +692,7 @@ class TrackedPersonDetail extends Component
             'is_public' => true,
         ]);
         $publicProfile->save();
+        app(InstagramProfileRelationshipStore::class)->syncPublicProfile($publicProfile);
 
         $this->resetPublicProfileForm();
         $this->setDetailStatus(

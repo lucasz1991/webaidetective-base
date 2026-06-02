@@ -73,9 +73,9 @@ return new class extends Migration {
 
         Schema::create('tracked_person_instagram_profile_links', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('tracked_person_id')->constrained('tracked_people')->cascadeOnDelete();
-            $table->foreignId('instagram_profile_id')->constrained('instagram_profiles')->cascadeOnDelete();
-            $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
+            $table->foreignId('tracked_person_id')->constrained('tracked_people', indexName: 'tp_ig_links_person_fk')->cascadeOnDelete();
+            $table->foreignId('instagram_profile_id')->constrained('instagram_profiles', indexName: 'tp_ig_links_profile_fk')->cascadeOnDelete();
+            $table->foreignId('user_id')->nullable()->constrained(indexName: 'tp_ig_links_user_fk')->nullOnDelete();
             $table->string('relation_type', 50)->default('observed');
             $table->boolean('is_current')->default(true);
             $table->timestamp('linked_at')->nullable();
@@ -90,10 +90,10 @@ return new class extends Migration {
 
         Schema::create('instagram_profile_list_scans', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('instagram_profile_id')->constrained('instagram_profiles')->cascadeOnDelete();
-            $table->foreignId('tracked_person_id')->nullable()->constrained('tracked_people')->nullOnDelete();
-            $table->foreignId('snapshot_id')->nullable()->constrained('tracked_person_instagram_snapshots')->nullOnDelete();
-            $table->foreignId('user_id')->nullable()->constrained()->nullOnDelete();
+            $table->foreignId('instagram_profile_id')->constrained('instagram_profiles', indexName: 'ig_list_scans_profile_fk')->cascadeOnDelete();
+            $table->foreignId('tracked_person_id')->nullable()->constrained('tracked_people', indexName: 'ig_list_scans_person_fk')->nullOnDelete();
+            $table->foreignId('snapshot_id')->nullable()->constrained('tracked_person_instagram_snapshots', indexName: 'ig_list_scans_snapshot_fk')->nullOnDelete();
+            $table->foreignId('user_id')->nullable()->constrained(indexName: 'ig_list_scans_user_fk')->nullOnDelete();
             $table->string('list_type', 20);
             $table->string('scan_mode', 50)->nullable();
             $table->string('status_level', 30)->default('unknown');
@@ -114,6 +114,7 @@ return new class extends Migration {
             $table->json('raw_payload')->nullable();
             $table->timestamp('scanned_at')->nullable();
             $table->timestamps();
+            $table->softDeletes();
 
             $table->index(['instagram_profile_id', 'list_type', 'scanned_at'], 'ig_list_scans_profile_type_seen_idx');
             $table->index(['tracked_person_id', 'scanned_at'], 'ig_list_scans_person_seen_idx');
@@ -121,11 +122,11 @@ return new class extends Migration {
 
         Schema::create('instagram_profile_relationships', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('source_instagram_profile_id')->constrained('instagram_profiles')->cascadeOnDelete();
-            $table->foreignId('related_instagram_profile_id')->constrained('instagram_profiles')->cascadeOnDelete();
-            $table->foreignId('first_seen_scan_id')->nullable()->constrained('instagram_profile_list_scans')->nullOnDelete();
-            $table->foreignId('last_seen_scan_id')->nullable()->constrained('instagram_profile_list_scans')->nullOnDelete();
-            $table->foreignId('removed_scan_id')->nullable()->constrained('instagram_profile_list_scans')->nullOnDelete();
+            $table->foreignId('source_instagram_profile_id')->constrained('instagram_profiles', indexName: 'ig_rel_source_profile_fk')->cascadeOnDelete();
+            $table->foreignId('related_instagram_profile_id')->constrained('instagram_profiles', indexName: 'ig_rel_related_profile_fk')->cascadeOnDelete();
+            $table->foreignId('first_seen_scan_id')->nullable()->constrained('instagram_profile_list_scans', indexName: 'ig_rel_first_scan_fk')->nullOnDelete();
+            $table->foreignId('last_seen_scan_id')->nullable()->constrained('instagram_profile_list_scans', indexName: 'ig_rel_last_scan_fk')->nullOnDelete();
+            $table->foreignId('removed_scan_id')->nullable()->constrained('instagram_profile_list_scans', indexName: 'ig_rel_removed_scan_fk')->nullOnDelete();
             $table->string('list_type', 20);
             $table->string('status', 30)->default('active');
             $table->string('display_name_snapshot')->nullable();
@@ -146,10 +147,10 @@ return new class extends Migration {
 
         Schema::create('instagram_profile_list_scan_items', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('list_scan_id')->constrained('instagram_profile_list_scans')->cascadeOnDelete();
-            $table->foreignId('relationship_id')->nullable()->constrained('instagram_profile_relationships')->nullOnDelete();
-            $table->foreignId('source_instagram_profile_id')->constrained('instagram_profiles')->cascadeOnDelete();
-            $table->foreignId('related_instagram_profile_id')->constrained('instagram_profiles')->cascadeOnDelete();
+            $table->foreignId('list_scan_id')->constrained('instagram_profile_list_scans', indexName: 'ig_scan_items_scan_fk')->cascadeOnDelete();
+            $table->foreignId('relationship_id')->nullable()->constrained('instagram_profile_relationships', indexName: 'ig_scan_items_relationship_fk')->nullOnDelete();
+            $table->foreignId('source_instagram_profile_id')->constrained('instagram_profiles', indexName: 'ig_scan_items_source_profile_fk')->cascadeOnDelete();
+            $table->foreignId('related_instagram_profile_id')->constrained('instagram_profiles', indexName: 'ig_scan_items_related_profile_fk')->cascadeOnDelete();
             $table->string('list_type', 20);
             $table->string('item_status', 30)->default('observed');
             $table->string('username_snapshot');
