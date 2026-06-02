@@ -1,0 +1,382 @@
+<?php
+
+namespace App\Services\TrackedPeople;
+
+use App\Models\TrackedPerson;
+use App\Models\TrackedPersonInstagramInferredConnection;
+use App\Models\TrackedPersonInstagramSuggestionScan;
+use App\Services\Social\InstagramScraper;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+
+class TrackedPersonInstagramSuggestionScanService
+{
+    public function __construct(
+        private readonly InstagramScraper $scraper,
+        private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
+        private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
+    ) {
+    }
+
+    private ?array $activeScanControl = null;
+
+    public function scan(TrackedPerson $trackedPerson, ?callable $progress = null): TrackedPersonInstagramSuggestionScan
+    {
+        $targetUsername = $this->scraper->normalizeInstagramUsername($trackedPerson->instagram_username);
+
+        if ($targetUsername === null) {
+            throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');
+        }
+
+        $scanControl = $this->scanCoordinator->begin(
+            $trackedPerson->id,
+            'Profilvorschlag-Verbindungsscan',
+        );
+
+        Cache::lock('tracked-person-instagram-suggestion-scan:'.$trackedPerson->id, 3600)->forceRelease();
+        $lock = Cache::lock('tracked-person-instagram-suggestion-scan:'.$trackedPerson->id, 3600);
+
+        if (! $lock->get()) {
+            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
+            throw new \RuntimeException('Fuer diese Person laeuft bereits ein Profilvorschlag-Verbindungsscan.');
+        }
+
+        $this->activeScanControl = $scanControl;
+
+        try {
+            return $this->scanWithLock($trackedPerson, $targetUsername, $progress);
+        } finally {
+            $lock->release();
+            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
+            $this->activeScanControl = null;
+        }
+    }
+
+    private function scanWithLock(
+        TrackedPerson $trackedPerson,
+        string $targetUsername,
+        ?callable $progress = null,
+    ): TrackedPersonInstagramSuggestionScan {
+        $this->profileRelationshipStore->syncTrackedPersonProfile($trackedPerson);
+
+        $liveConnections = [];
+
+        $this->reportProgress($progress, [
+            'phase' => 'suggestions',
+            'percent' => 1,
+            'message' => 'Profilvorschlag-Verbindungsscan wird vorbereitet.',
+            'foundSuggestions' => 0,
+            'suggestionConnections' => [],
+        ]);
+
+        $payload = $this->scraper->scrape(
+            $targetUsername,
+            'suggestions',
+            function (array $state) use ($trackedPerson, $targetUsername, $progress, &$liveConnections): void {
+                if (array_key_exists('suggestionConnections', $state)) {
+                    $liveConnections = $this->mergeSuggestionConnections(
+                        $liveConnections,
+                        $this->normalizeSuggestionConnections($state['suggestionConnections']),
+                    );
+
+                    if ($liveConnections !== []) {
+                        $this->storeInferredSuggestionConnections(
+                            $trackedPerson,
+                            null,
+                            $targetUsername,
+                            $liveConnections,
+                            ['progress' => true],
+                            now('UTC'),
+                        );
+                    }
+                }
+
+                $this->reportProgress($progress, [
+                    ...$state,
+                    'phase' => 'suggestions',
+                    'foundSuggestions' => count($liveConnections),
+                    'suggestionConnections' => $liveConnections,
+                ]);
+            },
+            $this->withActiveScanControl([
+                'suggestionScanMaxItems' => 12,
+                'suggestionCandidateMaxItems' => 8,
+            ]),
+        );
+
+        return $this->storeScan($trackedPerson, $targetUsername, $payload, $liveConnections);
+    }
+
+    private function storeScan(
+        TrackedPerson $trackedPerson,
+        string $targetUsername,
+        array $payload,
+        array $liveConnections,
+    ): TrackedPersonInstagramSuggestionScan {
+        $this->assertActiveScanCurrent();
+
+        $payload = $this->normalizePayloadScreenshotPaths($payload);
+        $scanPayload = $this->suggestionPayload($payload);
+        $connections = $this->mergeSuggestionConnections(
+            $liveConnections,
+            $this->normalizeSuggestionConnections($payload['suggestionConnections'] ?? []),
+            $this->normalizeSuggestionConnections($scanPayload['matches'] ?? []),
+        );
+        $analyzedAt = now('UTC');
+
+        return DB::transaction(function () use (
+            $trackedPerson,
+            $targetUsername,
+            $payload,
+            $scanPayload,
+            $connections,
+            $analyzedAt,
+        ): TrackedPersonInstagramSuggestionScan {
+            $scan = TrackedPersonInstagramSuggestionScan::create([
+                'tracked_person_id' => $trackedPerson->id,
+                'user_id' => $trackedPerson->user_id,
+                'target_username' => $targetUsername,
+                'status_level' => (string) ($payload['statusLevel'] ?? $scanPayload['statusLevel'] ?? 'unknown'),
+                'status_message' => (string) ($payload['statusMessage'] ?? $scanPayload['statusMessage'] ?? 'Profilvorschlag-Verbindungsscan abgeschlossen.'),
+                'suggestions_observed_count' => (int) ($scanPayload['observedCount'] ?? count($scanPayload['suggestions'] ?? [])),
+                'suggestions_checked_count' => (int) ($scanPayload['checkedCount'] ?? 0),
+                'suggestion_matches_count' => count($connections),
+                'gracefully_stopped' => (bool) ($payload['gracefullyStopped'] ?? $scanPayload['gracefullyStopped'] ?? false),
+                'raw_payload' => $payload,
+                'analyzed_at' => $analyzedAt,
+            ]);
+
+            $this->storeInferredSuggestionConnections(
+                $trackedPerson,
+                $scan,
+                $targetUsername,
+                $connections,
+                $payload,
+                $analyzedAt,
+            );
+
+            return $scan;
+        });
+    }
+
+    private function storeInferredSuggestionConnections(
+        TrackedPerson $trackedPerson,
+        ?TrackedPersonInstagramSuggestionScan $scan,
+        string $targetUsername,
+        array $connections,
+        array $payload,
+        \Illuminate\Support\Carbon $seenAt,
+    ): void {
+        if ($connections === []) {
+            return;
+        }
+
+        $this->profileRelationshipStore->syncTrackedPersonProfile($trackedPerson);
+
+        foreach ($connections as $connection) {
+            $candidateUsername = $this->scraper->normalizeInstagramUsername((string) ($connection['username'] ?? ''));
+
+            if ($candidateUsername === null) {
+                continue;
+            }
+
+            $sourceUsername = $this->scraper->normalizeInstagramUsername(
+                (string) ($connection['sourceSuggestionUsername'] ?? $connection['sourcePublicUsername'] ?? $candidateUsername),
+            ) ?? $candidateUsername;
+            $candidateProfile = $this->profileRelationshipStore->ensureProfile($candidateUsername, [
+                'display_name' => $this->nullableTrim($connection['displayName'] ?? null),
+                'profile_url' => $this->nullableTrim($connection['profileUrl'] ?? null),
+            ]);
+            $existing = TrackedPersonInstagramInferredConnection::query()
+                ->where('tracked_person_id', $trackedPerson->id)
+                ->whereNull('public_profile_id')
+                ->where('relationship_type', 'suggestion_connection')
+                ->where('candidate_username', $candidateUsername)
+                ->first();
+
+            TrackedPersonInstagramInferredConnection::updateOrCreate(
+                [
+                    'tracked_person_id' => $trackedPerson->id,
+                    'public_profile_id' => null,
+                    'relationship_type' => 'suggestion_connection',
+                    'candidate_username' => $candidateUsername,
+                ],
+                [
+                    'scan_id' => null,
+                    'user_id' => $trackedPerson->user_id,
+                    'source_public_username' => $sourceUsername,
+                    'candidate_display_name' => $this->nullableTrim($connection['displayName'] ?? null),
+                    'candidate_profile_url' => $this->nullableTrim($connection['profileUrl'] ?? null)
+                        ?: 'https://www.instagram.com/'.$candidateUsername.'/',
+                    'source_lists' => ['profile_suggestions'],
+                    'evidence' => [
+                        ...$connection,
+                        'targetUsername' => $targetUsername,
+                        'suggestionScanId' => $scan?->id,
+                        'rawScanStatus' => [
+                            'statusLevel' => $payload['statusLevel'] ?? null,
+                            'statusMessage' => $payload['statusMessage'] ?? null,
+                        ],
+                    ],
+                    'status' => 'active',
+                    'first_seen_at' => $existing?->first_seen_at ?: $seenAt,
+                    'last_seen_at' => $seenAt,
+                    ...$this->profileColumnData($candidateProfile?->id, $candidateProfile?->id),
+                ],
+            );
+        }
+    }
+
+    private function suggestionPayload(array $payload): array
+    {
+        $suggestionPayload = $payload['suggestionScan'] ?? data_get($payload, 'profile.suggestionScan', []);
+
+        return is_array($suggestionPayload) ? $suggestionPayload : [];
+    }
+
+    private function normalizeSuggestionConnections(mixed $connections): array
+    {
+        if (! is_array($connections)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($connections as $connection) {
+            if (! is_array($connection) || ! is_scalar($connection['username'] ?? null)) {
+                continue;
+            }
+
+            $username = $this->scraper->normalizeInstagramUsername((string) $connection['username']);
+
+            if ($username === null) {
+                continue;
+            }
+
+            $sourceUsername = $this->scraper->normalizeInstagramUsername(
+                (string) ($connection['sourceSuggestionUsername'] ?? $connection['sourcePublicUsername'] ?? $username),
+            ) ?? $username;
+
+            $normalized[$username] = [
+                'username' => $username,
+                'displayName' => $this->nullableTrim($connection['displayName'] ?? null),
+                'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? null)
+                    ?: 'https://www.instagram.com/'.$username.'/',
+                'sourceSuggestionUsername' => $sourceUsername,
+                'sourcePublicUsername' => $sourceUsername,
+                'targetFoundAsSuggestion' => (bool) ($connection['targetFoundAsSuggestion'] ?? true),
+                'suggestionPreview' => is_array($connection['suggestionPreview'] ?? null)
+                    ? array_values(array_slice($connection['suggestionPreview'], 0, 12))
+                    : [],
+            ];
+        }
+
+        return array_values($normalized);
+    }
+
+    private function mergeSuggestionConnections(array ...$connectionGroups): array
+    {
+        $merged = [];
+
+        foreach ($connectionGroups as $connections) {
+            foreach ($connections as $connection) {
+                $username = $this->scraper->normalizeInstagramUsername((string) ($connection['username'] ?? ''));
+
+                if ($username === null) {
+                    continue;
+                }
+
+                $merged[$username] = [
+                    ...($merged[$username] ?? []),
+                    ...$connection,
+                    'username' => $username,
+                ];
+            }
+        }
+
+        return array_values($merged);
+    }
+
+    private function normalizePayloadScreenshotPaths(array $payload): array
+    {
+        foreach (['screenshotPath'] as $key) {
+            if (! is_scalar($payload[$key] ?? null)) {
+                continue;
+            }
+
+            $resolved = $this->scraper->resolvePublicStoragePath((string) $payload[$key]);
+
+            if ($resolved !== null) {
+                $payload[$key] = $resolved;
+            }
+        }
+
+        return $payload;
+    }
+
+    private function profileColumnData(?int $sourceProfileId, ?int $candidateProfileId): array
+    {
+        if (
+            ! Schema::hasColumn('tracked_person_instagram_inferred_connections', 'source_public_instagram_profile_id')
+            || ! Schema::hasColumn('tracked_person_instagram_inferred_connections', 'candidate_instagram_profile_id')
+        ) {
+            return [];
+        }
+
+        return array_filter([
+            'source_public_instagram_profile_id' => $sourceProfileId,
+            'candidate_instagram_profile_id' => $candidateProfileId,
+        ], static fn ($value): bool => $value !== null);
+    }
+
+    private function reportProgress(?callable $progress, array $payload): void
+    {
+        $this->assertActiveScanCurrent();
+
+        if (! $progress) {
+            return;
+        }
+
+        $payload['phase'] = $payload['phase'] ?? 'suggestions';
+        $payload['percent'] = max(0, min(100, (int) ($payload['percent'] ?? 0)));
+        $payload['message'] = (string) ($payload['message'] ?? 'Profilvorschlag-Verbindungsscan laeuft.');
+
+        $progress($payload);
+    }
+
+    private function withActiveScanControl(array $runtimeConfigOverrides = []): array
+    {
+        if ($this->activeScanControl === null) {
+            return $runtimeConfigOverrides;
+        }
+
+        return [
+            ...$runtimeConfigOverrides,
+            '_scanControl' => $this->activeScanControl,
+        ];
+    }
+
+    private function assertActiveScanCurrent(): void
+    {
+        if ($this->activeScanControl === null) {
+            return;
+        }
+
+        $this->scanCoordinator->assertCurrent(
+            (int) $this->activeScanControl['trackedPersonId'],
+            (int) $this->activeScanControl['generation'],
+        );
+    }
+
+    private function nullableTrim(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
+    }
+}

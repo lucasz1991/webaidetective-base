@@ -113,6 +113,7 @@ const isFollowersOnlyMode = operationMode === 'followers';
 const isFollowingOnlyMode = operationMode === 'following';
 const isFollowersSearchMode = ['followers-search', 'search-followers'].includes(operationMode);
 const isFollowingSearchMode = ['following-search', 'search-following'].includes(operationMode);
+const isSuggestionsMode = ['suggestions', 'profile-suggestions', 'suggestion-connections'].includes(operationMode);
 const isRelationshipSearchOnlyMode = isFollowersSearchMode || isFollowingSearchMode;
 const isRelationshipOnlyMode = isFollowersOnlyMode || isFollowingOnlyMode || isRelationshipSearchOnlyMode;
 const shouldCollectFollowers = operationMode === 'analyze' || isFollowersOnlyMode || isFollowersSearchMode;
@@ -662,6 +663,9 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
     relationshipSearchTargetMaxItems: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxItems, merged.relationshipSearchTargetMaxItems),
     relationshipSearchTargetMaxScrollRounds: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxScrollRounds, merged.relationshipSearchTargetMaxScrollRounds),
     relationshipSearchInputMaxAttempts: Math.floor(normalizeNumberAtLeast(input?.relationshipSearchInputMaxAttempts, merged.relationshipSearchInputMaxAttempts || 3, 1)),
+    suggestionScanMaxItems: normalizeOptionalPositiveInteger(input?.suggestionScanMaxItems, merged.suggestionScanMaxItems || 12) || 12,
+    suggestionCandidateMaxItems: normalizeOptionalPositiveInteger(input?.suggestionCandidateMaxItems, merged.suggestionCandidateMaxItems || 8) || 8,
+    suggestionDismissChecked: input?.suggestionDismissChecked === true || input?.suggestion_dismiss_checked === true,
     scriptWatchdogEnabled: input?.scriptWatchdogEnabled !== false && input?.script_watchdog_enabled !== false,
     scriptStallTimeoutMs: normalizeNumberAtLeast(input?.scriptStallTimeoutMs || input?.nodeStallTimeoutMs, merged.scriptStallTimeoutMs || 900000, 60000),
     browserDisconnectAbort: input?.browserDisconnectAbort !== false && input?.browser_disconnect_abort !== false,
@@ -772,6 +776,9 @@ function loadRuntimeConfig(configPath) {
     relationshipSearchTargetMaxItems: 0,
     relationshipSearchTargetMaxScrollRounds: 60,
     relationshipSearchInputMaxAttempts: 3,
+    suggestionScanMaxItems: 12,
+    suggestionCandidateMaxItems: 8,
+    suggestionDismissChecked: false,
     scriptWatchdogEnabled: true,
     scriptStallTimeoutMs: 900000,
     browserDisconnectAbort: true,
@@ -2963,6 +2970,230 @@ async function collectPublicFollowingList(page, username, profile, options = {})
   return collectPublicRelationshipList(page, username, profile, 'following', options);
 }
 
+async function runProfileSuggestionConnectionScan(page, runtimeState, notes, targetUsername, profileUrl) {
+  let runtimeConfig = runtimeState.runtimeConfig;
+  const maxTargetSuggestions = Math.max(1, Number(runtimeConfig.suggestionScanMaxItems || 12));
+  const maxCandidateSuggestions = Math.max(1, Number(runtimeConfig.suggestionCandidateMaxItems || 8));
+  const checkedCandidates = [];
+  const matchedCandidates = [];
+  let gracefullyStopped = false;
+  let rateLimited = false;
+  let rateLimitText = null;
+  let dismissedCount = 0;
+
+  progressLog('suggestions-opening', {
+    relationship: 'suggestions',
+    loaded: 0,
+    expectedCount: maxTargetSuggestions,
+    message: `Profilvorschlaege fuer @${targetUsername} werden gesucht.`,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  await scrollToProfileSuggestions(page, 6);
+  const targetSeeAllClicked = await clickProfileSuggestionsSeeAll(page);
+
+  if (targetSeeAllClicked) {
+    await sleep(1600);
+  }
+
+  const targetSuggestions = await collectProfileSuggestionItems(
+    page,
+    targetUsername,
+    maxTargetSuggestions,
+  );
+  const candidates = targetSuggestions.items.slice(0, maxTargetSuggestions);
+
+  rateLimited = Boolean(targetSuggestions.rateLimited);
+  rateLimitText = targetSuggestions.rateLimitText || null;
+
+  progressLog(rateLimited ? 'suggestions-rate-limited' : 'suggestions-target-list', {
+    relationship: 'suggestions',
+    loaded: 0,
+    expectedCount: candidates.length,
+    suggestionsObserved: candidates.length,
+    message: rateLimited
+      ? 'Instagram hat die Profilvorschlaege per Rate-Limit blockiert.'
+      : `${candidates.length} Profilvorschlaege gefunden. Kandidatenpruefung startet.`,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  if (runtimeConfig.suggestionDismissChecked && candidates.length > 0) {
+    for (const candidate of candidates) {
+      const dismissed = await dismissVisibleSuggestion(page, candidate.username);
+
+      if (dismissed) {
+        dismissedCount += 1;
+        await sleep(350);
+      }
+    }
+  }
+
+  if (!rateLimited) {
+    for (let index = 0; index < candidates.length; index += 1) {
+      const candidate = candidates[index];
+      const stopRequest = markGracefulStopIfRequested('suggestions', {
+        loaded: checkedCandidates.length,
+        expectedCount: candidates.length,
+        foundSuggestions: matchedCandidates.length,
+        suggestionConnectionsPreview: matchedCandidates.slice(-40),
+      });
+
+      if (stopRequest) {
+        gracefullyStopped = true;
+        break;
+      }
+
+      progressLog('suggestions-candidate-opening', {
+        relationship: 'suggestions',
+        loaded: checkedCandidates.length,
+        expectedCount: candidates.length,
+        candidateUsername: candidate.username,
+        foundSuggestions: matchedCandidates.length,
+        suggestionConnectionsPreview: matchedCandidates.slice(-40),
+        message: `Vorschlaege bei @${candidate.username} werden geprueft.`,
+      });
+
+      const candidateNavigation = await navigateWithSoftTimeout(page, candidate.profileUrl, runtimeConfig);
+
+      if (!candidateNavigation.ok) {
+        checkedCandidates.push({
+          ...candidate,
+          checked: false,
+          error: candidateNavigation.error,
+        });
+
+        progressLog('suggestions-candidate-error', {
+          relationship: 'suggestions',
+          loaded: checkedCandidates.length,
+          expectedCount: candidates.length,
+          candidateUsername: candidate.username,
+          foundSuggestions: matchedCandidates.length,
+          suggestionConnectionsPreview: matchedCandidates.slice(-40),
+          message: `@${candidate.username} konnte nicht stabil geladen werden.`,
+        });
+
+        continue;
+      }
+
+      await sleep(1300);
+      await scrollToProfileSuggestions(page, 5);
+      const candidateSeeAllClicked = await clickProfileSuggestionsSeeAll(page);
+
+      if (candidateSeeAllClicked) {
+        await sleep(1300);
+      }
+
+      const candidateSuggestions = await collectProfileSuggestionItems(
+        page,
+        candidate.username,
+        maxCandidateSuggestions,
+      );
+
+      if (candidateSuggestions.rateLimited) {
+        rateLimited = true;
+        rateLimitText = candidateSuggestions.rateLimitText || rateLimitText;
+      }
+
+      const targetFound = candidateSuggestions.items.some((item) => (
+        normalizeInstagramUsername(item.username) === targetUsername
+      ));
+      const checkedCandidate = {
+        ...candidate,
+        checked: true,
+        targetFoundAsSuggestion: targetFound,
+        suggestionsObserved: candidateSuggestions.items.length,
+        suggestionsAvailable: Boolean(candidateSuggestions.available),
+        suggestionsRateLimited: Boolean(candidateSuggestions.rateLimited),
+        suggestionPreview: candidateSuggestions.items.slice(0, maxCandidateSuggestions),
+      };
+
+      checkedCandidates.push(checkedCandidate);
+
+      if (targetFound) {
+        matchedCandidates.push({
+          username: candidate.username,
+          displayName: candidate.displayName || null,
+          profileUrl: candidate.profileUrl,
+          sourceSuggestionUsername: candidate.username,
+          sourcePublicUsername: candidate.username,
+          targetFoundAsSuggestion: true,
+          suggestionPreview: candidateSuggestions.items.slice(0, maxCandidateSuggestions),
+        });
+      }
+
+      progressLog(rateLimited ? 'suggestions-rate-limited' : 'suggestions-candidate-checked', {
+        relationship: 'suggestions',
+        loaded: checkedCandidates.length,
+        expectedCount: candidates.length,
+        candidateUsername: candidate.username,
+        targetFoundAsSuggestion: targetFound,
+        suggestionsObserved: candidateSuggestions.items.length,
+        foundSuggestions: matchedCandidates.length,
+        suggestionConnectionsPreview: matchedCandidates.slice(-40),
+        message: targetFound
+          ? `Vorschlag-Verbindung gefunden: @${candidate.username} zeigt @${targetUsername}.`
+          : `@${candidate.username} geprueft; @${targetUsername} war nicht in den ersten Vorschlaegen.`,
+        ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
+      });
+
+      if (rateLimited) {
+        break;
+      }
+    }
+  }
+
+  const statusLevel = gracefullyStopped || rateLimited ? 'partial' : 'success';
+  const statusMessage = gracefullyStopped
+    ? 'Profilvorschlag-Verbindungsscan wurde beendet; bisherige Treffer wurden gespeichert.'
+    : (rateLimited
+      ? 'Profilvorschlag-Verbindungsscan wurde wegen Instagram-Rate-Limit pausiert.'
+      : 'Profilvorschlag-Verbindungsscan abgeschlossen.');
+
+  progressLog('suggestions-complete', {
+    relationship: 'suggestions',
+    loaded: checkedCandidates.length,
+    expectedCount: candidates.length,
+    foundSuggestions: matchedCandidates.length,
+    suggestionConnectionsPreview: matchedCandidates.slice(-40),
+    gracefullyStopped,
+    rateLimited,
+    message: statusMessage,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  notes.push(
+    `Profilvorschlag-Verbindungsscan: ${checkedCandidates.length} von ${candidates.length} Kandidaten geprueft, ${matchedCandidates.length} Treffer.`,
+  );
+
+  if (dismissedCount > 0) {
+    notes.push(`${dismissedCount} gepruefte Vorschlaege wurden aus der sichtbaren Vorschlagsliste entfernt.`);
+  }
+
+  if (rateLimited) {
+    notes.push('Instagram hat die Profilvorschlaege per Rate-Limit blockiert; der Scan wurde pausiert.');
+  }
+
+  return {
+    ok: !rateLimited,
+    statusLevel,
+    statusMessage,
+    targetUsername,
+    attempted: true,
+    available: Boolean(targetSuggestions.available),
+    seeAllClicked: targetSeeAllClicked,
+    observedCount: candidates.length,
+    checkedCount: checkedCandidates.length,
+    matchCount: matchedCandidates.length,
+    dismissedCount,
+    rateLimited,
+    rateLimitText,
+    gracefullyStopped,
+    suggestions: candidates,
+    checkedCandidates,
+    matches: matchedCandidates,
+  };
+}
+
 async function clickButtonByText(page, candidateTexts) {
   const normalizedCandidates = candidateTexts.map((text) => normalizeText(text).toLowerCase());
 
@@ -2977,6 +3208,250 @@ async function clickButtonByText(page, candidateTexts) {
     target.click();
     return true;
   }, normalizedCandidates).catch(() => false);
+}
+
+async function scrollToProfileSuggestions(page, maxRounds = 5) {
+  let lastScrollY = -1;
+
+  for (let round = 0; round < maxRounds; round += 1) {
+    const state = await page.evaluate(() => {
+      const before = window.scrollY;
+      window.scrollBy(0, Math.max(700, window.innerHeight * 0.9));
+      const after = window.scrollY;
+      const text = String(document.body?.innerText || document.body?.textContent || '');
+      const suggestionsVisible = /(?:vorschl(?:a|\u00e4)ge|f(?:u|\u00fc)r dich vorgeschlagen|suggested|suggestions)/i.test(text);
+
+      return {
+        before,
+        after,
+        atBottom: after + window.innerHeight >= document.documentElement.scrollHeight - 12,
+        suggestionsVisible,
+      };
+    }).catch(() => ({
+      before: 0,
+      after: 0,
+      atBottom: true,
+      suggestionsVisible: false,
+    }));
+
+    await sleep(650);
+
+    if (state.suggestionsVisible || state.atBottom || state.after === lastScrollY) {
+      return state;
+    }
+
+    lastScrollY = state.after;
+  }
+
+  return {
+    suggestionsVisible: false,
+    atBottom: false,
+  };
+}
+
+async function clickProfileSuggestionsSeeAll(page) {
+  return page.evaluate(() => {
+    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const visible = (element) => {
+      const rect = element.getBoundingClientRect();
+
+      return rect.width > 0 && rect.height > 0;
+    };
+    const seeAllPattern = /^(alle ansehen|alle anzeigen|see all|show all)$/i;
+    const elements = Array.from(document.querySelectorAll('button, a, div[role="button"], span'))
+      .filter(visible);
+    const target = elements.find((element) => {
+      const text = normalizeElementText(element.innerText || element.textContent || '');
+
+      return text !== '' && text.length <= 60 && seeAllPattern.test(text);
+    });
+
+    if (!target) {
+      return false;
+    }
+
+    const clickable = target.closest('button, a, div[role="button"]') || target;
+    clickable.click();
+
+    return true;
+  }).catch(() => false);
+}
+
+async function collectProfileSuggestionItems(page, currentUsername, maxItems = 12) {
+  const normalizedCurrentUsername = normalizeInstagramUsername(currentUsername);
+  const limit = Math.max(1, Number(maxItems || 12));
+
+  return page.evaluate(({ currentUsername, limit }) => {
+    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const normalizeUsername = (value = '') => String(value || '')
+      .replace(/^@/, '')
+      .replace(/[^a-z0-9._]/gi, '')
+      .toLowerCase();
+    const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|try again later|we restrict certain activity|we limit how often)/i;
+    const bodyText = normalizeElementText(document.body?.innerText || document.body?.textContent || '');
+
+    if (rateLimitPattern.test(bodyText)) {
+      return {
+        items: [],
+        available: false,
+        rateLimited: true,
+        rateLimitText: bodyText.slice(0, 500),
+        headingText: null,
+      };
+    }
+
+    const reservedPaths = new Set([
+      'accounts',
+      'direct',
+      'explore',
+      'p',
+      'reel',
+      'reels',
+      'stories',
+      'tv',
+    ]);
+    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge f(?:u|\u00fc)r dich|vorschl(?:a|\u00e4)ge|suggested for you|suggestions for you|suggested|suggestions)$/i;
+    const dialog = document.querySelector('div[role="dialog"]');
+    const container = dialog || document.body;
+    const getOwnText = (element) => normalizeElementText(
+      Array.from(element.childNodes || [])
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent || '')
+        .join(' '),
+    );
+    const isSuggestionHeading = (element) => {
+      const ownText = getOwnText(element);
+      const fullText = normalizeElementText(element.innerText || element.textContent || '');
+      const text = ownText || fullText;
+
+      return text !== '' && text.length <= 80 && suggestionHeadingPattern.test(text);
+    };
+    const suggestionHeading = Array.from(container.querySelectorAll('span, div, h1, h2, h3, h4, p'))
+      .find(isSuggestionHeading) || null;
+    const isAfterSuggestionHeading = (element) => {
+      if (!suggestionHeading) {
+        return false;
+      }
+
+      return Boolean(suggestionHeading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+    };
+    const anchorScope = dialog || suggestionHeading ? container : document.body;
+    const anchors = Array.from(anchorScope.querySelectorAll('a[href]'))
+      .filter((anchor) => dialog || isAfterSuggestionHeading(anchor));
+    const itemsByUsername = new Map();
+
+    for (const anchor of anchors) {
+      let pathname = '';
+
+      try {
+        pathname = new URL(anchor.getAttribute('href'), window.location.origin).pathname;
+      } catch (error) {
+        continue;
+      }
+
+      const parts = pathname.split('/').filter(Boolean);
+
+      if (parts.length !== 1 || reservedPaths.has(parts[0])) {
+        continue;
+      }
+
+      const username = normalizeUsername(parts[0]);
+
+      if (!username || username === currentUsername || !/^[a-z0-9._]+$/i.test(username)) {
+        continue;
+      }
+
+      const row = anchor.closest('div[role="button"], li, article, div') || anchor;
+      const rawLines = `${anchor.innerText || ''}\n${row.innerText || ''}`
+        .split('\n')
+        .map((line) => normalizeElementText(line))
+        .filter(Boolean);
+      const lines = Array.from(new Set(rawLines));
+      const ignoredLinePattern = /^(folgen|abonniert|entfernen|remove|follow|following|x)$/i;
+      const displayName = lines.find((line) => (
+        line.toLowerCase() !== username
+        && !ignoredLinePattern.test(line)
+        && line.length <= 120
+      )) || null;
+
+      if (!itemsByUsername.has(username)) {
+        itemsByUsername.set(username, {
+          username,
+          displayName,
+          profileUrl: `https://www.instagram.com/${username}/`,
+        });
+      }
+
+      if (itemsByUsername.size >= limit) {
+        break;
+      }
+    }
+
+    return {
+      items: Array.from(itemsByUsername.values()),
+      available: Boolean(dialog || suggestionHeading || itemsByUsername.size > 0),
+      rateLimited: false,
+      rateLimitText: null,
+      headingText: suggestionHeading
+        ? normalizeElementText(suggestionHeading.innerText || suggestionHeading.textContent || '')
+        : null,
+    };
+  }, { currentUsername: normalizedCurrentUsername, limit }).catch(() => ({
+    items: [],
+    available: false,
+    rateLimited: false,
+    rateLimitText: null,
+    headingText: null,
+  }));
+}
+
+async function dismissVisibleSuggestion(page, username) {
+  const normalizedUsername = normalizeInstagramUsername(username);
+
+  if (!normalizedUsername) {
+    return false;
+  }
+
+  return page.evaluate((username) => {
+    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const anchors = Array.from(document.querySelectorAll('a[href]'));
+    const anchor = anchors.find((candidate) => {
+      try {
+        const parts = new URL(candidate.getAttribute('href'), window.location.origin).pathname
+          .split('/')
+          .filter(Boolean);
+
+        return parts.length === 1 && parts[0].toLowerCase() === username;
+      } catch (error) {
+        return false;
+      }
+    });
+
+    if (!anchor) {
+      return false;
+    }
+
+    const row = anchor.closest('div[role="button"], li, article, div') || anchor.parentElement;
+
+    if (!row) {
+      return false;
+    }
+
+    const button = Array.from(row.querySelectorAll('button, div[role="button"]'))
+      .find((element) => {
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+        const ariaLabel = normalizeElementText(element.getAttribute('aria-label') || '');
+
+        return /^(x|entfernen|remove|close)$/i.test(text) || /(?:entfernen|remove|close)/i.test(ariaLabel);
+      });
+
+    if (!button) {
+      return false;
+    }
+
+    button.click();
+    return true;
+  }, normalizedUsername).catch(() => false);
 }
 
 async function dismissCookieConsentIfPresent(page) {
@@ -5066,6 +5541,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
   };
   let title = null;
   let finalUrl = profileUrl;
+  let suggestionScanResult = null;
   let loginDiagnostics = {
     attempted: false,
     success: false,
@@ -5438,6 +5914,24 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
 
     if (gracefullyStopped) {
       notes.push('Instagram-Scan wurde ueber die Oberflaeche nach den Grunddaten beendet.');
+    }
+
+    if (isSuggestionsMode && !gracefullyStopped) {
+      suggestionScanResult = await runProfileSuggestionConnectionScan(
+        page,
+        runtimeState,
+        notes,
+        username,
+        profileUrl,
+      );
+      initialProfile.suggestionScan = suggestionScanResult;
+      initialHtml = await page.content().catch(() => initialHtml);
+      title = await page.title().catch(() => title);
+      finalUrl = page.url();
+
+      if (suggestionScanResult.gracefullyStopped) {
+        gracefullyStopped = true;
+      }
     }
 
     if (shouldCollectFollowers && !gracefullyStopped) {
