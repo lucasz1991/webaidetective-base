@@ -8,6 +8,8 @@ use App\Livewire\Auth\Register;
 use Illuminate\Support\Facades\Auth;
 use App\Livewire\Dashboard;
 use App\Livewire\User\NetworkMap;
+use App\Models\TrackedPerson;
+use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use App\Livewire\Tutor\TutorDashboard;
 use App\Livewire\Tutor\CourseList;
 use App\Livewire\Tutor\Courses\CourseShow;
@@ -69,6 +71,21 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session'), 'verified']
     Route::middleware(['role:guest'])->prefix('user')->group(function () {
         Route::get('/dashboard', Dashboard::class)->name('dashboard');
         Route::get('/network', NetworkMap::class)->name('network');
+        Route::post('/tracked-people/{trackedPerson}/instagram/stop-scan', function (TrackedPerson $trackedPerson) {
+            abort_unless((int) $trackedPerson->user_id === (int) Auth::id(), 403);
+
+            $requested = app(TrackedPersonInstagramScanCoordinator::class)->requestGracefulStop(
+                $trackedPerson->id,
+                'Instagram-Scan wurde in der Oberflaeche beendet.',
+            );
+
+            return response()->json([
+                'ok' => $requested,
+                'message' => $requested
+                    ? 'Stop wurde angefordert. Der aktuelle Zwischestand wird gespeichert.'
+                    : 'Fuer diese Person laeuft aktuell kein Instagram-Scan.',
+            ]);
+        })->name('tracked-people.instagram.stop-scan');
         Route::get('/messages', MessageBox::class)->name('messages');
         Route::get('/contact', Contact::class)->name('contact');
         Route::get('/termsandconditions', TermsAndConditions::class)->name('terms');

@@ -215,10 +215,10 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini,scanPublicProfileConnections"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanPublicProfileConnections"
         class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/70 px-4"
     >
-        <div class="w-full max-w-2xl rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
+        <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
             <div class="mx-auto rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-1">
                 <div class="h-10 w-10 animate-spin rounded-full border-4 border-white/70 border-t-slate-950 bg-white"></div>
             </div>
@@ -229,8 +229,9 @@
             </div>
             <h3 class="mt-1 text-lg font-bold text-slate-950">Instagram-Scan laeuft</h3>
             <p class="mt-2 text-sm leading-6 text-slate-600" wire:stream="instagram-progress-message">
-                Profil, Kennzahlen und Listen werden abgearbeitet.
+                Profil, Kennzahlen oder einzelne Listen werden abgearbeitet.
             </p>
+            <div wire:stream="instagram-progress-live-preview"></div>
             <div class="mt-2 text-xs font-semibold text-slate-500" wire:stream="instagram-progress-live-counts"></div>
             <div wire:stream="instagram-progress-connection-results"></div>
             <div class="mt-5">
@@ -241,6 +242,38 @@
                 <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200" wire:stream="instagram-progress-bar">
                     <div class="h-full rounded-full bg-gradient-to-r from-rose-500 to-fuchsia-600" style="width: 0%"></div>
                 </div>
+            </div>
+            <div class="mt-5 flex justify-center">
+                <button
+                    type="button"
+                    data-instagram-stop-url="{{ route('tracked-people.instagram.stop-scan', $trackedPerson) }}"
+                    onclick="
+                        const button = this;
+                        if (button.dataset.stopping === '1') return;
+                        button.dataset.stopping = '1';
+                        button.disabled = true;
+                        button.querySelector('[data-stop-label]').textContent = 'Stop wird angefordert...';
+                        fetch(button.dataset.instagramStopUrl, {
+                            method: 'POST',
+                            credentials: 'same-origin',
+                            headers: {
+                                'Accept': 'application/json',
+                                'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]')?.getAttribute('content') || '',
+                            },
+                        })
+                            .then(() => {
+                                button.querySelector('[data-stop-label]').textContent = 'Stop angefordert. Speichert...';
+                            })
+                            .catch(() => {
+                                button.dataset.stopping = '0';
+                                button.disabled = false;
+                                button.querySelector('[data-stop-label]').textContent = 'Stop erneut versuchen';
+                            });
+                    "
+                    class="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-100 disabled:cursor-wait disabled:opacity-70"
+                >
+                    <span data-stop-label>Scan beenden und speichern</span>
+                </button>
             </div>
         </div>
     </div>
@@ -336,14 +369,26 @@
         <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
             <div class="flex items-center justify-between gap-3">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
-                <button
-                    type="button"
-                    wire:click="$set('showFollowersModal', true)"
-                    class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    @disabled($latestFollowerItems->isEmpty() && $latestFollowerRemovedItems->isEmpty() && $latestFollowerRemovedHistoryItems->isEmpty())
-                >
-                    Liste
-                </button>
+                <div class="flex gap-1.5">
+                    <button
+                        type="button"
+                        wire:click="scanInstagramFollowersList"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramFollowersList"
+                        class="rounded-lg border border-pink-200 bg-pink-50 px-2.5 py-1 text-xs font-semibold text-pink-700 hover:bg-pink-100 disabled:cursor-wait disabled:opacity-60"
+                    >
+                        <span wire:loading.remove wire:target="scanInstagramFollowersList">Scannen</span>
+                        <span wire:loading wire:target="scanInstagramFollowersList">Laeuft...</span>
+                    </button>
+                    <button
+                        type="button"
+                        wire:click="$set('showFollowersModal', true)"
+                        class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        @disabled($latestFollowerItems->isEmpty() && $latestFollowerRemovedItems->isEmpty() && $latestFollowerRemovedHistoryItems->isEmpty())
+                    >
+                        Liste
+                    </button>
+                </div>
             </div>
             <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '—' }}</div>
             <div class="mt-1 text-xs text-slate-500">{{ number_format($latestFollowerStats['activeCount']) }} bekannt aktiv/ungeklaert</div>
@@ -365,14 +410,26 @@
         <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
             <div class="flex items-center justify-between gap-3">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gefolgt</div>
-                <button
-                    type="button"
-                    wire:click="$set('showFollowingModal', true)"
-                    class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    @disabled($latestFollowingItems->isEmpty() && $latestFollowingRemovedItems->isEmpty() && $latestFollowingRemovedHistoryItems->isEmpty())
-                >
-                    Liste
-                </button>
+                <div class="flex gap-1.5">
+                    <button
+                        type="button"
+                        wire:click="scanInstagramFollowingList"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramFollowingList"
+                        class="rounded-lg border border-pink-200 bg-pink-50 px-2.5 py-1 text-xs font-semibold text-pink-700 hover:bg-pink-100 disabled:cursor-wait disabled:opacity-60"
+                    >
+                        <span wire:loading.remove wire:target="scanInstagramFollowingList">Scannen</span>
+                        <span wire:loading wire:target="scanInstagramFollowingList">Laeuft...</span>
+                    </button>
+                    <button
+                        type="button"
+                        wire:click="$set('showFollowingModal', true)"
+                        class="rounded-lg border border-slate-300 px-2.5 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        @disabled($latestFollowingItems->isEmpty() && $latestFollowingRemovedItems->isEmpty() && $latestFollowingRemovedHistoryItems->isEmpty())
+                    >
+                        Liste
+                    </button>
+                </div>
             </div>
             <div class="mt-2 text-xl font-bold text-slate-900 sm:text-2xl">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '—' }}</div>
             <div class="mt-1 text-xs text-slate-500">{{ number_format($latestFollowingStats['activeCount']) }} bekannt aktiv/ungeklaert</div>

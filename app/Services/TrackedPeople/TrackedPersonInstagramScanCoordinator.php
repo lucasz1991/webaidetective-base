@@ -3,6 +3,7 @@
 namespace App\Services\TrackedPeople;
 
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
 use Symfony\Component\Process\Process;
 
@@ -13,12 +14,18 @@ class TrackedPersonInstagramScanCoordinator
         $this->cancelActive($trackedPersonId, 'Neuer Instagram-Scan wurde gestartet.');
 
         $generation = $this->nextGeneration($trackedPersonId);
+        $gracefulStopFilePath = $this->gracefulStopFilePath($trackedPersonId, $generation);
+        File::ensureDirectoryExists(dirname($gracefulStopFilePath));
+        File::delete($gracefulStopFilePath);
+
         $context = [
             'trackedPersonId' => $trackedPersonId,
             'generation' => $generation,
             'label' => $label,
             'startedAt' => now()->toIso8601String(),
             'processes' => [],
+            'gracefulStopFilePath' => $gracefulStopFilePath,
+            'gracefulStopRequested' => false,
         ];
 
         Cache::put($this->activeKey($trackedPersonId), $context, now()->addHours(12));
@@ -31,6 +38,7 @@ class TrackedPersonInstagramScanCoordinator
         $active = $this->active($trackedPersonId);
 
         if ((int) ($active['generation'] ?? 0) === $generation) {
+            $this->deleteGracefulStopFile($active);
             Cache::forget($this->activeKey($trackedPersonId));
         }
     }
@@ -47,6 +55,58 @@ class TrackedPersonInstagramScanCoordinator
                 'Instagram-Scan wurde abgebrochen, weil fuer diese Person ein neuer Scan gestartet wurde.'
             );
         }
+    }
+
+    public function requestGracefulStop(int $trackedPersonId, string $reason): bool
+    {
+        $active = $this->active($trackedPersonId);
+        $generation = (int) ($active['generation'] ?? 0);
+
+        if ($generation <= 0) {
+            return false;
+        }
+
+        $active['gracefulStopRequested'] = true;
+        $active['gracefulStopReason'] = $reason;
+        $active['gracefulStopRequestedAt'] = now()->toIso8601String();
+        $active['gracefulStopFilePath'] = (string) (
+            $active['gracefulStopFilePath'] ?? $this->gracefulStopFilePath($trackedPersonId, $generation)
+        );
+
+        Cache::put($this->activeKey($trackedPersonId), $active, now()->addHours(12));
+        $this->writeGracefulStopFile($active, $reason);
+
+        return true;
+    }
+
+    public function shouldStopGracefully(int $trackedPersonId, int $generation): bool
+    {
+        $active = $this->active($trackedPersonId);
+
+        if ((int) ($active['generation'] ?? 0) !== $generation) {
+            return false;
+        }
+
+        if ((bool) ($active['gracefulStopRequested'] ?? false)) {
+            return true;
+        }
+
+        $filePath = (string) ($active['gracefulStopFilePath'] ?? '');
+
+        return $filePath !== '' && File::exists($filePath);
+    }
+
+    public function gracefulStopReason(int $trackedPersonId, int $generation): ?string
+    {
+        $active = $this->active($trackedPersonId);
+
+        if ((int) ($active['generation'] ?? 0) !== $generation) {
+            return null;
+        }
+
+        $reason = $active['gracefulStopReason'] ?? null;
+
+        return is_string($reason) && $reason !== '' ? $reason : null;
     }
 
     public function registerProcess(int $trackedPersonId, int $generation, int $pid, string $label): void
@@ -105,6 +165,7 @@ class TrackedPersonInstagramScanCoordinator
             $this->terminateProcessTree($pid);
         }
 
+        $this->deleteGracefulStopFile($active);
         Cache::put($this->generationKey($trackedPersonId), $this->nextGeneration($trackedPersonId), now()->addHours(12));
         Cache::put($this->cancelReasonKey($trackedPersonId), $reason, now()->addHour());
         Cache::forget($this->activeKey($trackedPersonId));
@@ -200,6 +261,53 @@ class TrackedPersonInstagramScanCoordinator
         }
 
         (new Process(['kill', '-'.$signal, (string) $pid]))->setTimeout(5)->run();
+    }
+
+    private function writeGracefulStopFile(array $active, string $reason): void
+    {
+        $filePath = (string) ($active['gracefulStopFilePath'] ?? '');
+
+        if ($filePath === '') {
+            return;
+        }
+
+        try {
+            File::ensureDirectoryExists(dirname($filePath));
+            File::put($filePath, json_encode([
+                'requestedAt' => now()->toIso8601String(),
+                'reason' => $reason,
+                'trackedPersonId' => (int) ($active['trackedPersonId'] ?? 0),
+                'generation' => (int) ($active['generation'] ?? 0),
+            ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+        } catch (\Throwable $exception) {
+            Log::debug('Instagram-Scan-Stoppsignal konnte nicht geschrieben werden.', [
+                'path' => $filePath,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    private function deleteGracefulStopFile(array $active): void
+    {
+        $filePath = (string) ($active['gracefulStopFilePath'] ?? '');
+
+        if ($filePath === '') {
+            return;
+        }
+
+        try {
+            File::delete($filePath);
+        } catch (\Throwable $exception) {
+            Log::debug('Instagram-Scan-Stoppsignal konnte nicht geloescht werden.', [
+                'path' => $filePath,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+    }
+
+    private function gracefulStopFilePath(int $trackedPersonId, int $generation): string
+    {
+        return storage_path('app/tmp/instagram-scan-stop-'.$trackedPersonId.'-'.$generation.'.json');
     }
 
     private function activeKey(int $trackedPersonId): string

@@ -112,6 +112,15 @@ class InstagramProfileDataExtractor
             'reason' => data_get($relationshipList, 'reason'),
             'rateLimited' => (bool) data_get($relationshipList, 'rateLimited', false),
             'rateLimitText' => data_get($relationshipList, 'rateLimitText'),
+            'gracefullyStopped' => (bool) data_get($relationshipList, 'gracefullyStopped', false),
+            'searchAttempted' => (bool) data_get($relationshipList, 'searchAttempted', false),
+            'searchInputAvailable' => (bool) data_get($relationshipList, 'searchInputAvailable', false),
+            'searchQueries' => array_values(is_array(data_get($relationshipList, 'searchQueries')) ? data_get($relationshipList, 'searchQueries') : []),
+            'searchRounds' => (int) data_get($relationshipList, 'searchRounds', 0),
+            'searchAddedCount' => (int) data_get($relationshipList, 'searchAddedCount', 0),
+            'searchStopReason' => data_get($relationshipList, 'searchStopReason'),
+            'searchMaxDepth' => (int) data_get($relationshipList, 'searchMaxDepth', 0),
+            'searchExpandedQueryCount' => (int) data_get($relationshipList, 'searchExpandedQueryCount', 0),
             'items' => $items,
         ];
     }

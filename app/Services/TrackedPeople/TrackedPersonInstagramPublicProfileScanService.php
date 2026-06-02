@@ -74,6 +74,7 @@ class TrackedPersonInstagramPublicProfileScanService
         $liveInferredFollowers = [];
         $liveInferredFollowing = [];
         $pausedForRateLimit = false;
+        $stoppedByUser = false;
 
         $this->reportProgress($progress, [
             'phase' => 'public-connections',
@@ -86,6 +87,11 @@ class TrackedPersonInstagramPublicProfileScanService
         ]);
 
         foreach ($publicProfiles->values() as $index => $publicProfile) {
+            if ($this->shouldStopGracefully()) {
+                $stoppedByUser = true;
+                break;
+            }
+
             $publicUsername = $this->scraper->normalizeInstagramUsername($publicProfile->username);
 
             if ($publicUsername === null) {
@@ -261,6 +267,11 @@ class TrackedPersonInstagramPublicProfileScanService
                     'inferredFollowing' => $liveInferredFollowing,
                 ]);
 
+                if ((bool) ($payload['gracefullyStopped'] ?? false)) {
+                    $stoppedByUser = true;
+                    break;
+                }
+
                 if ((bool) ($payload['stoppedForRateLimit'] ?? false) || $scanPausedForRateLimit) {
                     $pausedForRateLimit = true;
                     break;
@@ -282,9 +293,11 @@ class TrackedPersonInstagramPublicProfileScanService
         $this->reportProgress($progress, [
             'phase' => 'done',
             'percent' => 100,
-            'message' => $pausedForRateLimit
+            'message' => $stoppedByUser
+                ? 'Public-Profile-Verbindungsscan wurde beendet. Bisherige Treffer und Kandidatenfortschritt wurden gespeichert.'
+                : ($pausedForRateLimit
                 ? 'Public-Profile-Verbindungsscan wegen Instagram-Rate-Limit pausiert. Spaeter erneut starten zum Fortsetzen.'
-                : 'Public-Profile-Verbindungsscan abgeschlossen.',
+                : 'Public-Profile-Verbindungsscan abgeschlossen.'),
             'foundFollowers' => count($liveInferredFollowers),
             'foundFollowing' => count($liveInferredFollowing),
             'inferredFollowers' => $liveInferredFollowers,
@@ -383,7 +396,7 @@ class TrackedPersonInstagramPublicProfileScanService
                 $payload = is_array($scan->raw_payload ?? null) ? $scan->raw_payload : [];
 
                 return (bool) data_get($payload, 'isResumable', false)
-                    && in_array(data_get($payload, 'progressStatus'), ['in_progress', 'rate_limited'], true);
+                    && in_array(data_get($payload, 'progressStatus'), ['in_progress', 'rate_limited', 'stopped'], true);
             });
 
         if ($resumableScan) {
@@ -458,6 +471,7 @@ class TrackedPersonInstagramPublicProfileScanService
         $candidateUsername = $this->scraper->normalizeInstagramUsername((string) ($state['candidateUsername'] ?? ''));
         $stage = (string) ($state['stage'] ?? '');
         $stoppedForRateLimit = (bool) ($state['stoppedForRateLimit'] ?? false);
+        $gracefullyStopped = (bool) ($state['gracefullyStopped'] ?? false) || $stage === 'scan-stop-requested';
 
         if ($stage === 'candidate-scan-complete' && $candidateUsername !== null && ! in_array($candidateUsername, $checkedCandidateUsernames, true)) {
             $checkedCandidateUsernames[] = $candidateUsername;
@@ -470,10 +484,12 @@ class TrackedPersonInstagramPublicProfileScanService
                 : [],
         );
         $candidateErrorScreenshots = array_values(array_filter(data_get($payload, 'candidateErrorScreenshots', []), 'is_array'));
-        $progressStatus = $stoppedForRateLimit ? 'rate_limited' : 'in_progress';
-        $statusMessage = $stoppedForRateLimit
-            ? 'Verbindungsscan wegen Instagram-Rate-Limit pausiert. Er kann spaeter fortgesetzt werden.'
-            : (string) ($state['message'] ?? 'Verbindungsscan laeuft; Kandidatenfortschritt wird gespeichert.');
+        $progressStatus = $gracefullyStopped ? 'stopped' : ($stoppedForRateLimit ? 'rate_limited' : 'in_progress');
+        $statusMessage = $gracefullyStopped
+            ? 'Verbindungsscan wurde beendet. Der Kandidatenfortschritt wurde gespeichert.'
+            : ($stoppedForRateLimit
+                ? 'Verbindungsscan wegen Instagram-Rate-Limit pausiert. Er kann spaeter fortgesetzt werden.'
+                : (string) ($state['message'] ?? 'Verbindungsscan laeuft; Kandidatenfortschritt wird gespeichert.'));
 
         $payload = [
             ...$payload,
@@ -496,7 +512,9 @@ class TrackedPersonInstagramPublicProfileScanService
             'lastProgressMessage' => (string) ($state['message'] ?? ''),
             'lastProgressAt' => now('UTC')->toISOString(),
             'stoppedForRateLimit' => $stoppedForRateLimit,
+            'gracefullyStopped' => $gracefullyStopped,
             'rateLimitedCandidateUsername' => $stoppedForRateLimit ? $candidateUsername : data_get($payload, 'rateLimitedCandidateUsername'),
+            'stoppedAt' => $gracefullyStopped ? now('UTC')->toISOString() : data_get($payload, 'stoppedAt'),
         ];
         $payload = $this->normalizePayloadScreenshotPaths($payload);
 
@@ -529,6 +547,7 @@ class TrackedPersonInstagramPublicProfileScanService
             $this->normalizeProgressConnectionItems(data_get($finalPayload, 'inferredFollowing', []), $publicUsername),
         );
         $stoppedForRateLimit = (bool) ($finalPayload['stoppedForRateLimit'] ?? data_get($progressPayload, 'stoppedForRateLimit', false));
+        $gracefullyStopped = (bool) ($finalPayload['gracefullyStopped'] ?? data_get($progressPayload, 'gracefullyStopped', false));
         $progressCandidateErrorScreenshots = data_get($progressPayload, 'candidateErrorScreenshots', []);
         $finalCandidateErrorScreenshots = data_get($finalPayload, 'candidateErrorScreenshots', []);
         $progressCandidateErrorScreenshots = is_array($progressCandidateErrorScreenshots) ? $progressCandidateErrorScreenshots : [];
@@ -537,8 +556,8 @@ class TrackedPersonInstagramPublicProfileScanService
         return [
             ...$progressPayload,
             ...$finalPayload,
-            'progressStatus' => $stoppedForRateLimit ? 'rate_limited' : 'completed',
-            'isResumable' => $stoppedForRateLimit,
+            'progressStatus' => $gracefullyStopped ? 'stopped' : ($stoppedForRateLimit ? 'rate_limited' : 'completed'),
+            'isResumable' => $gracefullyStopped || $stoppedForRateLimit,
             'candidatesTotal' => count($candidates),
             'candidatesChecked' => count($checkedCandidateUsernames),
             'checkedCandidateUsernames' => $checkedCandidateUsernames,
@@ -555,8 +574,10 @@ class TrackedPersonInstagramPublicProfileScanService
             'foundFollowers' => count($inferredFollowers),
             'foundFollowing' => count($inferredFollowing),
             'stoppedForRateLimit' => $stoppedForRateLimit,
-            'completedAt' => $stoppedForRateLimit ? null : now('UTC')->toISOString(),
+            'gracefullyStopped' => $gracefullyStopped,
+            'completedAt' => $stoppedForRateLimit || $gracefullyStopped ? null : now('UTC')->toISOString(),
             'pausedAt' => $stoppedForRateLimit ? now('UTC')->toISOString() : data_get($progressPayload, 'pausedAt'),
+            'stoppedAt' => $gracefullyStopped ? now('UTC')->toISOString() : data_get($progressPayload, 'stoppedAt'),
         ];
     }
 
@@ -1155,6 +1176,18 @@ class TrackedPersonInstagramPublicProfileScanService
         }
 
         $this->scanCoordinator->assertCurrent(
+            (int) $this->activeScanControl['trackedPersonId'],
+            (int) $this->activeScanControl['generation'],
+        );
+    }
+
+    private function shouldStopGracefully(): bool
+    {
+        if ($this->activeScanControl === null) {
+            return false;
+        }
+
+        return $this->scanCoordinator->shouldStopGracefully(
             (int) $this->activeScanControl['trackedPersonId'],
             (int) $this->activeScanControl['generation'],
         );

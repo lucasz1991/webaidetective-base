@@ -6,6 +6,7 @@ use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Jobs\MonitorTrackedPersonInstagram;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
+use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use Illuminate\Support\Facades\Auth;
@@ -137,6 +138,16 @@ class TrackedPersonDetail extends Component
         $this->runInstagramAnalysis(true);
     }
 
+    public function scanInstagramFollowersList(): void
+    {
+        $this->runInstagramRelationshipListScan('followers');
+    }
+
+    public function scanInstagramFollowingList(): void
+    {
+        $this->runInstagramRelationshipListScan('following');
+    }
+
     public function scanPublicProfileConnections(): void
     {
         @set_time_limit(0);
@@ -188,13 +199,16 @@ class TrackedPersonDetail extends Component
         $inferredFollowersCount = $scans->sum(fn ($scan) => count(data_get($scan->raw_payload, 'inferredFollowers', [])));
         $inferredFollowingCount = $scans->sum(fn ($scan) => count(data_get($scan->raw_payload, 'inferredFollowing', [])));
         $pausedForRateLimit = $scans->contains(fn ($scan) => (bool) data_get($scan->raw_payload, 'stoppedForRateLimit', false));
+        $stoppedByUser = $scans->isEmpty() || $scans->contains(fn ($scan) => (bool) data_get($scan->raw_payload, 'gracefullyStopped', false));
 
         $this->setDetailStatus(
-            ($pausedForRateLimit
+            ($stoppedByUser
+                ? 'Public-Profile-Verbindungsscan wurde beendet; bisherige Treffer und Kandidatenfortschritt wurden gespeichert: '
+                : ($pausedForRateLimit
                 ? 'Public-Profile-Verbindungsscan wegen Instagram-Rate-Limit pausiert. Spaeter erneut starten, um ab dem gespeicherten Kandidatenstand fortzusetzen: '
-                : 'Public-Profile-Verbindungsscan abgeschlossen: ')
+                : 'Public-Profile-Verbindungsscan abgeschlossen: '))
             .$inferredFollowersCount.' moegliche Follower und '.$inferredFollowingCount.' moegliche Gefolgt-Profile gefunden.',
-            $pausedForRateLimit || $scans->contains(fn ($scan) => $scan->status_level === 'error') ? 'partial' : 'success',
+            $stoppedByUser || $pausedForRateLimit || $scans->contains(fn ($scan) => $scan->status_level === 'error') ? 'partial' : 'success',
         );
         $this->dispatch('tracked-person-refresh');
     }
@@ -281,6 +295,87 @@ class TrackedPersonDetail extends Component
         $this->dispatch('tracked-person-refresh');
     }
 
+    private function runInstagramRelationshipListScan(string $relationship): void
+    {
+        @set_time_limit(0);
+        @ignore_user_abort(false);
+
+        $trackedPerson = $this->resolveTrackedPerson();
+        $isFollowers = $relationship === 'followers';
+        $label = $isFollowers ? 'Followerliste' : 'Gefolgt-Liste';
+
+        if (! $trackedPerson->instagram_username) {
+            $this->setDetailStatus('Fuer diese Person ist kein Instagram-Name hinterlegt.', 'error');
+
+            return;
+        }
+
+        $progress = fn (array $state) => $this->streamInstagramProgress($state);
+        $this->cancelInstagramScanWhenClientDisconnects($trackedPerson->id);
+
+        $trackedPerson->forceFill([
+            'last_instagram_status_level' => 'partial',
+            'last_instagram_status_message' => $label.'-Scan laeuft direkt in der Oberflaeche.',
+        ])->save();
+
+        try {
+            $this->streamInstagramProgress([
+                'phase' => $relationship,
+                'percent' => 1,
+                'message' => $label.' wird vorbereitet.',
+            ]);
+
+            $snapshot = app(TrackedPersonInstagramAnalysisService::class)
+                ->scanRelationshipList($trackedPerson, $relationship, $progress);
+        } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            $this->streamInstagramProgress([
+                'phase' => 'done',
+                'percent' => 100,
+                'message' => 'Vorheriger Scan wurde beendet, weil ein neuer Scan gestartet wurde.',
+            ]);
+            $this->setDetailStatus('Vorheriger Instagram-Scan wurde beendet, weil ein neuer Scan gestartet wurde.', 'partial');
+
+            return;
+        } catch (\Throwable $exception) {
+            $trackedPerson->forceFill([
+                'last_instagram_status_level' => 'error',
+                'last_instagram_status_message' => $label.'-Scan fehlgeschlagen: '.$exception->getMessage(),
+            ])->save();
+
+            $this->streamInstagramProgress([
+                'phase' => 'error',
+                'percent' => 100,
+                'message' => $label.'-Scan fehlgeschlagen.',
+            ]);
+            $this->setDetailStatus($label.'-Scan fehlgeschlagen: '.$exception->getMessage(), 'error');
+
+            return;
+        }
+
+        $this->fillFormFromModel($trackedPerson->fresh());
+
+        $payloadKey = $isFollowers ? 'followersList' : 'followingList';
+        $relationshipList = data_get($snapshot->raw_payload, 'extractedProfile.'.$payloadKey, []);
+        $activeCount = (int) data_get($relationshipList, 'activeCount', data_get($relationshipList, 'count', 0));
+        $observedCount = (int) data_get($relationshipList, 'observedCount', 0);
+        $rateLimited = (bool) data_get($relationshipList, 'rateLimited', false);
+        $stoppedByUser = (bool) data_get($relationshipList, 'gracefullyStopped', false)
+            || (bool) data_get($snapshot->raw_payload, 'gracefullyStopped', false);
+        $available = (bool) data_get($relationshipList, 'available', false);
+
+        $this->setDetailStatus(
+            ($stoppedByUser ? $label.'-Scan wurde beendet und gespeichert: ' : $label.'-Scan abgeschlossen: ')
+            .number_format($activeCount, 0, ',', '.')
+            .' bekannte Eintraege, '
+            .number_format($observedCount, 0, ',', '.')
+            .' zuletzt gesehen.'
+            .($stoppedByUser ? ' Der Scan kann spaeter erneut gestartet werden.' : '')
+            .($rateLimited ? ' Instagram hat diese Liste per Rate-Limit blockiert; bisherige Eintraege bleiben erhalten.' : ''),
+            $snapshot->status_level === 'success' && $available && ! $rateLimited && ! $stoppedByUser ? 'success' : 'partial',
+        );
+        $this->dispatch('tracked-person-refresh');
+    }
+
     private function streamInstagramProgress(array $state): void
     {
         $percent = max(0, min(100, (int) ($state['percent'] ?? 0)));
@@ -326,6 +421,7 @@ class TrackedPersonDetail extends Component
         $this->stream('instagram-progress-phase', e($phase), true);
         $this->streamInstagramScraperProfile($state);
         $this->stream('instagram-progress-message', e($message), true);
+        $this->streamInstagramLivePreview($state);
         $this->stream('instagram-progress-live-counts', e($liveCounts), true);
         $this->stream('instagram-progress-percent', $percent.'%', true);
         $this->stream(
@@ -334,6 +430,29 @@ class TrackedPersonDetail extends Component
             true,
         );
         $this->streamInstagramConnectionResults($state);
+    }
+
+    private function streamInstagramLivePreview(array $state): void
+    {
+        $url = is_scalar($state['liveScreenshotUrl'] ?? null)
+            ? trim((string) $state['liveScreenshotUrl'])
+            : '';
+
+        if ($url === '') {
+            return;
+        }
+
+        $this->stream(
+            'instagram-progress-live-preview',
+            '<div class="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-100 text-left">'
+            .'<div class="flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">'
+            .'<span>Browser-Vorschau</span>'
+            .'<span>Live-Screenshot</span>'
+            .'</div>'
+            .'<img src="'.e($url).'" alt="Aktuelle Browser-Vorschau des Instagram-Scans" class="block aspect-video w-full bg-slate-100 object-contain">'
+            .'</div>',
+            true,
+        );
     }
 
     private function streamInstagramScraperProfile(array $state): void

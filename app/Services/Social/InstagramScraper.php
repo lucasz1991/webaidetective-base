@@ -36,6 +36,7 @@ class InstagramScraper
         }
 
         $scanControl = $this->extractScanControl($runtimeConfigOverrides);
+        $runtimeConfigOverrides = $this->withScanControlRuntimeConfig($runtimeConfigOverrides, $scanControl);
         $runtimeConfigPath = $this->writeRuntimeConfig($runtimeConfigOverrides);
         $stdout = '';
         $stderr = '';
@@ -129,6 +130,7 @@ class InstagramScraper
         }
 
         $scanControl = $this->extractScanControl($runtimeConfigOverrides);
+        $runtimeConfigOverrides = $this->withScanControlRuntimeConfig($runtimeConfigOverrides, $scanControl);
         $runtimeConfigPath = $this->writeRuntimeConfig($runtimeConfigOverrides);
         $stdout = '';
         $stderr = '';
@@ -225,10 +227,12 @@ class InstagramScraper
                                 'targetFoundInFollowing' => (bool) ($event['targetFoundInFollowing'] ?? false),
                                 'skippedReason' => is_scalar($event['skippedReason'] ?? null) ? trim((string) $event['skippedReason']) : null,
                                 'stoppedForRateLimit' => (bool) ($event['stoppedForRateLimit'] ?? false),
+                                'gracefullyStopped' => (bool) ($event['gracefullyStopped'] ?? false),
                                 'foundFollowers' => $foundFollowers,
                                 'foundFollowing' => $foundFollowing,
                                 'rateLimitedCandidates' => (int) ($event['rateLimitedCandidates'] ?? 0),
                                 'message' => $message,
+                                ...$this->normalizeLiveScreenshotProgress($event),
                             ];
 
                             if ($hasInferredFollowers) {
@@ -305,6 +309,24 @@ class InstagramScraper
             'trackedPersonId' => $trackedPersonId,
             'generation' => $generation,
             'label' => (string) ($scanControl['label'] ?? 'Instagram-Scan'),
+            'gracefulStopFilePath' => is_string($scanControl['gracefulStopFilePath'] ?? null)
+                ? (string) $scanControl['gracefulStopFilePath']
+                : null,
+            'processStallTimeoutSeconds' => (int) ($scanControl['processStallTimeoutSeconds'] ?? 900),
+        ];
+    }
+
+    private function withScanControlRuntimeConfig(array $runtimeConfigOverrides, ?array $scanControl): array
+    {
+        $gracefulStopFilePath = $scanControl['gracefulStopFilePath'] ?? null;
+
+        if (! is_string($gracefulStopFilePath) || $gracefulStopFilePath === '') {
+            return $runtimeConfigOverrides;
+        }
+
+        return [
+            ...$runtimeConfigOverrides,
+            'gracefulStopFilePath' => $gracefulStopFilePath,
         ];
     }
 
@@ -518,6 +540,7 @@ class InstagramScraper
             'candidateFollowsTarget' => (bool) ($connection['candidateFollowsTarget'] ?? false),
             'targetFollowsCandidate' => (bool) ($connection['targetFollowsCandidate'] ?? false),
             'skippedReason' => $this->nullableTrim($connection['skippedReason'] ?? null),
+            'gracefullyStopped' => (bool) ($connection['gracefullyStopped'] ?? false),
             'scanAttempts' => is_numeric($connection['scanAttempts'] ?? null) ? max(1, (int) $connection['scanAttempts']) : null,
             'followers' => is_array($connection['followers'] ?? null) ? $connection['followers'] : null,
             'following' => is_array($connection['following'] ?? null) ? $connection['following'] : null,
@@ -566,6 +589,7 @@ class InstagramScraper
         $query = (string) ($event['query'] ?? '');
         $phasePercent = match ($stage) {
             'relationship-opening' => 2,
+            'scan-stop-requested' => 99,
             'relationship-search-opening' => $expected > 0 ? min(98, max(5, (int) floor(($loaded / max(1, $expected)) * 100))) : 55,
             'relationship-search-query-start' => $expected > 0 ? min(98, max(5, (int) floor(($loaded / max(1, $expected)) * 100))) : 60,
             'relationship-search-complete' => $expected > 0 && $loaded < $expected ? 98 : 100,
@@ -593,12 +617,42 @@ class InstagramScraper
             'openAttempt' => $openAttempt,
             'query' => $query,
             'message' => $this->buildProgressMessage($phase, $stage, $loaded, $expected, $openAttempt, $query),
+            ...$this->normalizeLiveScreenshotProgress($event),
             ...$this->normalizeScraperProfileProgress($event),
+        ];
+    }
+
+    private function normalizeLiveScreenshotProgress(array $event): array
+    {
+        $liveScreenshotPath = is_scalar($event['liveScreenshotPath'] ?? null)
+            ? trim((string) $event['liveScreenshotPath'])
+            : '';
+
+        if ($liveScreenshotPath === '') {
+            return [];
+        }
+
+        $url = $this->resolvePublicStorageUrl($liveScreenshotPath);
+
+        if (! $url) {
+            return [];
+        }
+
+        $version = is_scalar($event['liveScreenshotAt'] ?? null)
+            ? rawurlencode((string) $event['liveScreenshotAt'])
+            : (string) time();
+
+        return [
+            'liveScreenshotUrl' => $url.(str_contains($url, '?') ? '&' : '?').'v='.$version,
         ];
     }
 
     private function buildProgressMessage(string $phase, string $stage, int $loaded, int $expected, int $openAttempt = 0, string $query = ''): string
     {
+        if ($stage === 'scan-stop-requested') {
+            return 'Stop angefordert. Der aktuelle Zwischestand wird gespeichert.';
+        }
+
         if ($phase === 'followers') {
             if ($stage === 'relationship-rate-limited') {
                 return 'Instagram hat die Followerliste per Rate-Limit blockiert; die Listenphase wird abgebrochen.';

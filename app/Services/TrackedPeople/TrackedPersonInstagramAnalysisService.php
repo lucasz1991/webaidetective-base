@@ -59,6 +59,45 @@ class TrackedPersonInstagramAnalysisService
         }
     }
 
+    public function scanRelationshipList(
+        TrackedPerson $trackedPerson,
+        string $relationship,
+        ?callable $progress = null,
+    ): TrackedPersonInstagramSnapshot {
+        $relationship = Str::lower(trim($relationship));
+
+        if (! in_array($relationship, ['followers', 'following'], true)) {
+            throw new \InvalidArgumentException('Unbekannte Instagram-Liste.');
+        }
+
+        if (! $trackedPerson->instagram_username) {
+            throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');
+        }
+
+        $scanControl = $this->scanCoordinator->begin(
+            $trackedPerson->id,
+            $relationship === 'followers' ? 'Instagram-Followerliste' : 'Instagram-Gefolgt-Liste',
+        );
+
+        Cache::lock($this->analysisLockKey($trackedPerson), 3600)->forceRelease();
+        $lock = Cache::lock($this->analysisLockKey($trackedPerson), 3600);
+
+        if (! $lock->get()) {
+            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
+            throw new \RuntimeException('Fuer diese Person laeuft bereits eine Instagram-Analyse. Bitte den laufenden Scan abwarten.');
+        }
+
+        $this->activeScanControl = $scanControl;
+
+        try {
+            return $this->scanRelationshipListWithLock($trackedPerson, $relationship, $progress);
+        } finally {
+            $lock->release();
+            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
+            $this->activeScanControl = null;
+        }
+    }
+
     private function analyzeWithLock(
         TrackedPerson $trackedPerson,
         ?callable $progress = null,
@@ -201,6 +240,184 @@ class TrackedPersonInstagramAnalysisService
         return $snapshot->fresh('media');
     }
 
+    private function scanRelationshipListWithLock(
+        TrackedPerson $trackedPerson,
+        string $relationship,
+        ?callable $progress = null,
+    ): TrackedPersonInstagramSnapshot {
+        $isFollowers = $relationship === 'followers';
+        $label = $isFollowers ? 'Followerliste' : 'Gefolgt-Liste';
+        $payloadKey = $isFollowers ? 'followersList' : 'followingList';
+        $otherExtractedKey = $isFollowers ? 'following_list' : 'followers_list';
+        $otherType = $isFollowers ? 'following' : 'followers';
+        $expectedOverride = $isFollowers ? 'expectedFollowerCount' : 'expectedFollowingCount';
+        $expectedCount = $isFollowers
+            ? ($trackedPerson->instagram_followers_count ?? 0)
+            : ($trackedPerson->instagram_following_count ?? 0);
+
+        $this->reportProgress($progress, [
+            'phase' => 'start',
+            'percent' => 1,
+            'message' => $label.' wird vorbereitet.',
+        ]);
+
+        $payload = $this->scraper->scrape(
+            $trackedPerson->instagram_username,
+            $relationship,
+            $progress,
+            $this->withActiveScanControl([
+                $expectedOverride => max(0, (int) $expectedCount),
+            ]),
+            4,
+            95,
+        );
+        $extracted = $this->extractor->extract($payload);
+        $analyzedAt = now('UTC')->format('Y-m-d H:i:s');
+        $persistedWarnings = [];
+        $previousSnapshot = $trackedPerson->instagramSnapshots()
+            ->latest('analyzed_at')
+            ->first();
+
+        $extracted[$otherExtractedKey] = $this->preservedRelationshipListForExtraction($previousSnapshot, $otherType);
+
+        $phaseList = data_get($payload, 'profile.'.$payloadKey);
+        $phaseResult = [
+            'phase' => $relationship,
+            'statusLevel' => $payload['statusLevel'] ?? 'unknown',
+            'statusMessage' => $payload['statusMessage'] ?? null,
+            'screenshotPath' => $this->scraper->resolvePublicStoragePath($payload['screenshotPath'] ?? null),
+            'ok' => (bool) ($payload['ok'] ?? false),
+            'count' => is_array($phaseList) ? (int) ($phaseList['count'] ?? 0) : 0,
+            'available' => is_array($phaseList) ? (bool) ($phaseList['available'] ?? false) : false,
+            'rateLimited' => is_array($phaseList) ? (bool) ($phaseList['rateLimited'] ?? false) : false,
+            'gracefullyStopped' => (bool) ($payload['gracefullyStopped'] ?? data_get($phaseList, 'gracefullyStopped', false)),
+        ];
+        $attemptInfo = [
+            'scan_mode' => $relationship,
+            'used_attempt' => 1,
+            'max_attempts' => 1,
+            'visible_counts_complete' => (bool) ($extracted['visible_counts_complete'] ?? false),
+            'relationship_only' => true,
+            'relationship' => $relationship,
+            'phases' => [$phaseResult],
+        ];
+
+        $this->reportProgress($progress, [
+            'phase' => 'saving',
+            'percent' => 97,
+            'message' => $label.' wird gespeichert.',
+        ]);
+        $this->assertActiveScanCurrent();
+
+        $snapshot = DB::transaction(function () use (
+            $trackedPerson,
+            $previousSnapshot,
+            $payload,
+            $extracted,
+            $attemptInfo,
+            $analyzedAt,
+            &$persistedWarnings,
+            $label,
+        ) {
+            $snapshot = $trackedPerson->instagramSnapshots()->create([
+                'instagram_username' => $trackedPerson->instagram_username,
+                'full_name' => $extracted['full_name'],
+                'biography' => $extracted['biography'],
+                'posts_count' => $extracted['posts_count'],
+                'followers_count' => $extracted['followers_count'],
+                'following_count' => $extracted['following_count'],
+                'profile_image_url' => $extracted['profile_image_url'],
+                'profile_image_path' => null,
+                'profile_image_hash' => null,
+                'screenshot_path' => $this->scraper->resolvePublicStoragePath($payload['screenshotPath'] ?? null),
+                'html_path' => $this->scraper->resolvePublicStoragePath($payload['htmlPath'] ?? null),
+                'status_level' => $payload['statusLevel'] ?? 'error',
+                'status_message' => $this->resolveStatusMessage($payload, $attemptInfo),
+                'has_changes' => false,
+                'detected_changes' => [],
+                'raw_payload' => null,
+                'analyzed_at' => $analyzedAt,
+            ]);
+
+            $extracted = $this->storeRelationshipListArtifacts(
+                $trackedPerson,
+                $snapshot,
+                $extracted,
+                $persistedWarnings,
+                $previousSnapshot,
+            );
+
+            $storedMedia = $this->storeSnapshotMedia(
+                $trackedPerson,
+                $snapshot,
+                $extracted['image_urls'] ?? [],
+                $persistedWarnings,
+                $previousSnapshot,
+            );
+            $profileMedia = collect($storedMedia)->firstWhere('is_profile_image', true);
+            $profileImagePath = ($profileMedia['reused_existing'] ?? false)
+                ? null
+                : ($profileMedia['storage_path'] ?? null);
+            $profileImageHash = $profileMedia['content_hash'] ?? null;
+            $detectedChanges = $this->detectSnapshotChanges($previousSnapshot, $extracted, $profileImageHash);
+            $snapshotPayload = $this->buildStoredPayload(
+                $payload,
+                $extracted,
+                $detectedChanges,
+                $attemptInfo,
+                $profileImageHash,
+            );
+
+            $snapshot->forceFill([
+                'profile_image_path' => $profileImagePath,
+                'profile_image_hash' => $profileImageHash,
+                'has_changes' => $detectedChanges !== [],
+                'detected_changes' => $detectedChanges,
+                'raw_payload' => $this->appendPersistedWarnings($snapshotPayload, $persistedWarnings),
+            ])->save();
+
+            $trackedPersonUpdate = [
+                'last_instagram_status_level' => $snapshot->status_level,
+                'last_instagram_status_message' => $label.'-Scan: '.$snapshot->status_message,
+                'last_instagram_analyzed_at' => $snapshot->getRawOriginal('analyzed_at') ?: $analyzedAt,
+            ];
+
+            if ($profileImagePath) {
+                $trackedPersonUpdate['profile_image_path'] = $profileImagePath;
+                $trackedPersonUpdate['instagram_profile_image_path'] = $profileImagePath;
+            }
+
+            if ($profileImageHash) {
+                $trackedPersonUpdate['profile_image_hash'] = $profileImageHash;
+                $trackedPersonUpdate['instagram_profile_image_hash'] = $profileImageHash;
+            }
+
+            foreach ([
+                'instagram_followers_count' => $extracted['followers_count'],
+                'instagram_following_count' => $extracted['following_count'],
+                'instagram_posts_count' => $extracted['posts_count'],
+            ] as $field => $value) {
+                if ($value !== null) {
+                    $trackedPersonUpdate[$field] = $value;
+                }
+            }
+
+            $trackedPerson->forceFill($trackedPersonUpdate)->save();
+
+            return $snapshot;
+        });
+
+        $this->reportProgress($progress, [
+            'phase' => 'done',
+            'percent' => 100,
+            'message' => $snapshot->status_level === 'error'
+                ? $label.'-Scan fehlgeschlagen.'
+                : $label.'-Scan abgeschlossen.',
+        ]);
+
+        return $snapshot->fresh('media');
+    }
+
     private function analysisLockKey(TrackedPerson $trackedPerson): string
     {
         return 'tracked-person-instagram-analysis:'.$trackedPerson->getKey();
@@ -238,6 +455,28 @@ class TrackedPersonInstagramAnalysisService
         ];
 
         if (! $countsFound || ! (bool) ($payload['ok'] ?? false)) {
+            if ($this->shouldStopGracefully() || (bool) ($payload['gracefullyStopped'] ?? false)) {
+                $payload['ok'] = false;
+                $payload['statusLevel'] = 'partial';
+                $payload['statusMessage'] = 'Instagram-Mini-Scan wurde beendet; die bis dahin ermittelten Daten werden gespeichert.';
+
+                return [
+                    $payload,
+                    $extracted,
+                    [
+                        'scan_mode' => 'mini',
+                        'used_attempt' => count($attempts),
+                        'max_attempts' => 2,
+                        'session_fallback_used' => false,
+                        'visible_counts_complete' => (bool) ($extracted['visible_counts_complete'] ?? false),
+                        'counts_found' => $countsFound,
+                        'gracefully_stopped' => true,
+                        'attempts' => $attempts,
+                        'phases' => $phaseResults,
+                    ],
+                ];
+            }
+
             $this->reportProgress($progress, [
                 'phase' => 'profile',
                 'percent' => 45,
@@ -377,6 +616,12 @@ class TrackedPersonInstagramAnalysisService
                 break;
             }
 
+            if ($this->shouldStopGracefully() || (bool) ($payload['gracefullyStopped'] ?? false)) {
+                $payload['statusLevel'] = 'partial';
+                $payload['statusMessage'] = 'Instagram-Scan wurde beendet; die bis dahin ermittelten Grunddaten werden gespeichert.';
+                break;
+            }
+
             if ($attempt < self::MAX_VISIBLE_RETRY_ATTEMPTS) {
                 usleep(1200000);
             }
@@ -432,6 +677,15 @@ class TrackedPersonInstagramAnalysisService
             ],
         ] as $phase => $phaseConfig) {
             try {
+                if ($this->shouldStopGracefully()) {
+                    $payload['ok'] = false;
+                    $payload['statusLevel'] = 'partial';
+                    $payload['statusMessage'] = 'Instagram-Scan wurde beendet; bisherige Ergebnisse wurden gespeichert.';
+                    $payload['gracefullyStopped'] = true;
+                    $phaseWarnings[] = 'Instagram-Scan wurde ueber die Oberflaeche beendet. Bereits ermittelte Daten wurden gespeichert.';
+                    break;
+                }
+
                 $this->reportProgress($progress, [
                     'phase' => $phase,
                     'percent' => $phaseConfig['start'],
@@ -471,7 +725,17 @@ class TrackedPersonInstagramAnalysisService
                     'count' => is_array($phaseList) ? (int) ($phaseList['count'] ?? 0) : 0,
                     'available' => is_array($phaseList) ? (bool) ($phaseList['available'] ?? false) : false,
                     'rateLimited' => is_array($phaseList) ? (bool) ($phaseList['rateLimited'] ?? false) : false,
+                    'gracefullyStopped' => (bool) ($phasePayload['gracefullyStopped'] ?? data_get($phaseList, 'gracefullyStopped', false)),
                 ];
+
+                if ((bool) ($phasePayload['gracefullyStopped'] ?? data_get($phaseList, 'gracefullyStopped', false))) {
+                    $payload['ok'] = false;
+                    $payload['statusLevel'] = 'partial';
+                    $payload['statusMessage'] = 'Instagram-Scan wurde beendet; bisherige Ergebnisse wurden gespeichert.';
+                    $payload['gracefullyStopped'] = true;
+                    $phaseWarnings[] = $phaseConfig['label'].' wurde ueber die Oberflaeche beendet. Bisherige Eintraege wurden gespeichert.';
+                    break;
+                }
 
                 if (is_array($phaseList) && (bool) ($phaseList['rateLimited'] ?? false)) {
                     $phaseWarnings[] = $phaseConfig['label'].' wurde durch Instagram Rate-Limit blockiert. Weitere Listenphasen werden fuer diesen Lauf uebersprungen.';
@@ -508,6 +772,30 @@ class TrackedPersonInstagramAnalysisService
     private function resolveStatusMessage(array $payload, array $attemptInfo): string
     {
         $statusMessage = $payload['statusMessage'] ?? ($payload['error'] ?? 'Instagram-Scrape fehlgeschlagen.');
+
+        if (($attemptInfo['relationship_only'] ?? false) === true) {
+            $relationship = (string) ($attemptInfo['relationship'] ?? '');
+            $label = $relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste';
+            $phase = collect($attemptInfo['phases'] ?? [])->firstWhere('phase', $relationship) ?? [];
+
+            if ((bool) ($payload['gracefullyStopped'] ?? false) || (bool) ($phase['gracefullyStopped'] ?? false)) {
+                return $label.' wurde beendet; bisher gefundene Eintraege wurden gespeichert.';
+            }
+
+            if ((bool) ($phase['rateLimited'] ?? false)) {
+                return $label.' wurde durch Instagram Rate-Limit blockiert; bisher bekannte Eintraege bleiben gespeichert.';
+            }
+
+            if ((bool) ($phase['available'] ?? false)) {
+                return $label.' separat gescannt: '.number_format((int) ($phase['count'] ?? 0), 0, ',', '.').' Eintraege gefunden.';
+            }
+
+            return $label.' konnte in diesem Einzel-Scan nicht vollstaendig geladen werden. '.$statusMessage;
+        }
+
+        if ((bool) ($payload['gracefullyStopped'] ?? false) || (bool) ($attemptInfo['gracefully_stopped'] ?? false)) {
+            return 'Instagram-Scan wurde beendet; bisher ermittelte Daten wurden gespeichert.';
+        }
 
         if (($attemptInfo['scan_mode'] ?? null) === 'mini') {
             if (($attemptInfo['visible_counts_complete'] ?? false) || ($attemptInfo['counts_found'] ?? false)) {
@@ -564,6 +852,18 @@ class TrackedPersonInstagramAnalysisService
         }
 
         $this->scanCoordinator->assertCurrent(
+            (int) $this->activeScanControl['trackedPersonId'],
+            (int) $this->activeScanControl['generation'],
+        );
+    }
+
+    private function shouldStopGracefully(): bool
+    {
+        if ($this->activeScanControl === null) {
+            return false;
+        }
+
+        return $this->scanCoordinator->shouldStopGracefully(
             (int) $this->activeScanControl['trackedPersonId'],
             (int) $this->activeScanControl['generation'],
         );
@@ -667,6 +967,7 @@ class TrackedPersonInstagramAnalysisService
             'reason' => $relationshipList['reason'] ?? null,
             'rateLimited' => (bool) ($relationshipList['rateLimited'] ?? false),
             'rateLimitText' => $relationshipList['rateLimitText'] ?? null,
+            'gracefullyStopped' => (bool) ($relationshipList['gracefullyStopped'] ?? false),
             'itemsPath' => $relationshipList['itemsPath'] ?? null,
             'itemsPreview' => array_slice($relationshipList['items'] ?? [], 0, 25),
             'observedPreview' => array_slice($relationshipList['observedItems'] ?? [], 0, 25),
@@ -810,23 +1111,37 @@ class TrackedPersonInstagramAnalysisService
             $previousRemovedHistoryItems = $previousState['removedHistoryItems'];
             $currentIsComplete = (bool) ($relationshipList['complete'] ?? false);
             $analyzedAt = optional($snapshot->analyzed_at)->toIso8601String();
-            $observedItems = $this->stampObservedRelationshipItems($observedItems, $previousItems, $analyzedAt);
-            $activeItems = $this->sortRelationshipItemsNewestFirst(
-                $this->mergeRelationshipItems($previousItems, $observedItems, $currentIsComplete),
-            );
-            $addedItems = $this->sortRelationshipItemsNewestFirst(
-                $this->diffRelationshipItems($observedItems, $previousItems),
-            );
-            $removedItems = $currentIsComplete
-                ? $this->stampRemovedRelationshipItems(
-                    $this->diffRelationshipItems($previousItems, $observedItems),
-                    $analyzedAt,
-                )
-                : [];
-            $removedHistoryItems = $this->sortRelationshipItemsNewestFirst(
-                $this->mergeRelationshipItemSets($previousRemovedHistoryItems, $removedItems),
-                ['removedAt', 'lastSeenAt', 'firstSeenAt'],
-            );
+            $preserveExistingState = (bool) ($relationshipList['preserveExistingState'] ?? false);
+            unset($relationshipList['preserveExistingState']);
+
+            if ($preserveExistingState) {
+                $observedItems = $previousItems;
+                $activeItems = $this->sortRelationshipItemsNewestFirst($previousItems);
+                $addedItems = [];
+                $removedItems = [];
+                $removedHistoryItems = $this->sortRelationshipItemsNewestFirst(
+                    $previousRemovedHistoryItems,
+                    ['removedAt', 'lastSeenAt', 'firstSeenAt'],
+                );
+            } else {
+                $observedItems = $this->stampObservedRelationshipItems($observedItems, $previousItems, $analyzedAt);
+                $activeItems = $this->sortRelationshipItemsNewestFirst(
+                    $this->mergeRelationshipItems($previousItems, $observedItems, $currentIsComplete),
+                );
+                $addedItems = $this->sortRelationshipItemsNewestFirst(
+                    $this->diffRelationshipItems($observedItems, $previousItems),
+                );
+                $removedItems = $currentIsComplete
+                    ? $this->stampRemovedRelationshipItems(
+                        $this->diffRelationshipItems($previousItems, $observedItems),
+                        $analyzedAt,
+                    )
+                    : [];
+                $removedHistoryItems = $this->sortRelationshipItemsNewestFirst(
+                    $this->mergeRelationshipItemSets($previousRemovedHistoryItems, $removedItems),
+                    ['removedAt', 'lastSeenAt', 'firstSeenAt'],
+                );
+            }
             $currentlyRemovedItems = $this->sortRelationshipItemsNewestFirst(
                 $this->diffRelationshipItems($removedHistoryItems, $activeItems),
                 ['removedAt', 'lastSeenAt', 'firstSeenAt'],
@@ -891,6 +1206,7 @@ class TrackedPersonInstagramAnalysisService
                 'reason' => $relationshipList['reason'] ?? null,
                 'rateLimited' => (bool) ($relationshipList['rateLimited'] ?? false),
                 'rateLimitText' => $relationshipList['rateLimitText'] ?? null,
+                'gracefullyStopped' => (bool) ($relationshipList['gracefullyStopped'] ?? false),
                 'scrapedAt' => optional($snapshot->analyzed_at)->toIso8601String(),
                 'items' => $activeItems,
                 'activeItems' => $activeItems,
@@ -1075,6 +1391,32 @@ class TrackedPersonInstagramAnalysisService
                 $this->normalizeRelationshipPayloadItems(data_get($previousSnapshot->raw_payload, 'extractedProfile.'.$payloadKey.'.removedPreview', [])),
                 $this->normalizeRelationshipPayloadItems(data_get($previousSnapshot->raw_payload, 'extractedProfile.'.$payloadKey.'.currentlyRemovedPreview', [])),
             ),
+        ];
+    }
+
+    private function preservedRelationshipListForExtraction(?TrackedPersonInstagramSnapshot $previousSnapshot, string $type): array
+    {
+        $state = $this->loadPreviousRelationshipState($previousSnapshot, $type);
+        $items = $state['items'];
+        $removedHistoryItems = $state['removedHistoryItems'];
+
+        return [
+            'attempted' => false,
+            'available' => $items !== [],
+            'complete' => false,
+            'count' => count($items),
+            'activeCount' => count($items),
+            'observedCount' => count($items),
+            'knownCount' => count($items),
+            'allKnownCount' => count($items) + count($removedHistoryItems),
+            'removedHistoryCount' => count($removedHistoryItems),
+            'currentlyRemovedCount' => 0,
+            'items' => $items,
+            'observedItems' => $items,
+            'removedHistoryItems' => $removedHistoryItems,
+            'currentlyRemovedItems' => [],
+            'preserveExistingState' => true,
+            'reason' => $items === [] ? 'Nicht Teil dieses Einzel-Listen-Scans.' : 'Aus vorherigem Snapshot uebernommen.',
         ];
     }
 
