@@ -9,6 +9,7 @@ use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process as SymfonyProcess;
 
@@ -165,10 +166,6 @@ class InstagramScraper
 
                     $stderr .= $buffer;
 
-                    if (! $progress) {
-                        return;
-                    }
-
                     $stderrBuffer .= $buffer;
                     $lines = preg_split("/\r\n|\n|\r/", $stderrBuffer);
 
@@ -184,6 +181,8 @@ class InstagramScraper
                         if (! $event) {
                             continue;
                         }
+
+                        $this->recordScraperProfileRateLimitIfNeeded($event);
 
                         $relationship = (string) ($event['relationship'] ?? '');
 
@@ -250,7 +249,9 @@ class InstagramScraper
                                 ...$this->normalizeScraperProfileProgress($event),
                             ];
 
-                            $progress($progressPayload);
+                            if ($progress) {
+                                $progress($progressPayload);
+                            }
 
                             continue;
                         }
@@ -449,10 +450,6 @@ class InstagramScraper
         int $progressEnd,
         ?callable $progress,
     ): void {
-        if (! $progress) {
-            return;
-        }
-
         $buffer .= $chunk;
         $lines = preg_split("/\r\n|\n|\r/", $buffer);
 
@@ -469,7 +466,11 @@ class InstagramScraper
                 continue;
             }
 
-            $progress($this->normalizeProgressEvent($event, $operationMode, $progressStart, $progressEnd));
+            $this->recordScraperProfileRateLimitIfNeeded($event);
+
+            if ($progress) {
+                $progress($this->normalizeProgressEvent($event, $operationMode, $progressStart, $progressEnd));
+            }
         }
     }
 
@@ -484,6 +485,67 @@ class InstagramScraper
         $payload = json_decode(Str::after($line, $prefix), true);
 
         return is_array($payload) ? $payload : null;
+    }
+
+    private function recordScraperProfileRateLimitIfNeeded(array $event): void
+    {
+        if (! $this->isInstagramRateLimitEvent($event)) {
+            return;
+        }
+
+        $profile = is_array($event['scraperProfile'] ?? null) ? $event['scraperProfile'] : [];
+        $profileId = $this->nullableTrim($event['scraperProfileId'] ?? $profile['id'] ?? null);
+
+        if ($profileId === null) {
+            return;
+        }
+
+        try {
+            app(ScraperProfileDatabaseStore::class)->blockProfileForInstagramLimit(
+                $profileId,
+                $this->rateLimitBlockReason($event),
+                3600,
+                [
+                    'stage' => $this->nullableTrim($event['stage'] ?? null),
+                    'relationship' => $this->nullableTrim($event['relationship'] ?? null),
+                    'message' => $this->nullableTrim($event['message'] ?? null),
+                    'rateLimitText' => Str::limit((string) ($event['rateLimitText'] ?? ''), 500),
+                    'scraperProfileLabel' => $this->nullableTrim($event['scraperProfileLabel'] ?? $profile['label'] ?? null),
+                    'scraperProfileLoginUsername' => $this->nullableTrim($event['scraperProfileLoginUsername'] ?? $profile['loginUsername'] ?? null),
+                ],
+            );
+        } catch (\Throwable) {
+            // Die Sperrmarkierung darf den laufenden Scan nicht abbrechen.
+        }
+    }
+
+    private function isInstagramRateLimitEvent(array $event): bool
+    {
+        $stage = Str::lower((string) ($event['stage'] ?? ''));
+        $reason = Str::lower((string) ($event['reason'] ?? $event['searchStopReason'] ?? ''));
+        $message = Str::lower((string) ($event['message'] ?? ''));
+        $rateLimitText = Str::lower((string) ($event['rateLimitText'] ?? ''));
+
+        return (bool) ($event['rateLimited'] ?? false)
+            || (bool) ($event['stoppedForRateLimit'] ?? false)
+            || Str::contains($stage, ['rate-limit', 'rate_limited'])
+            || Str::contains($reason, ['instagram-rate-limit', 'rate-limit', 'rate_limited'])
+            || Str::contains($message, ['rate-limit', 'rate limit'])
+            || Str::contains($rateLimitText, [
+                'try again later',
+                'we restrict certain activity',
+                'we limit how often',
+                'versuche es sp',
+                'wir schr',
+            ]);
+    }
+
+    private function rateLimitBlockReason(array $event): string
+    {
+        $stage = $this->nullableTrim($event['stage'] ?? null);
+        $relationship = $this->nullableTrim($event['relationship'] ?? null);
+
+        return trim('instagram-rate-limit'.($relationship ? ':'.$relationship : '').($stage ? ':'.$stage : ''));
     }
 
     private function normalizeConnectionProgressItems(mixed $items): array
@@ -902,6 +964,10 @@ class InstagramScraper
         $pool = [];
 
         foreach ([$selectedProfile, ...$activeProfiles] as $profile) {
+            if ($this->profileIsScrapeBlocked($profile)) {
+                continue;
+            }
+
             $key = $this->runtimeProfileKey($profile);
 
             if ($key === '' || isset($pool[$key])) {
@@ -911,7 +977,14 @@ class InstagramScraper
             $pool[$key] = $this->buildRuntimeAccountConfig($profile);
         }
 
-        return array_values($pool) ?: [$this->buildRuntimeAccountConfig($selectedProfile)];
+        if ($pool !== []) {
+            return array_values($pool);
+        }
+
+        throw new \RuntimeException(
+            'Alle aktiven Instagram-Scraper-Accounts sind aktuell wegen Instagram-Rate-Limit gesperrt.'
+            .$this->nextScrapeBlockReleaseSuffix($activeProfiles)
+        );
     }
 
     private function buildRuntimeAccountConfig(array $profile): array
@@ -995,20 +1068,96 @@ class InstagramScraper
             $profiles,
             static fn (array $profile): bool => in_array(trim((string) ($profile['id'] ?? '')), $activeProfileIds, true),
         ));
+        $availableActiveProfiles = $this->filterScrapeAvailableProfiles($activeProfiles);
 
-        if ($activeProfiles !== []) {
-            return $activeProfiles[random_int(0, count($activeProfiles) - 1)];
+        if ($availableActiveProfiles !== []) {
+            return $availableActiveProfiles[random_int(0, count($availableActiveProfiles) - 1)];
         }
 
         $activeProfileId = trim((string) (is_array($settings) ? ($settings['active_profile_id'] ?? '') : ''));
 
         foreach ($profiles as $profile) {
-            if (trim((string) ($profile['id'] ?? '')) === $activeProfileId) {
+            if (
+                trim((string) ($profile['id'] ?? '')) === $activeProfileId
+                && ! $this->profileIsScrapeBlocked($profile)
+            ) {
                 return $profile;
             }
         }
 
-        return $profiles[0];
+        if ($activeProfiles !== []) {
+            throw new \RuntimeException(
+                'Alle aktiven Instagram-Scraper-Accounts sind aktuell wegen Instagram-Rate-Limit gesperrt.'
+                .$this->nextScrapeBlockReleaseSuffix($activeProfiles)
+            );
+        }
+
+        $availableProfiles = $this->filterScrapeAvailableProfiles($profiles);
+
+        if ($availableProfiles !== []) {
+            return $availableProfiles[0];
+        }
+
+        throw new \RuntimeException(
+            'Alle Instagram-Scraper-Accounts sind aktuell wegen Instagram-Rate-Limit gesperrt.'
+            .$this->nextScrapeBlockReleaseSuffix($profiles)
+        );
+    }
+
+    private function filterScrapeAvailableProfiles(array $profiles): array
+    {
+        return array_values(array_filter(
+            $profiles,
+            fn (array $profile): bool => ! $this->profileIsScrapeBlocked($profile),
+        ));
+    }
+
+    private function profileIsScrapeBlocked(array $profile): bool
+    {
+        $blockedUntil = $profile['scrape_blocked_until'] ?? null;
+
+        if (! is_scalar($blockedUntil) || trim((string) $blockedUntil) === '') {
+            return false;
+        }
+
+        try {
+            return Carbon::parse((string) $blockedUntil)->isFuture();
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function nextScrapeBlockReleaseSuffix(array $profiles): string
+    {
+        $timestamps = [];
+
+        foreach ($profiles as $profile) {
+            $blockedUntil = $profile['scrape_blocked_until'] ?? null;
+
+            if (! is_scalar($blockedUntil) || trim((string) $blockedUntil) === '') {
+                continue;
+            }
+
+            try {
+                $timestamp = Carbon::parse((string) $blockedUntil);
+
+                if ($timestamp->isFuture()) {
+                    $timestamps[] = $timestamp;
+                }
+            } catch (\Throwable) {
+                continue;
+            }
+        }
+
+        if ($timestamps === []) {
+            return '';
+        }
+
+        usort($timestamps, static fn (Carbon $left, Carbon $right): int => $left->getTimestamp() <=> $right->getTimestamp());
+
+        return ' Naechste Freigabe: '
+            .$timestamps[0]->timezone(config('app.timezone', 'Europe/Berlin'))->format('d.m.Y H:i')
+            .'.';
     }
 
     private function normalizeActiveProfileIds(mixed $activeProfileIds): array

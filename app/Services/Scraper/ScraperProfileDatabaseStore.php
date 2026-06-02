@@ -96,6 +96,8 @@ class ScraperProfileDatabaseStore
                 $record->restore();
             }
 
+            $metadata = is_array($record->metadata) ? $record->metadata : [];
+
             $record->forceFill([
                 'profile_label' => $this->stringValue($profile['profile_label'] ?? 'instagram-default', 'instagram-default'),
                 'browser_profile_path' => $this->nullableString($profile['browser_profile_path'] ?? null),
@@ -117,7 +119,8 @@ class ScraperProfileDatabaseStore
                 'is_active' => in_array($profileKey, $activeProfileIds, true),
                 'sort_order' => $index,
                 'metadata' => [
-                    'legacy_imported_at' => $record->exists ? data_get($record->metadata, 'legacy_imported_at') : now()->toIso8601String(),
+                    ...$metadata,
+                    'legacy_imported_at' => $record->exists ? data_get($metadata, 'legacy_imported_at') : now()->toIso8601String(),
                 ],
             ])->save();
 
@@ -208,6 +211,65 @@ class ScraperProfileDatabaseStore
         }
     }
 
+    public function blockProfileForInstagramLimit(
+        string $profileKey,
+        ?string $reason = null,
+        int $seconds = 3600,
+        array $context = [],
+    ): void {
+        $profileKey = trim($profileKey);
+
+        if (! $this->hasScrapeBlockColumns() || $profileKey === '') {
+            return;
+        }
+
+        $record = ScraperProfile::query()
+            ->where('platform', 'instagram')
+            ->where('profile_key', $profileKey)
+            ->first();
+
+        if (! $record) {
+            return;
+        }
+
+        $blockedAt = now('UTC');
+        $blockedUntil = $blockedAt->copy()->addSeconds(max(60, $seconds));
+        $metadata = is_array($record->metadata) ? $record->metadata : [];
+
+        $record->forceFill([
+            'scrape_blocked_at' => $blockedAt,
+            'scrape_blocked_until' => $blockedUntil,
+            'scrape_blocked_reason' => $this->nullableString($reason) ?: 'instagram-rate-limit',
+            'metadata' => [
+                ...$metadata,
+                'last_scrape_block' => [
+                    'blocked_at' => $blockedAt->toIso8601String(),
+                    'blocked_until' => $blockedUntil->toIso8601String(),
+                    'reason' => $this->nullableString($reason) ?: 'instagram-rate-limit',
+                    'context' => $context,
+                ],
+            ],
+        ])->save();
+    }
+
+    public function clearScrapeBlock(string $profileKey): void
+    {
+        $profileKey = trim($profileKey);
+
+        if (! $this->hasScrapeBlockColumns() || $profileKey === '') {
+            return;
+        }
+
+        ScraperProfile::query()
+            ->where('platform', 'instagram')
+            ->where('profile_key', $profileKey)
+            ->update([
+                'scrape_blocked_at' => null,
+                'scrape_blocked_until' => null,
+                'scrape_blocked_reason' => null,
+            ]);
+    }
+
     private function hydrateCookieFilesFromRuntimeProfiles(array $runtimeProfiles): void
     {
         if (! $this->isAvailable()) {
@@ -281,6 +343,9 @@ class ScraperProfileDatabaseStore
 
     private function profileArray(ScraperProfile $profile): array
     {
+        $blockedUntil = $this->hasScrapeBlockColumns() ? $profile->scrape_blocked_until : null;
+        $isBlocked = $blockedUntil !== null && $blockedUntil->isFuture();
+
         return [
             'id' => $profile->profile_key,
             'profile_label' => $profile->profile_label,
@@ -299,6 +364,17 @@ class ScraperProfileDatabaseStore
             'relationship_list_max_scroll_rounds' => (int) $profile->relationship_list_max_scroll_rounds,
             'follower_list_max_items' => (int) $profile->follower_list_max_items,
             'following_list_max_items' => (int) $profile->following_list_max_items,
+            'scrape_blocked_at' => $this->hasScrapeBlockColumns()
+                ? optional($profile->scrape_blocked_at)->toIso8601String()
+                : null,
+            'scrape_blocked_until' => $blockedUntil?->toIso8601String(),
+            'scrape_blocked_reason' => $this->hasScrapeBlockColumns()
+                ? $this->nullableString($profile->scrape_blocked_reason)
+                : null,
+            'is_scrape_blocked' => $isBlocked,
+            'scrape_block_remaining_seconds' => $isBlocked
+                ? max(0, now('UTC')->diffInSeconds($blockedUntil, false))
+                : 0,
             'updated_at' => optional($profile->updated_at)->toIso8601String() ?: now()->toIso8601String(),
         ];
     }
@@ -379,5 +455,13 @@ class ScraperProfileDatabaseStore
         return str_starts_with($path, DIRECTORY_SEPARATOR)
             || preg_match('/^[A-Za-z]:\\\\/', $path) === 1
             || preg_match('/^[A-Za-z]:\//', $path) === 1;
+    }
+
+    private function hasScrapeBlockColumns(): bool
+    {
+        return $this->isAvailable()
+            && Schema::hasColumn('scraper_profiles', 'scrape_blocked_at')
+            && Schema::hasColumn('scraper_profiles', 'scrape_blocked_until')
+            && Schema::hasColumn('scraper_profiles', 'scrape_blocked_reason');
     }
 }

@@ -38,6 +38,9 @@ class ScraperProfile extends Model
         'cookie_count',
         'session_cookie_present',
         'cookies_synced_at',
+        'scrape_blocked_at',
+        'scrape_blocked_until',
+        'scrape_blocked_reason',
         'metadata',
     ];
 
@@ -58,6 +61,8 @@ class ScraperProfile extends Model
         'cookie_count' => 'integer',
         'session_cookie_present' => 'boolean',
         'cookies_synced_at' => 'datetime',
+        'scrape_blocked_at' => 'datetime',
+        'scrape_blocked_until' => 'datetime',
         'metadata' => 'array',
     ];
 }

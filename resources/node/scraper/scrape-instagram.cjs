@@ -3795,67 +3795,188 @@ async function dismissVisibleSuggestion(page, username) {
     return false;
   }
 
-  return page.evaluate((username) => {
-    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
-    const isVisible = (element) => {
-      const rect = element.getBoundingClientRect();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const result = await page.evaluate((username) => {
+      const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+      const normalizeUsername = (value = '') => String(value || '')
+        .replace(/^@/, '')
+        .replace(/[^a-z0-9._]/gi, '')
+        .toLowerCase();
+      const isInsideDialog = (element) => Boolean(element?.closest?.('div[role="dialog"]'));
+      const isVisible = (element) => {
+        if (!element || isInsideDialog(element)) {
+          return false;
+        }
 
-      return rect.width > 0 && rect.height > 0;
-    };
-    const isInsideDialog = (element) => Boolean(element.closest('div[role="dialog"]'));
-    const anchors = Array.from(document.querySelectorAll('a[href]'))
-      .filter((anchorElement) => isVisible(anchorElement) && !isInsideDialog(anchorElement));
-    const anchor = anchors.find((candidate) => {
-      try {
-        const parts = new URL(candidate.getAttribute('href'), window.location.origin).pathname
-          .split('/')
-          .filter(Boolean);
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
 
-        return parts.length === 1 && parts[0].toLowerCase() === username;
-      } catch (error) {
-        return false;
+        return rect.width > 0
+          && rect.height > 0
+          && style.visibility !== 'hidden'
+          && style.display !== 'none';
+      };
+      const profileUsernameFromAnchor = (anchor) => {
+        try {
+          const parts = new URL(anchor.getAttribute('href'), window.location.origin).pathname
+            .split('/')
+            .filter(Boolean);
+
+          return parts.length === 1 ? normalizeUsername(parts[0]) : '';
+        } catch (error) {
+          return '';
+        }
+      };
+      const findAnchor = () => Array.from(document.querySelectorAll('a[href]'))
+        .filter((anchorElement) => !isInsideDialog(anchorElement))
+        .find((anchorElement) => profileUsernameFromAnchor(anchorElement) === username) || null;
+      const removePattern = /^(x|entfernen|remove|close|schliessen|schlie(?:ss|\u00df)en|dismiss)$/i;
+      const removeTextPattern = /(?:entfernen|remove|close|schliessen|schlie(?:ss|\u00df)en|dismiss)/i;
+      const nonDismissPattern = /(?:folgen|abonniert|follow|following|nachricht|message|profil|profile|mehr|more)/i;
+      const clickableFor = (element) => element.closest('button, [role="button"]') || element;
+      const elementLabel = (element) => normalizeElementText([
+        element.getAttribute?.('aria-label') || '',
+        element.getAttribute?.('title') || '',
+        element.innerText || '',
+        element.textContent || '',
+      ].join(' '));
+      const findCardContainer = (anchor) => {
+        let best = anchor;
+
+        for (let element = anchor; element && element !== document.body; element = element.parentElement) {
+          if (isInsideDialog(element)) {
+            return null;
+          }
+
+          const text = normalizeElementText(element.innerText || element.textContent || '');
+          const rect = element.getBoundingClientRect();
+
+          if (
+            text.toLowerCase().includes(username)
+            && rect.width >= 80
+            && rect.height >= 40
+            && text.length <= 1200
+          ) {
+            best = element;
+          }
+
+          if (text.length > 1200 || rect.height > 650 || rect.width > Math.max(900, window.innerWidth * 0.95)) {
+            break;
+          }
+        }
+
+        return best;
+      };
+      const findDismissControl = (card, anchor) => {
+        const controls = Array.from(card.querySelectorAll('button, [role="button"], [aria-label], svg[aria-label], svg[role="img"]'))
+          .filter((element) => !isInsideDialog(element));
+
+        for (const control of controls) {
+          const label = elementLabel(control);
+
+          if (
+            label
+            && !nonDismissPattern.test(label)
+            && (removePattern.test(label) || removeTextPattern.test(label))
+          ) {
+            const clickable = clickableFor(control);
+
+            if (isVisible(clickable)) {
+              return clickable;
+            }
+          }
+        }
+
+        const buttonControls = Array.from(card.querySelectorAll('button, [role="button"]'))
+          .filter(isVisible);
+        const cardRect = card.getBoundingClientRect();
+        const anchorRect = anchor.getBoundingClientRect();
+
+        for (const control of buttonControls) {
+          const label = elementLabel(control);
+
+          if (label && nonDismissPattern.test(label)) {
+            continue;
+          }
+
+          const rect = control.getBoundingClientRect();
+          const smallControl = rect.width <= 56 && rect.height <= 56;
+          const nearTop = rect.top <= Math.max(anchorRect.top + 70, cardRect.top + 90);
+          const nearRight = rect.left >= cardRect.left + (cardRect.width * 0.45);
+
+          if (smallControl && nearTop && nearRight) {
+            return control;
+          }
+        }
+
+        return null;
+      };
+      const clickCarouselNext = () => {
+        const nextPattern = /(?:weiter|n(?:a|\u00e4)chste|next)/i;
+        const controls = Array.from(document.querySelectorAll('button, [role="button"], [aria-label]'))
+          .filter(isVisible)
+          .filter((element) => {
+            const label = elementLabel(element);
+
+            if (!nextPattern.test(label)) {
+              return false;
+            }
+
+            const rect = element.getBoundingClientRect();
+
+            return rect.top > 0
+              && rect.top < document.documentElement.scrollHeight
+              && rect.width <= 90
+              && rect.height <= 90;
+          });
+
+        const control = controls[0] || null;
+
+        if (!control) {
+          return false;
+        }
+
+        control.click();
+        return true;
+      };
+      const anchor = findAnchor();
+
+      if (!anchor) {
+        return {
+          status: clickCarouselNext() ? 'advanced' : 'not-found',
+        };
       }
-    });
 
-    if (!anchor) {
-      return false;
+      anchor.scrollIntoView({
+        block: 'center',
+        inline: 'center',
+      });
+
+      const card = findCardContainer(anchor);
+
+      if (!card) {
+        return { status: 'card-missing' };
+      }
+
+      const control = findDismissControl(card, anchor);
+
+      if (!control) {
+        return { status: 'control-missing' };
+      }
+
+      control.click();
+
+      return { status: 'dismissed' };
+    }, normalizedUsername).catch(() => ({ status: 'error' }));
+
+    if (result?.status === 'dismissed') {
+      return true;
     }
 
-    const isRemoveButton = (element) => {
-        const text = normalizeElementText(element.innerText || element.textContent || '');
-        const ariaLabel = normalizeElementText(element.getAttribute('aria-label') || '');
+    await sleep(result?.status === 'advanced' ? 550 : 300);
+  }
 
-        return isVisible(element)
-          && !isInsideDialog(element)
-          && (/^(x|entfernen|remove|close)$/i.test(text) || /(?:entfernen|remove|close)/i.test(ariaLabel));
-    };
-    let button = null;
-
-    for (let element = anchor; element && element !== document.body; element = element.parentElement) {
-      if (isInsideDialog(element)) {
-        return false;
-      }
-
-      const buttons = Array.from(element.querySelectorAll('button, div[role="button"]'))
-        .filter((buttonElement) => !isInsideDialog(buttonElement));
-      button = buttons.find(isRemoveButton) || null;
-
-      if (button) {
-        break;
-      }
-
-      if ((element.innerText || '').length > 900) {
-        break;
-      }
-    }
-
-    if (!button) {
-      return false;
-    }
-
-    button.click();
-    return true;
-  }, normalizedUsername).catch(() => false);
+  return false;
 }
 
 async function dismissCookieConsentIfPresent(page) {
