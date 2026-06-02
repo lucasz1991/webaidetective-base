@@ -267,7 +267,20 @@ function fitGraph(cy) {
     const visible = cy.elements().not('.network-filtered');
 
     if (visible.length) {
-        cy.fit(visible, 56);
+        const padding = Math.max(16, Math.min(56, Math.floor(Math.min(cy.width(), cy.height()) * 0.08)));
+        const bounds = visible.boundingBox();
+        const viewportWidth = Math.max(1, cy.width() - (padding * 2));
+        const viewportHeight = Math.max(1, cy.height() - (padding * 2));
+        const requiredZoom = Math.min(
+            viewportWidth / Math.max(1, bounds.w),
+            viewportHeight / Math.max(1, bounds.h),
+        );
+
+        if (Number.isFinite(requiredZoom) && requiredZoom > 0 && requiredZoom < cy.minZoom()) {
+            cy.minZoom(Math.max(0.002, requiredZoom * 0.85));
+        }
+
+        cy.fit(visible, padding);
     }
 }
 
@@ -297,7 +310,10 @@ function bindControls(root, cy) {
             }
 
             if (action === 'zoom-out') {
-                cy.zoom({ level: Math.max(0.25, cy.zoom() - 0.18), renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+                cy.zoom({
+                    level: Math.max(cy.minZoom(), cy.zoom() - Math.max(0.03, cy.zoom() * 0.22)),
+                    renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 },
+                });
             }
 
             if (action === 'fit') {
@@ -341,7 +357,7 @@ async function initNetworkMap(root) {
         const cy = cytoscape({
         container,
         elements: initialElements,
-        minZoom: 0.25,
+        minZoom: 0.02,
         maxZoom: 2.2,
         wheelSensitivity: 0.16,
         style: [
@@ -699,19 +715,24 @@ async function loadPreparedGraph(root, detail) {
         progress: 100,
     });
 
-    cy.layout(finalLayoutOptions(cy)).run();
-    window.setTimeout(() => {
-        fitGraph(cy);
-        updateBuildStatus(root, {
-            visible: true,
-            label: 'Netzwerk geladen',
-            text: `${state.loadedNodes.toLocaleString('de-DE')} Knoten und ${state.loadedEdges.toLocaleString('de-DE')} Kanten sichtbar.`,
-            count: 'Fertig',
-            progress: 100,
-            state: 'done',
+    const layout = cy.layout(finalLayoutOptions(cy));
+
+    layout.one('layoutstop', () => {
+        window.requestAnimationFrame(() => {
+            fitGraph(cy);
+            updateBuildStatus(root, {
+                visible: true,
+                label: 'Netzwerk geladen',
+                text: `${state.loadedNodes.toLocaleString('de-DE')} Knoten und ${state.loadedEdges.toLocaleString('de-DE')} Kanten sichtbar.`,
+                count: 'Fertig',
+                progress: 100,
+                state: 'done',
+            });
+            window.setTimeout(() => updateBuildStatus(root, { visible: false, state: 'done' }), 1200);
         });
-        window.setTimeout(() => updateBuildStatus(root, { visible: false, state: 'done' }), 1200);
-    }, cy.nodes().length > 1200 ? 100 : 750);
+    });
+
+    layout.run();
 }
 
 async function handlePreparedGraph(event) {

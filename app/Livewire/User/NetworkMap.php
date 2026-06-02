@@ -208,31 +208,19 @@ class NetworkMap extends Component
     {
         $nodes = [];
         $edges = [];
+        $primaryPerson = $trackedPeople->firstWhere('is_primary', true) ?: $trackedPeople->first();
+        $focusedPeople = $primaryPerson ? collect([$primaryPerson]) : collect();
         $peopleByInstagram = $trackedPeople
             ->filter(fn (TrackedPerson $person): bool => filled($person->instagram_username))
             ->mapWithKeys(fn (TrackedPerson $person): array => [
                 $this->normalizeUsername($person->instagram_username) => $person,
             ]);
 
-        foreach ($trackedPeople as $person) {
-            $imageUrl = $this->profileImageUrlForPerson($person);
-
-            $nodes['person-'.$person->id] = [
-                'id' => 'person-'.$person->id,
-                'type' => 'person',
-                'label' => $person->display_name,
-                'handle' => $person->instagram_username ? '@'.$person->instagram_username : '',
-                'username' => $this->normalizeUsername($person->instagram_username),
-                'imageUrl' => $imageUrl,
-                'hasImage' => filled($imageUrl),
-                'isPrimary' => (bool) $person->is_primary,
-                'role' => $person->is_primary ? 'Hauptperson' : 'Beobachtete Person',
-                'status' => $person->last_instagram_status_level ?: 'neutral',
-                'detail' => $person->last_instagram_status_message ?: null,
-            ];
+        if ($primaryPerson) {
+            $this->ensureTrackedPersonNode($nodes, $primaryPerson);
         }
 
-        foreach ($trackedPeople as $person) {
+        foreach ($focusedPeople as $person) {
             $sourceId = 'person-'.$person->id;
 
             foreach ($person->publicProfiles as $publicProfile) {
@@ -242,7 +230,7 @@ class NetworkMap extends Component
 
                 $profileUsername = $this->normalizeUsername($publicProfile->username);
                 $targetPerson = $peopleByInstagram->get($profileUsername);
-                $targetId = $targetPerson ? 'person-'.$targetPerson->id : 'profile-'.$publicProfile->platform.'-'.$profileUsername;
+                $targetId = $targetPerson ? $this->ensureTrackedPersonNode($nodes, $targetPerson) : 'profile-'.$publicProfile->platform.'-'.$profileUsername;
                 $linkedInstagramProfile = $publicProfile->instagramProfile;
                 $profileImageUrl = $this->profileImageUrlForInstagramProfile($linkedInstagramProfile);
 
@@ -280,7 +268,7 @@ class NetworkMap extends Component
 
                 $candidateUsername = $this->normalizeUsername($connection->candidate_username);
                 $candidatePerson = $peopleByInstagram->get($candidateUsername);
-                $candidateId = $candidatePerson ? 'person-'.$candidatePerson->id : 'candidate-'.$candidateUsername;
+                $candidateId = $candidatePerson ? $this->ensureTrackedPersonNode($nodes, $candidatePerson) : 'candidate-'.$candidateUsername;
 
                 if (! isset($nodes[$candidateId])) {
                     $nodes[$candidateId] = [
@@ -317,10 +305,38 @@ class NetworkMap extends Component
 
         $nodesByInstagram = $this->indexGraphNodesByInstagramUsername($nodes);
 
-        $this->addStoredInstagramProfileListEdges($trackedPeople, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
-        $this->addTrackedRelationshipListEdges($trackedPeople, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
+        $this->addStoredInstagramProfileListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
+        $this->addTrackedRelationshipListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
+        $this->addObservedTrackedPersonConnectionsToPrimary($trackedPeople, $primaryPerson, $nodesByInstagram, $nodes, $edges);
 
         return $this->applyLayout(array_values($nodes), array_values($edges));
+    }
+
+    private function ensureTrackedPersonNode(array &$nodes, TrackedPerson $person): string
+    {
+        $nodeId = 'person-'.$person->id;
+
+        if (isset($nodes[$nodeId])) {
+            return $nodeId;
+        }
+
+        $imageUrl = $this->profileImageUrlForPerson($person);
+
+        $nodes[$nodeId] = [
+            'id' => $nodeId,
+            'type' => 'person',
+            'label' => $person->display_name,
+            'handle' => $person->instagram_username ? '@'.$person->instagram_username : '',
+            'username' => $this->normalizeUsername($person->instagram_username),
+            'imageUrl' => $imageUrl,
+            'hasImage' => filled($imageUrl),
+            'isPrimary' => (bool) $person->is_primary,
+            'role' => $person->is_primary ? 'Hauptperson' : 'Beobachtete Person',
+            'status' => $person->last_instagram_status_level ?: 'neutral',
+            'detail' => $person->last_instagram_status_message ?: null,
+        ];
+
+        return $nodeId;
     }
 
     private function resolvePrimaryTrackedPersonId(Collection $trackedPeople): ?int
@@ -369,55 +385,27 @@ class NetworkMap extends Component
     }
 
     private function addStoredInstagramProfileListEdges(
-        Collection $trackedPeople,
+        ?TrackedPerson $primaryPerson,
         Collection $peopleByInstagram,
         Collection $nodesByInstagram,
         array &$nodes,
         array &$edges,
     ): void {
+        if (! $primaryPerson || ! $this->shouldShowStoredListProfile($primaryPerson->currentInstagramProfile, $this->trackedPersonInstagramProfileIsPublic($primaryPerson))) {
+            return;
+        }
+
         $processedSources = [];
 
-        foreach ($trackedPeople as $person) {
-            if ($this->shouldShowStoredListProfile($person->currentInstagramProfile, $this->trackedPersonInstagramProfileIsPublic($person))) {
-                $this->addInstagramProfileListRelationshipEdges(
-                    $person->currentInstagramProfile,
-                    'person-'.$person->id,
-                    $peopleByInstagram,
-                    $nodesByInstagram,
-                    $nodes,
-                    $edges,
-                    $processedSources,
-                );
-            }
-
-            foreach ($person->publicProfiles as $publicProfile) {
-                if ($publicProfile->platform !== 'instagram' || ! $this->shouldShowStoredListProfile($publicProfile->instagramProfile, (bool) $publicProfile->is_public)) {
-                    continue;
-                }
-
-                $sourceId = $this->ensureInstagramProfileNode(
-                    $nodes,
-                    $nodesByInstagram,
-                    $peopleByInstagram,
-                    $publicProfile->instagramProfile,
-                    'Bekanntes oeffentliches Profil',
-                );
-
-                if (! $sourceId) {
-                    continue;
-                }
-
-                $this->addInstagramProfileListRelationshipEdges(
-                    $publicProfile->instagramProfile,
-                    $sourceId,
-                    $peopleByInstagram,
-                    $nodesByInstagram,
-                    $nodes,
-                    $edges,
-                    $processedSources,
-                );
-            }
-        }
+        $this->addInstagramProfileListRelationshipEdges(
+            $primaryPerson->currentInstagramProfile,
+            'person-'.$primaryPerson->id,
+            $peopleByInstagram,
+            $nodesByInstagram,
+            $nodes,
+            $edges,
+            $processedSources,
+        );
     }
 
     private function addInstagramProfileListRelationshipEdges(
@@ -487,55 +475,188 @@ class NetworkMap extends Component
     }
 
     private function addTrackedRelationshipListEdges(
-        Collection $trackedPeople,
+        ?TrackedPerson $primaryPerson,
         Collection $peopleByInstagram,
         Collection $nodesByInstagram,
         array &$nodes,
         array &$edges,
     ): void {
+        if (! $primaryPerson) {
+            return;
+        }
+
+        $sourceId = 'person-'.$primaryPerson->id;
+
+        foreach ($this->loadSnapshotRelationshipItems($primaryPerson->latestInstagramSnapshot, 'followersList') as $item) {
+            $targetNode = $this->ensureRelationshipItemNode($nodes, $nodesByInstagram, $peopleByInstagram, $item);
+
+            if (! $targetNode || $targetNode['id'] === $sourceId) {
+                continue;
+            }
+
+            $this->mergeTrackedRelationshipEdge(
+                $edges,
+                $targetNode['id'],
+                $sourceId,
+                'Followerliste',
+                sprintf(
+                    '@%s wurde in der Followerliste von %s gefunden.',
+                    $this->displayUsernameForNode($targetNode),
+                    $this->displayUsernameForPerson($primaryPerson),
+                ),
+            );
+        }
+
+        foreach ($this->loadSnapshotRelationshipItems($primaryPerson->latestInstagramSnapshot, 'followingList') as $item) {
+            $targetNode = $this->ensureRelationshipItemNode($nodes, $nodesByInstagram, $peopleByInstagram, $item);
+
+            if (! $targetNode || $targetNode['id'] === $sourceId) {
+                continue;
+            }
+
+            $this->mergeTrackedRelationshipEdge(
+                $edges,
+                $sourceId,
+                $targetNode['id'],
+                'Gefolgt-Liste',
+                sprintf(
+                    '@%s wurde in der Gefolgt-Liste von %s gefunden.',
+                    $this->displayUsernameForNode($targetNode),
+                    $this->displayUsernameForPerson($primaryPerson),
+                ),
+            );
+        }
+    }
+
+    private function addObservedTrackedPersonConnectionsToPrimary(
+        Collection $trackedPeople,
+        ?TrackedPerson $primaryPerson,
+        Collection $nodesByInstagram,
+        array &$nodes,
+        array &$edges,
+    ): void {
+        if (! $primaryPerson) {
+            return;
+        }
+
+        $primaryUsername = $this->normalizeUsername($primaryPerson->instagram_username);
+
+        if ($primaryUsername === '') {
+            return;
+        }
+
+        $primaryId = 'person-'.$primaryPerson->id;
+
         foreach ($trackedPeople as $person) {
-            $sourceId = 'person-'.$person->id;
+            if ((int) $person->id === (int) $primaryPerson->id || ! filled($person->instagram_username)) {
+                continue;
+            }
+
+            $observedId = null;
+            $ensureObserved = function () use (&$observedId, &$nodesByInstagram, &$nodes, $person): string {
+                if ($observedId) {
+                    return $observedId;
+                }
+
+                $observedId = $this->ensureTrackedPersonNode($nodes, $person);
+                $username = $this->normalizeUsername($person->instagram_username);
+
+                if ($username !== '') {
+                    $nodesByInstagram->put($username, $nodes[$observedId]);
+                }
+
+                return $observedId;
+            };
+
+            foreach ($person->currentInstagramProfile?->sourceRelationships ?? collect() as $relationship) {
+                if (! $this->isActiveListRelationship($relationship)) {
+                    continue;
+                }
+
+                $relatedUsername = $this->normalizeUsername($relationship->relatedInstagramProfile?->username);
+
+                if ($relatedUsername !== $primaryUsername) {
+                    continue;
+                }
+
+                $observedNodeId = $ensureObserved();
+
+                if ($relationship->list_type === 'followers') {
+                    $this->mergeTrackedRelationshipEdge(
+                        $edges,
+                        $primaryId,
+                        $observedNodeId,
+                        'Followerliste',
+                        sprintf(
+                            '%s folgt %s laut gespeicherter Followerliste.',
+                            $this->displayUsernameForPerson($primaryPerson),
+                            $this->displayUsernameForPerson($person),
+                        ),
+                    );
+
+                    continue;
+                }
+
+                if ($relationship->list_type === 'following') {
+                    $this->mergeTrackedRelationshipEdge(
+                        $edges,
+                        $observedNodeId,
+                        $primaryId,
+                        'Gefolgt-Liste',
+                        sprintf(
+                            '%s folgt %s laut gespeicherter Gefolgt-Liste.',
+                            $this->displayUsernameForPerson($person),
+                            $this->displayUsernameForPerson($primaryPerson),
+                        ),
+                    );
+                }
+            }
 
             foreach ($this->loadSnapshotRelationshipItems($person->latestInstagramSnapshot, 'followersList') as $item) {
-                $targetNode = $this->ensureRelationshipItemNode($nodes, $nodesByInstagram, $peopleByInstagram, $item);
-
-                if (! $targetNode || $targetNode['id'] === $sourceId) {
+                if (! $this->relationshipItemMatchesUsername($item, $primaryUsername)) {
                     continue;
                 }
 
                 $this->mergeTrackedRelationshipEdge(
                     $edges,
-                    $targetNode['id'],
-                    $sourceId,
+                    $primaryId,
+                    $ensureObserved(),
                     'Followerliste',
                     sprintf(
-                        '@%s wurde in der Followerliste von %s gefunden.',
-                        $this->displayUsernameForNode($targetNode),
+                        '%s wurde in der Followerliste von %s gefunden.',
+                        $this->displayUsernameForPerson($primaryPerson),
                         $this->displayUsernameForPerson($person),
                     ),
                 );
             }
 
             foreach ($this->loadSnapshotRelationshipItems($person->latestInstagramSnapshot, 'followingList') as $item) {
-                $targetNode = $this->ensureRelationshipItemNode($nodes, $nodesByInstagram, $peopleByInstagram, $item);
-
-                if (! $targetNode || $targetNode['id'] === $sourceId) {
+                if (! $this->relationshipItemMatchesUsername($item, $primaryUsername)) {
                     continue;
                 }
 
                 $this->mergeTrackedRelationshipEdge(
                     $edges,
-                    $sourceId,
-                    $targetNode['id'],
+                    $ensureObserved(),
+                    $primaryId,
                     'Gefolgt-Liste',
                     sprintf(
-                        '@%s wurde in der Gefolgt-Liste von %s gefunden.',
-                        $this->displayUsernameForNode($targetNode),
+                        '%s wurde in der Gefolgt-Liste von %s gefunden.',
+                        $this->displayUsernameForPerson($primaryPerson),
                         $this->displayUsernameForPerson($person),
                     ),
                 );
             }
         }
+    }
+
+    private function relationshipItemMatchesUsername(mixed $item, string $username): bool
+    {
+        if (! is_array($item) || ! filled($item['username'] ?? null)) {
+            return false;
+        }
+
+        return $this->normalizeUsername((string) $item['username']) === $username;
     }
 
     private function indexGraphNodesByInstagramUsername(array $nodes): Collection
@@ -595,7 +716,10 @@ class NetworkMap extends Component
         $person = $peopleByInstagram->get($username);
 
         if ($person) {
-            return 'person-'.$person->id;
+            $nodeId = $this->ensureTrackedPersonNode($nodes, $person);
+            $nodesByInstagram->put($username, $nodes[$nodeId]);
+
+            return $nodeId;
         }
 
         $imageUrl = $this->profileImageUrlForInstagramProfile($profile);
@@ -646,11 +770,9 @@ class NetworkMap extends Component
         $person = $peopleByInstagram->get($username);
 
         if ($person) {
-            $node = $nodes['person-'.$person->id] ?? null;
-
-            if ($node) {
-                $nodesByInstagram->put($username, $node);
-            }
+            $nodeId = $this->ensureTrackedPersonNode($nodes, $person);
+            $node = $nodes[$nodeId] ?? null;
+            $nodesByInstagram->put($username, $node);
 
             return $node;
         }
