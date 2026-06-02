@@ -137,6 +137,7 @@ class NetworkMap extends Component
                     ->with('relatedInstagramProfile'),
                 'publicProfiles.latestInstagramConnectionScan',
                 'instagramInferredConnections.publicProfile',
+                'instagramInferredConnections.candidateInstagramProfile',
             ])
             ->orderBy('first_name')
             ->orderBy('last_name')
@@ -271,6 +272,8 @@ class NetworkMap extends Component
                 $candidateId = $candidatePerson ? $this->ensureTrackedPersonNode($nodes, $candidatePerson) : 'candidate-'.$candidateUsername;
 
                 if (! isset($nodes[$candidateId])) {
+                    $candidateImageUrl = $this->profileImageUrlForInstagramProfile($connection->candidateInstagramProfile);
+
                     $nodes[$candidateId] = [
                         'id' => $candidateId,
                         'type' => 'candidate',
@@ -278,8 +281,8 @@ class NetworkMap extends Component
                         'handle' => '@'.$candidateUsername,
                         'username' => $candidateUsername,
                         'platform' => 'instagram',
-                        'imageUrl' => null,
-                        'hasImage' => false,
+                        'imageUrl' => $candidateImageUrl,
+                        'hasImage' => filled($candidateImageUrl),
                         'isPrimary' => false,
                         'role' => 'Rekonstruierter Kandidat',
                         'status' => 'inferred',
@@ -287,9 +290,14 @@ class NetworkMap extends Component
                     ];
                 }
 
-                $isFollower = $connection->relationship_type === 'follows_target';
-                $from = $isFollower ? $candidateId : $sourceId;
-                $to = $isFollower ? $sourceId : $candidateId;
+                if ($connection->relationship_type === 'suggestion_connection') {
+                    $from = $sourceId;
+                    $to = $candidateId;
+                } else {
+                    $isFollower = $connection->relationship_type === 'follows_target';
+                    $from = $isFollower ? $candidateId : $sourceId;
+                    $to = $isFollower ? $sourceId : $candidateId;
+                }
                 $edgeId = 'inferred-'.$connection->relationship_type.'-'.$from.'-'.$to;
 
                 $edges[$edgeId] = [

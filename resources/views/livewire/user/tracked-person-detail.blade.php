@@ -110,6 +110,10 @@
             ->where('relationship_type', 'followed_by_target')
             ->unique('candidate_username')
             ->values();
+        $suggestionInstagramConnections = $trackedPerson->instagramInferredConnections
+            ->where('relationship_type', 'suggestion_connection')
+            ->unique('candidate_username')
+            ->values();
         $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
         $latestProfileVisibility = data_get($latestSnapshot?->raw_payload, 'extractedProfile.profileVisibility');
         $latestProfileVisibilityLabel = match ($latestProfileVisibility) {
@@ -215,7 +219,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanPublicProfileConnections"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanPublicProfileConnections,scanInstagramSuggestions"
         class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
@@ -1082,16 +1086,28 @@
                             Hier verknuepfst du andere bereits beobachtete Instagram-Profile, die mit diesem Profil eng verbunden sind.
                         </p>
                     </div>
-                    <button
-                        type="button"
-                        wire:click="scanPublicProfileConnections"
-                        wire:loading.attr="disabled"
-                        wire:target="scanPublicProfileConnections"
-                        @disabled($trackedPerson->publicProfiles->isEmpty() || ! $trackedPerson->instagram_username)
-                        class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        Listenverbindungen pruefen
-                    </button>
+                    <div class="flex flex-wrap gap-2">
+                        <button
+                            type="button"
+                            wire:click="scanInstagramSuggestions"
+                            wire:loading.attr="disabled"
+                            wire:target="scanInstagramSuggestions"
+                            @disabled(! $trackedPerson->instagram_username)
+                            class="rounded-xl border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Profilvorschlaege pruefen
+                        </button>
+                        <button
+                            type="button"
+                            wire:click="scanPublicProfileConnections"
+                            wire:loading.attr="disabled"
+                            wire:target="scanPublicProfileConnections"
+                            @disabled($trackedPerson->publicProfiles->isEmpty() || ! $trackedPerson->instagram_username)
+                            class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Listenverbindungen pruefen
+                        </button>
+                    </div>
                 </div>
 
                 <div class="mt-3 space-y-2">
@@ -1341,12 +1357,53 @@
 
                 <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <div class="flex flex-wrap items-center justify-between gap-2">
+                        <h4 class="text-sm font-bold text-slate-900">Analysierte Profilvorschlaege</h4>
+                        <span class="text-xs text-slate-500">Letzte 20 Scans</span>
+                    </div>
+                    <div class="mt-3 space-y-2">
+                        @forelse($trackedPerson->instagramSuggestionScans as $suggestionScan)
+                            @php
+                                $suggestionScanStatusClass = match ($suggestionScan->status_level) {
+                                    'success' => 'border-emerald-200 bg-white text-emerald-900',
+                                    'partial' => 'border-amber-200 bg-white text-amber-950',
+                                    'error' => 'border-rose-200 bg-white text-rose-900',
+                                    default => 'border-slate-200 bg-white text-slate-700',
+                                };
+                            @endphp
+                            <div class="rounded-xl border px-3 py-2 text-xs {{ $suggestionScanStatusClass }}">
+                                <div class="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <div class="font-semibold text-slate-950">
+                                            {{ '@'.$suggestionScan->target_username }}
+                                        </div>
+                                        @if($suggestionScan->status_message)
+                                            <div class="mt-1 text-slate-500">{{ $suggestionScan->status_message }}</div>
+                                        @endif
+                                    </div>
+                                    <div class="text-right text-slate-500">
+                                        <div>{{ $suggestionScan->analyzed_at ? $suggestionScan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</div>
+                                        <div class="mt-1">
+                                            Vorschlaege {{ number_format($suggestionScan->suggestions_observed_count, 0, ',', '.') }}
+                                            / geprueft {{ number_format($suggestionScan->suggestions_checked_count, 0, ',', '.') }}
+                                            / Treffer {{ number_format($suggestionScan->suggestion_matches_count, 0, ',', '.') }}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        @empty
+                            <p class="text-sm text-slate-500">Noch keine Profilvorschlaege analysiert.</p>
+                        @endforelse
+                    </div>
+                </div>
+
+                <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
                         <h4 class="text-sm font-bold text-slate-900">Teilweise rekonstruierte private Listen</h4>
                         <span class="text-xs text-slate-500">
-                            {{ $inferredInstagramFollowers->count() }} Follower / {{ $inferredInstagramFollowing->count() }} Gefolgt
+                            {{ $inferredInstagramFollowers->count() }} Follower / {{ $inferredInstagramFollowing->count() }} Gefolgt / {{ $suggestionInstagramConnections->count() }} Vorschlaege
                         </span>
                     </div>
-                    <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                    <div class="mt-3 grid gap-3 xl:grid-cols-3">
                         <div class="rounded-xl border border-slate-200 bg-white p-3">
                             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Moegliche Follower des privaten Profils</div>
                             <div class="mt-3 space-y-2">
@@ -1386,6 +1443,27 @@
                                     </div>
                                 @empty
                                     <p class="text-sm text-slate-500">Noch keine moeglich gefolgten Profile ueber bekannte Profile gefunden.</p>
+                                @endforelse
+                            </div>
+                        </div>
+                        <div class="rounded-xl border border-slate-200 bg-white p-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Vorschlag-Verbindungen</div>
+                            <div class="mt-3 space-y-2">
+                                @forelse($suggestionInstagramConnections->take(40) as $connection)
+                                    <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs">
+                                        <div>
+                                            <div class="font-semibold text-slate-900">{{ $connection->display_handle }}</div>
+                                            @if($connection->candidate_display_name)
+                                                <div class="text-slate-500">{{ $connection->candidate_display_name }}</div>
+                                            @endif
+                                            <div class="text-slate-500">Gefunden in Vorschlaegen bei {{ '@'.$connection->source_public_username }}</div>
+                                        </div>
+                                        <div class="text-right text-slate-500">
+                                            {{ $connection->last_seen_at ? $connection->last_seen_at->timezone(config('app.timezone'))->diffForHumans() : '-' }}
+                                        </div>
+                                    </div>
+                                @empty
+                                    <p class="text-sm text-slate-500">Noch keine Vorschlag-Verbindungen gefunden.</p>
                                 @endforelse
                             </div>
                         </div>

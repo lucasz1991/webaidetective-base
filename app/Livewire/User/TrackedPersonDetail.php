@@ -10,6 +10,7 @@ use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
+use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
 
@@ -216,6 +217,65 @@ class TrackedPersonDetail extends Component
         $this->dispatch('tracked-person-refresh');
     }
 
+    public function scanInstagramSuggestions(): void
+    {
+        @set_time_limit(0);
+        @ignore_user_abort(false);
+
+        $trackedPerson = $this->resolveTrackedPerson();
+
+        if (! $trackedPerson->instagram_username) {
+            $this->setDetailStatus('Fuer diese Person ist kein Instagram-Name hinterlegt.', 'error');
+
+            return;
+        }
+
+        $progress = fn (array $state) => $this->streamInstagramProgress($state);
+        $this->cancelInstagramScanWhenClientDisconnects($trackedPerson->id);
+
+        try {
+            $this->streamInstagramProgress([
+                'phase' => 'suggestions',
+                'percent' => 1,
+                'message' => 'Profilvorschlag-Verbindungsscan wird vorbereitet.',
+                'foundSuggestions' => 0,
+                'suggestionConnections' => [],
+            ]);
+
+            $scan = app(TrackedPersonInstagramSuggestionScanService::class)->scan($trackedPerson, $progress);
+        } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            $this->streamInstagramProgress([
+                'phase' => 'done',
+                'percent' => 100,
+                'message' => 'Vorheriger Scan wurde beendet, weil ein neuer Scan gestartet wurde.',
+            ]);
+            $this->setDetailStatus('Vorheriger Instagram-Scan wurde beendet, weil ein neuer Scan gestartet wurde.', 'partial');
+
+            return;
+        } catch (\Throwable $exception) {
+            $this->streamInstagramProgress([
+                'phase' => 'error',
+                'percent' => 100,
+                'message' => 'Profilvorschlag-Verbindungsscan fehlgeschlagen.',
+            ]);
+            $this->setDetailStatus('Profilvorschlag-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+
+            return;
+        }
+
+        $this->setDetailStatus(
+            ($scan->gracefully_stopped
+                ? 'Profilvorschlag-Verbindungsscan wurde beendet und gespeichert: '
+                : 'Profilvorschlag-Verbindungsscan abgeschlossen: ')
+            .number_format((int) $scan->suggestions_checked_count, 0, ',', '.')
+            .' Kandidaten geprueft, '
+            .number_format((int) $scan->suggestion_matches_count, 0, ',', '.')
+            .' Vorschlag-Verbindungen gefunden.',
+            $scan->status_level === 'success' && ! $scan->gracefully_stopped ? 'success' : 'partial',
+        );
+        $this->dispatch('tracked-person-refresh');
+    }
+
     private function runInstagramAnalysis(bool $fullScan): void
     {
         @set_time_limit(0);
@@ -388,6 +448,7 @@ class TrackedPersonDetail extends Component
             'followers' => 'Followerliste',
             'following' => 'Gefolgt-Liste',
             'public-connections' => 'Verbindungen',
+            'suggestions' => 'Vorschlaege',
             'saving' => 'Speichern',
             'done' => 'Fertig',
             'error' => 'Fehler',
@@ -398,9 +459,10 @@ class TrackedPersonDetail extends Component
         $expected = $state['expected'] ?? null;
         $foundFollowers = $state['foundFollowers'] ?? null;
         $foundFollowing = $state['foundFollowing'] ?? null;
+        $foundSuggestions = $state['foundSuggestions'] ?? null;
         $liveCounts = '';
 
-        if ($loaded !== null || $expected !== null || $foundFollowers !== null || $foundFollowing !== null) {
+        if ($loaded !== null || $expected !== null || $foundFollowers !== null || $foundFollowing !== null || $foundSuggestions !== null) {
             $liveParts = [];
 
             if ($loaded !== null && $expected !== null) {
@@ -416,6 +478,11 @@ class TrackedPersonDetail extends Component
                     .' Follower / '
                     .number_format((int) $foundFollowing, 0, ',', '.')
                     .' Gefolgt';
+            }
+
+            if ($foundSuggestions !== null) {
+                $liveParts[] = 'Vorschlag-Verbindungen: '
+                    .number_format((int) $foundSuggestions, 0, ',', '.');
             }
 
             $liveCounts = implode(' · ', $liveParts);
@@ -483,9 +550,10 @@ class TrackedPersonDetail extends Component
     {
         $hasFollowers = array_key_exists('inferredFollowers', $state);
         $hasFollowing = array_key_exists('inferredFollowing', $state);
+        $hasSuggestions = array_key_exists('suggestionConnections', $state);
 
-        if (! $hasFollowers && ! $hasFollowing) {
-            if (($state['phase'] ?? null) !== 'public-connections') {
+        if (! $hasFollowers && ! $hasFollowing && ! $hasSuggestions) {
+            if (! in_array(($state['phase'] ?? null), ['public-connections', 'suggestions'], true)) {
                 $this->stream('instagram-progress-connection-results', '', true);
             }
 
@@ -494,10 +562,11 @@ class TrackedPersonDetail extends Component
 
         $followers = $this->normalizeProgressConnectionItems($state['inferredFollowers'] ?? []);
         $following = $this->normalizeProgressConnectionItems($state['inferredFollowing'] ?? []);
+        $suggestions = $this->normalizeProgressConnectionItems($state['suggestionConnections'] ?? []);
 
         $this->stream(
             'instagram-progress-connection-results',
-            $this->renderProgressConnectionResults($followers, $following),
+            $this->renderProgressConnectionResults($followers, $following, $suggestions, $hasSuggestions),
             true,
         );
     }
@@ -536,19 +605,23 @@ class TrackedPersonDetail extends Component
         return $normalizedItems;
     }
 
-    private function renderProgressConnectionResults(array $followers, array $following): string
+    private function renderProgressConnectionResults(array $followers, array $following, array $suggestions = [], bool $showSuggestions = false): string
     {
+        $gridClass = $showSuggestions ? 'lg:grid-cols-3' : 'sm:grid-cols-2';
+
         return '<div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left">'
             .'<div class="flex items-center justify-between gap-3 text-xs">'
             .'<span class="font-semibold uppercase tracking-wide text-slate-500">Bisherige Treffer</span>'
             .'<span class="font-semibold text-slate-700">'
             .number_format(count($followers), 0, ',', '.').' Follower / '
             .number_format(count($following), 0, ',', '.').' Gefolgt'
+            .($showSuggestions ? ' / '.number_format(count($suggestions), 0, ',', '.').' Vorschlaege' : '')
             .'</span>'
             .'</div>'
-            .'<div class="mt-3 grid gap-3 sm:grid-cols-2">'
+            .'<div class="mt-3 grid gap-3 '.$gridClass.'">'
             .$this->renderProgressConnectionList('Moegliche Follower', $followers)
             .$this->renderProgressConnectionList('Moeglich gefolgt', $following)
+            .($showSuggestions ? $this->renderProgressConnectionList('Vorschlag-Verbindungen', $suggestions) : '')
             .'</div>'
             .'</div>';
     }
@@ -729,8 +802,11 @@ class TrackedPersonDetail extends Component
                     ->with('publicProfile')
                     ->latest('analyzed_at')
                     ->limit(20),
+                'instagramSuggestionScans' => fn ($query) => $query
+                    ->latest('analyzed_at')
+                    ->limit(20),
                 'instagramInferredConnections' => fn ($query) => $query
-                    ->with('publicProfile')
+                    ->with(['publicProfile', 'candidateInstagramProfile'])
                     ->latest('last_seen_at')
                     ->limit(100),
                 'latestInstagramSnapshot.media' => fn ($query) => $query->orderBy('sort_order'),

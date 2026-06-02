@@ -76,6 +76,7 @@ class TrackedPersonInstagramInferredConnection extends Model
         return match ($this->relationship_type) {
             'follows_target' => 'Moeglicher Follower',
             'followed_by_target' => 'Moeglich gefolgt',
+            'suggestion_connection' => 'Vorschlag-Verbindung',
             default => 'Ungeklaert',
         };
     }

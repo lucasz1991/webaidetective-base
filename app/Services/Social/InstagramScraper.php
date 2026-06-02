@@ -511,6 +511,7 @@ class InstagramScraper
                 'profileUrl' => is_scalar($item['profileUrl'] ?? null)
                     ? trim((string) $item['profileUrl'])
                     : 'https://www.instagram.com/'.$username.'/',
+                'sourcePublicUsername' => $this->normalizeInstagramUsername((string) ($item['sourcePublicUsername'] ?? $item['sourceSuggestionUsername'] ?? '')),
                 'sourceLists' => is_array($item['sourceLists'] ?? null) ? array_values(array_filter($item['sourceLists'], 'is_scalar')) : [],
             ];
         }
@@ -550,6 +551,24 @@ class InstagramScraper
             'debugScreenshotPaths' => is_array($connection['debugScreenshotPaths'] ?? null)
                 ? array_values(array_filter($connection['debugScreenshotPaths'], 'is_scalar'))
                 : [],
+        ];
+    }
+
+    private function normalizeSuggestionProgress(array $event): array
+    {
+        if (
+            ! array_key_exists('suggestionConnectionsPreview', $event)
+            && ! array_key_exists('suggestionConnections', $event)
+            && ! array_key_exists('foundSuggestions', $event)
+        ) {
+            return [];
+        }
+
+        return [
+            'foundSuggestions' => (int) ($event['foundSuggestions'] ?? 0),
+            'suggestionConnections' => $this->normalizeConnectionProgressItems(
+                $event['suggestionConnectionsPreview'] ?? $event['suggestionConnections'] ?? null,
+            ),
         ];
     }
 
@@ -599,6 +618,13 @@ class InstagramScraper
             'relationship-dialog-missing' => 100,
             'relationship-complete' => 100,
             'relationship-rate-limited' => 100,
+            'suggestions-opening' => 10,
+            'suggestions-target-list' => 20,
+            'suggestions-candidate-opening' => $expected > 0 ? min(95, max(20, 20 + (int) floor(($loaded / max(1, $expected)) * 75))) : 35,
+            'suggestions-candidate-checked' => $expected > 0 ? min(98, max(25, 20 + (int) floor(($loaded / max(1, $expected)) * 78))) : 60,
+            'suggestions-candidate-error' => $expected > 0 ? min(98, max(25, 20 + (int) floor(($loaded / max(1, $expected)) * 78))) : 60,
+            'suggestions-rate-limited' => 100,
+            'suggestions-complete' => 100,
             'account-switching' => 8,
             'profile-session-check' => 12,
             'profile-opening' => 25,
@@ -619,8 +645,10 @@ class InstagramScraper
             'round' => $round,
             'openAttempt' => $openAttempt,
             'query' => $query,
-            'message' => $this->buildProgressMessage($phase, $stage, $loaded, $expected, $openAttempt, $query),
+            'message' => $this->nullableTrim($event['message'] ?? null)
+                ?: $this->buildProgressMessage($phase, $stage, $loaded, $expected, $openAttempt, $query),
             ...$this->normalizeLiveScreenshotProgress($event),
+            ...$this->normalizeSuggestionProgress($event),
             ...$this->normalizeScraperProfileProgress($event),
         ];
     }
@@ -712,6 +740,21 @@ class InstagramScraper
                 : 'Gefolgt-Liste wird geladen: '.number_format($loaded, 0, ',', '.').' Eintraege gefunden';
         }
 
+        if ($phase === 'suggestions') {
+            return match ($stage) {
+                'suggestions-opening' => 'Profilvorschlaege werden gesucht.',
+                'suggestions-target-list' => 'Profilvorschlaege gefunden; Kandidatenpruefung startet.',
+                'suggestions-candidate-opening' => 'Vorschlaege eines Kandidaten werden geoeffnet: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
+                'suggestions-candidate-checked' => 'Vorschlags-Kandidaten geprueft: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
+                'suggestions-candidate-error' => 'Ein Vorschlags-Kandidat konnte nicht geprueft werden: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
+                'suggestions-rate-limited' => 'Instagram hat die Profilvorschlaege per Rate-Limit blockiert.',
+                'suggestions-complete' => 'Profilvorschlag-Verbindungsscan abgeschlossen.',
+                default => $expected > 0
+                    ? 'Profilvorschlaege werden geprueft: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.')
+                    : 'Profilvorschlaege werden geprueft.',
+            };
+        }
+
         return match ($stage) {
             'profile-session-check' => 'Instagram-Session wird geprueft.',
             'profile-opening' => 'Instagram-Profilseite wird geoeffnet.',
@@ -725,7 +768,7 @@ class InstagramScraper
     {
         $operationMode = Str::lower(trim($operationMode));
 
-        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'login-session'], true)
+        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'suggestions', 'login-session'], true)
             ? $operationMode
             : 'analyze';
     }

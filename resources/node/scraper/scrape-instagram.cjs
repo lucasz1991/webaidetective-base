@@ -6049,7 +6049,13 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       ...(cookieDiagnostics.warnings || []),
       ...(loginDiagnostics.warnings || []),
     ]);
-    const outcome = gracefullyStopped
+    const outcome = isSuggestionsMode && suggestionScanResult
+      ? {
+        ok: suggestionScanResult.statusLevel !== 'error',
+        statusLevel: suggestionScanResult.statusLevel || 'unknown',
+        statusMessage: suggestionScanResult.statusMessage || 'Profilvorschlag-Verbindungsscan abgeschlossen.',
+      }
+      : gracefullyStopped
       ? {
         ok: false,
         statusLevel: 'partial',
@@ -6101,6 +6107,10 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       cookieDiagnostics,
       loginDiagnostics,
       profile: initialProfile,
+      suggestionScan: suggestionScanResult,
+      suggestionConnections: Array.isArray(suggestionScanResult?.matches)
+        ? suggestionScanResult.matches
+        : [],
       gracefullyStopped,
       profileUrl,
       screenshotPath: debugScreenshotPath,
