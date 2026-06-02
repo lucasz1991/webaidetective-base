@@ -6,6 +6,7 @@ use App\Livewire\Welcome;
 use App\Livewire\Auth\Login;
 use App\Livewire\Auth\Register;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use App\Livewire\Dashboard;
 use App\Livewire\User\NetworkMap;
 use App\Models\TrackedPerson;
@@ -71,6 +72,24 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session'), 'verified']
     Route::middleware(['role:guest'])->prefix('user')->group(function () {
         Route::get('/dashboard', Dashboard::class)->name('dashboard');
         Route::get('/network', NetworkMap::class)->name('network');
+        Route::get('/network/graph/{token}/{chunk}', function (string $token, int $chunk) {
+            $payload = Cache::get(NetworkMap::graphCacheKey((int) Auth::id(), $token));
+
+            abort_unless(is_array($payload), 404);
+
+            $chunks = $payload['chunks'] ?? [];
+            $graphChunk = $chunks[$chunk] ?? null;
+
+            abort_unless(is_array($graphChunk), 404);
+
+            return response()->json([
+                ...$graphChunk,
+                'stats' => $payload['stats'] ?? [],
+            ]);
+        })
+            ->whereUuid('token')
+            ->whereNumber('chunk')
+            ->name('network.graph-chunk');
         Route::post('/tracked-people/{trackedPerson}/instagram/stop-scan', function (TrackedPerson $trackedPerson) {
             abort_unless((int) $trackedPerson->user_id === (int) Auth::id(), 403);
 

@@ -29,6 +29,48 @@ function readGraph(root) {
     }
 }
 
+function eventDetail(event) {
+    return Array.isArray(event.detail) ? (event.detail[0] || {}) : (event.detail || {});
+}
+
+function updateBuildStatus(root, options = {}) {
+    const panel = root.querySelector('[data-network-loading-panel]');
+    const label = root.querySelector('[data-network-build-label]');
+    const text = root.querySelector('[data-network-build-text]');
+    const count = root.querySelector('[data-network-progress-count]');
+    const bar = root.querySelector('[data-network-progress-bar]');
+    const dot = root.querySelector('[data-network-build-dot]');
+
+    if (!panel) {
+        return;
+    }
+
+    panel.classList.toggle('hidden', options.visible === false);
+
+    if (label && options.label) {
+        label.textContent = options.label;
+    }
+
+    if (text && options.text) {
+        text.textContent = options.text;
+    }
+
+    if (count && options.count) {
+        count.textContent = options.count;
+    }
+
+    if (bar) {
+        const progress = Number.isFinite(Number(options.progress)) ? Math.max(0, Math.min(100, Number(options.progress))) : 0;
+        bar.style.width = `${progress}%`;
+    }
+
+    if (dot) {
+        dot.classList.toggle('bg-sky-500', options.state !== 'done' && options.state !== 'error');
+        dot.classList.toggle('bg-emerald-500', options.state === 'done');
+        dot.classList.toggle('bg-rose-500', options.state === 'error');
+    }
+}
+
 function toElements(graph) {
     const nodes = (graph.nodes || []).map((node) => ({
         group: 'nodes',
@@ -222,7 +264,11 @@ function applyFilters(root, cy) {
 
 function fitGraph(cy) {
     cy.resize();
-    cy.fit(cy.elements().not('.network-filtered'), 56);
+    const visible = cy.elements().not('.network-filtered');
+
+    if (visible.length) {
+        cy.fit(visible, 56);
+    }
 }
 
 function bindControls(root, cy) {
@@ -263,28 +309,38 @@ function bindControls(root, cy) {
 }
 
 async function initNetworkMap(root) {
-    if (instances.has(root) || root.dataset.networkMapInitializing === 'true') {
-        return;
+    if (instances.has(root)) {
+        return instances.get(root);
     }
 
-    const container = root.querySelector('[data-network-canvas]');
-    const graph = readGraph(root);
-
-    if (!container || !graph.nodes?.length) {
-        return;
+    if (root.networkMapInitPromise) {
+        return root.networkMapInitPromise;
     }
 
-    root.dataset.networkMapInitializing = 'true';
-    const cytoscape = await loadCytoscape();
+    root.networkMapInitPromise = (async () => {
+        const container = root.querySelector('[data-network-canvas]');
+        const graph = readGraph(root);
 
-    if (!document.body.contains(root)) {
-        delete root.dataset.networkMapInitializing;
-        return;
-    }
+        if (!container) {
+            return null;
+        }
 
-    const cy = cytoscape({
+        root.dataset.networkMapInitializing = 'true';
+        const cytoscape = await loadCytoscape();
+
+        if (!document.body.contains(root)) {
+            delete root.dataset.networkMapInitializing;
+            return null;
+        }
+
+        const initialElements = toElements(graph);
+        const initialLayout = initialElements.length
+            ? (root.dataset.networkLazy === 'true' ? { name: 'preset' } : coseLayoutOptions(true))
+            : { name: 'preset' };
+
+        const cy = cytoscape({
         container,
-        elements: toElements(graph),
+        elements: initialElements,
         minZoom: 0.25,
         maxZoom: 2.2,
         wheelSensitivity: 0.16,
@@ -414,43 +470,270 @@ async function initNetworkMap(root) {
                 },
             },
         ],
-        layout: {
-            name: 'cose',
-            animate: true,
-            animationDuration: 650,
-            componentSpacing: 120,
-            idealEdgeLength: 120,
-            nodeOverlap: 18,
-            padding: 70,
-            refresh: 20,
-        },
-    });
+            layout: initialLayout,
+        });
 
-    const resizeHandler = () => fitGraph(cy);
+        const resizeHandler = () => fitGraph(cy);
 
-    instances.set(root, {
-        cy,
-        showPublic: true,
-        showInferred: true,
-        showTracked: true,
-        selectedId: null,
-        resizeHandler,
-    });
-    delete root.dataset.networkMapInitializing;
-    activeRoots.add(root);
+        const state = {
+            cy,
+            showPublic: true,
+            showInferred: true,
+            showTracked: true,
+            selectedId: null,
+            resizeHandler,
+            loadGeneration: 0,
+            loadedNodes: initialElements.filter((element) => element.group === 'nodes').length,
+            loadedEdges: initialElements.filter((element) => element.group === 'edges').length,
+        };
 
-    bindControls(root, cy);
-    applyFilters(root, cy);
+        instances.set(root, state);
+        delete root.dataset.networkMapInitializing;
+        activeRoots.add(root);
 
-    cy.on('tap', 'node', (event) => setSelected(root, cy, event.target.id()));
-    cy.on('tap', (event) => {
-        if (event.target === cy) {
-            setSelected(root, cy, null);
+        bindControls(root, cy);
+        applyFilters(root, cy);
+
+        cy.on('tap', 'node', (event) => setSelected(root, cy, event.target.id()));
+        cy.on('tap', (event) => {
+            if (event.target === cy) {
+                setSelected(root, cy, null);
+            }
+        });
+
+        if (initialElements.length) {
+            window.setTimeout(() => fitGraph(cy), 150);
+        } else {
+            updateBuildStatus(root, {
+                visible: true,
+                label: 'Netzwerk wird vorbereitet',
+                text: 'Die gespeicherten Profile und Listen werden nachgeladen.',
+                count: 'Warte auf Daten',
+                progress: 0,
+            });
         }
+
+        window.addEventListener('resize', resizeHandler);
+
+        return state;
+    })();
+
+    try {
+        return await root.networkMapInitPromise;
+    } finally {
+        delete root.networkMapInitPromise;
+    }
+}
+
+function coseLayoutOptions(animate = false) {
+    return {
+        name: 'cose',
+        animate,
+        animationDuration: animate ? 650 : 0,
+        componentSpacing: 120,
+        idealEdgeLength: 120,
+        nodeOverlap: 18,
+        padding: 70,
+        refresh: 20,
+    };
+}
+
+function largeGraphLayoutOptions() {
+    return {
+        name: 'concentric',
+        animate: false,
+        avoidOverlap: true,
+        minNodeSpacing: 10,
+        padding: 70,
+        concentric: (node) => {
+            if (node.data('isPrimary')) {
+                return 10;
+            }
+
+            if (node.data('type') === 'person') {
+                return 8;
+            }
+
+            return Math.min(6, node.degree(false));
+        },
+        levelWidth: () => 1,
+    };
+}
+
+function finalLayoutOptions(cy) {
+    return cy.nodes().length > 1200 ? largeGraphLayoutOptions() : coseLayoutOptions(true);
+}
+
+function addGraphChunk(root, cy, chunk) {
+    const nodeElements = toElements({ nodes: chunk.nodes || [], edges: [] })
+        .filter((element) => !cy.getElementById(element.data.id).length);
+
+    if (nodeElements.length) {
+        cy.add(nodeElements);
+    }
+
+    const edgeElements = toElements({ nodes: [], edges: chunk.edges || [] })
+        .filter((element) => {
+            const sourceExists = cy.getElementById(element.data.source).length > 0;
+            const targetExists = cy.getElementById(element.data.target).length > 0;
+
+            return sourceExists && targetExists && !cy.getElementById(element.data.id).length;
+        });
+
+    if (edgeElements.length) {
+        cy.add(edgeElements);
+    }
+
+    const state = instances.get(root);
+
+    if (state) {
+        state.loadedNodes += nodeElements.length;
+        state.loadedEdges += edgeElements.length;
+    }
+}
+
+function resetGraph(root) {
+    const state = instances.get(root);
+
+    if (!state) {
+        updateBuildStatus(root, {
+            visible: true,
+            label: 'Netzwerk wird vorbereitet',
+            text: 'Die gespeicherten Profile und Listen werden nachgeladen.',
+            count: 'Warte auf Daten',
+            progress: 0,
+        });
+
+        return;
+    }
+
+    state.loadGeneration += 1;
+    state.loadedNodes = 0;
+    state.loadedEdges = 0;
+    state.selectedId = null;
+    state.cy.elements().remove();
+    updateSelectionPanel(root, state.cy);
+    updateBuildStatus(root, {
+        visible: true,
+        label: 'Netzwerk wird vorbereitet',
+        text: 'Die gespeicherten Profile und Listen werden nachgeladen.',
+        count: 'Warte auf Daten',
+        progress: 0,
+    });
+}
+
+function chunkUrl(template, index) {
+    return String(template || '').replace('__CHUNK__', String(index));
+}
+
+async function loadPreparedGraph(root, detail) {
+    const state = await initNetworkMap(root);
+
+    if (!state || !detail?.chunkUrl || !Number.isFinite(Number(detail.chunkCount))) {
+        return;
+    }
+
+    const cy = state.cy;
+    const chunkCount = Number(detail.chunkCount);
+    const generation = state.loadGeneration + 1;
+    state.loadGeneration = generation;
+    state.loadedNodes = 0;
+    state.loadedEdges = 0;
+    state.selectedId = null;
+    cy.elements().remove();
+    updateSelectionPanel(root, cy);
+
+    updateBuildStatus(root, {
+        visible: true,
+        label: 'Netzwerk wird geladen',
+        text: 'Knoten und Kanten werden stueckweise in die Grafik eingefuegt.',
+        count: `0 von ${chunkCount} Paketen`,
+        progress: 0,
     });
 
-    window.setTimeout(() => fitGraph(cy), 150);
-    window.addEventListener('resize', resizeHandler);
+    for (let index = 0; index < chunkCount; index += 1) {
+        if (state.loadGeneration !== generation) {
+            return;
+        }
+
+        const response = await fetch(chunkUrl(detail.chunkUrl, index), {
+            headers: {
+                Accept: 'application/json',
+                'X-Requested-With': 'XMLHttpRequest',
+            },
+        });
+
+        if (!response.ok) {
+            throw new Error(`Netzwerkpaket ${index + 1} konnte nicht geladen werden.`);
+        }
+
+        const chunk = await response.json();
+        addGraphChunk(root, cy, chunk);
+        applyFilters(root, cy);
+
+        const progress = ((index + 1) / chunkCount) * 100;
+        updateBuildStatus(root, {
+            visible: true,
+            label: chunk.stage === 'edges' ? 'Verbindungen werden eingefuegt' : 'Profile werden eingefuegt',
+            text: `${state.loadedNodes.toLocaleString('de-DE')} Knoten und ${state.loadedEdges.toLocaleString('de-DE')} Kanten geladen.`,
+            count: `${index + 1} von ${chunkCount} Paketen`,
+            progress,
+        });
+
+        if (index === 0 || index % 4 === 0) {
+            fitGraph(cy);
+        }
+
+        await new Promise((resolve) => window.requestAnimationFrame(resolve));
+    }
+
+    if (state.loadGeneration !== generation) {
+        return;
+    }
+
+    updateBuildStatus(root, {
+        visible: true,
+        label: 'Layout wird berechnet',
+        text: `${state.loadedNodes.toLocaleString('de-DE')} Knoten und ${state.loadedEdges.toLocaleString('de-DE')} Kanten sind geladen.`,
+        count: 'Grafik wird angeordnet',
+        progress: 100,
+    });
+
+    cy.layout(finalLayoutOptions(cy)).run();
+    window.setTimeout(() => {
+        fitGraph(cy);
+        updateBuildStatus(root, {
+            visible: true,
+            label: 'Netzwerk geladen',
+            text: `${state.loadedNodes.toLocaleString('de-DE')} Knoten und ${state.loadedEdges.toLocaleString('de-DE')} Kanten sichtbar.`,
+            count: 'Fertig',
+            progress: 100,
+            state: 'done',
+        });
+        window.setTimeout(() => updateBuildStatus(root, { visible: false, state: 'done' }), 1200);
+    }, cy.nodes().length > 1200 ? 100 : 750);
+}
+
+async function handlePreparedGraph(event) {
+    const root = document.querySelector('[data-network-map-root]');
+
+    if (!root) {
+        return;
+    }
+
+    try {
+        await loadPreparedGraph(root, eventDetail(event));
+    } catch (error) {
+        console.error(error);
+        updateBuildStatus(root, {
+            visible: true,
+            label: 'Netzwerk konnte nicht geladen werden',
+            text: error.message || 'Beim Laden der Netzwerkpakete ist ein Fehler aufgetreten.',
+            count: 'Fehler',
+            progress: 100,
+            state: 'error',
+        });
+    }
 }
 
 export function initNetworkMaps(scope = document) {
@@ -476,6 +759,28 @@ export function destroyNetworkMaps() {
 document.addEventListener('DOMContentLoaded', () => initNetworkMaps());
 document.addEventListener('livewire:navigating', () => destroyNetworkMaps());
 document.addEventListener('livewire:navigated', () => initNetworkMaps());
+window.addEventListener('network-map-graph-prepared', handlePreparedGraph);
+window.addEventListener('network-map-empty', () => {
+    const root = document.querySelector('[data-network-map-root]');
+
+    if (root) {
+        resetGraph(root);
+        updateBuildStatus(root, {
+            visible: true,
+            label: 'Keine Netzwerkdaten',
+            text: 'Lege zuerst Personen oder Instagram-Listen an.',
+            count: 'Keine Daten',
+            progress: 0,
+        });
+    }
+});
+window.addEventListener('network-map-reset', () => {
+    const root = document.querySelector('[data-network-map-root]');
+
+    if (root) {
+        resetGraph(root);
+    }
+});
 window.addEventListener('network-map-refresh', () => {
     destroyNetworkMaps();
     window.requestAnimationFrame(() => initNetworkMaps());

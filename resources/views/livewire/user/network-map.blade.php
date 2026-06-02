@@ -1,6 +1,8 @@
 <div
     class="min-h-screen bg-[#fafafa] pb-16"
     data-network-map-root
+    data-network-lazy="true"
+    wire:init="prepareGraph"
     wire:loading.class="cursor-wait"
 >
     <div class="border-b border-slate-200 bg-white">
@@ -95,7 +97,7 @@
                             class="rounded-lg border px-3 py-1.5 transition"
                             aria-pressed="true"
                         >
-                            Listen-Treffer
+                            Follower/Gefolgt
                         </button>
                     </div>
                     <div class="flex items-center gap-2 text-xs font-semibold text-slate-600">
@@ -105,15 +107,36 @@
                     </div>
                 </div>
 
-                @if($stats['nodes'] === 0)
+                @if($trackedPeople->isEmpty())
                     <div class="p-8 text-sm text-slate-500">
                         Noch keine Personen vorhanden. Lege zuerst Personen an, damit das Netzwerk dargestellt werden kann.
                     </div>
                 @else
                     <div class="relative h-[640px] min-h-[520px] bg-slate-50" wire:ignore>
                         <div data-network-canvas class="absolute inset-0"></div>
+                        <div
+                            data-network-loading-panel
+                            class="absolute left-4 top-4 z-10 w-[min(420px,calc(100%-2rem))] rounded-lg border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur"
+                        >
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <div class="text-sm font-bold text-slate-950" data-network-build-label>
+                                        Netzwerk wird vorbereitet
+                                    </div>
+                                    <div class="mt-1 text-xs leading-5 text-slate-500" data-network-build-text>
+                                        Die gespeicherten Profile und Listen werden nachgeladen.
+                                    </div>
+                                </div>
+                                <div class="h-2.5 w-2.5 rounded-full bg-sky-500" data-network-build-dot></div>
+                            </div>
+                            <div class="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                                <div class="h-full w-0 rounded-full bg-sky-500 transition-all duration-200" data-network-progress-bar></div>
+                            </div>
+                            <div class="mt-2 text-xs font-semibold text-slate-500" data-network-progress-count>
+                                Warte auf Daten
+                            </div>
+                        </div>
                     </div>
-                    <script type="application/json" data-network-map-payload>@json($graph)</script>
                 @endif
             </section>
 
@@ -146,7 +169,7 @@
                     <div class="mt-3 space-y-2 text-sm text-slate-600">
                         <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-sky-600"></span> Bekannte Profil-Verknuepfung</div>
                         <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-pink-600"></span> Rekonstruierte Listenverbindung</div>
-                        <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-emerald-600"></span> Treffer aus gespeicherten Listen</div>
+                        <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-emerald-600"></span> Gespeicherte Follower-/Gefolgt-Listen</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-amber-400 ring-2 ring-amber-500"></span> Hauptperson</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-slate-950"></span> Beobachtete Person</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-pink-50 ring-1 ring-pink-300"></span> Rekonstruierter Kandidat</div>
