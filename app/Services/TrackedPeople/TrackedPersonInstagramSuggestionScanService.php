@@ -102,6 +102,8 @@ class TrackedPersonInstagramSuggestionScanService
             $this->withActiveScanControl([
                 'suggestionScanMaxItems' => 12,
                 'suggestionCandidateMaxItems' => 8,
+                'suggestionPublicListSearchMaxScrollRounds' => 60,
+                'suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson),
             ]),
         );
 
@@ -209,7 +211,7 @@ class TrackedPersonInstagramSuggestionScanService
                     'candidate_display_name' => $this->nullableTrim($connection['displayName'] ?? null),
                     'candidate_profile_url' => $this->nullableTrim($connection['profileUrl'] ?? null)
                         ?: 'https://www.instagram.com/'.$candidateUsername.'/',
-                    'source_lists' => ['profile_suggestions'],
+                    'source_lists' => $connection['sourceLists'] ?? ['profile_suggestions'],
                     'evidence' => [
                         ...$connection,
                         'targetUsername' => $targetUsername,
@@ -235,6 +237,133 @@ class TrackedPersonInstagramSuggestionScanService
         return is_array($suggestionPayload) ? $suggestionPayload : [];
     }
 
+    private function buildSuggestionCandidateHistory(TrackedPerson $trackedPerson): array
+    {
+        $history = [];
+
+        TrackedPersonInstagramInferredConnection::query()
+            ->where('tracked_person_id', $trackedPerson->id)
+            ->where('relationship_type', 'suggestion_connection')
+            ->where('status', 'active')
+            ->get(['candidate_username'])
+            ->each(function (TrackedPersonInstagramInferredConnection $connection) use (&$history): void {
+                $username = $this->scraper->normalizeInstagramUsername($connection->candidate_username);
+
+                if ($username === null) {
+                    return;
+                }
+
+                $history[$username] = [
+                    ...($history[$username] ?? []),
+                    'hasMatch' => true,
+                    'noMatchChecks' => (int) ($history[$username]['noMatchChecks'] ?? 0),
+                    'permanentlyDismissed' => false,
+                ];
+            });
+
+        $trackedPerson
+            ->instagramSuggestionScans()
+            ->latest('analyzed_at')
+            ->limit(100)
+            ->get()
+            ->each(function (TrackedPersonInstagramSuggestionScan $scan) use (&$history): void {
+                $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
+                $scanPayload = $this->suggestionPayload($payload);
+
+                foreach ($this->normalizeSuggestionConnections($payload['suggestionConnections'] ?? []) as $connection) {
+                    $username = $this->scraper->normalizeInstagramUsername($connection['username'] ?? null);
+
+                    if ($username === null) {
+                        continue;
+                    }
+
+                    $history[$username] = [
+                        ...($history[$username] ?? []),
+                        'hasMatch' => true,
+                        'noMatchChecks' => (int) ($history[$username]['noMatchChecks'] ?? 0),
+                        'permanentlyDismissed' => false,
+                    ];
+                }
+
+                foreach ($this->normalizeSuggestionConnections($scanPayload['matches'] ?? []) as $connection) {
+                    $username = $this->scraper->normalizeInstagramUsername($connection['username'] ?? null);
+
+                    if ($username === null) {
+                        continue;
+                    }
+
+                    $history[$username] = [
+                        ...($history[$username] ?? []),
+                        'hasMatch' => true,
+                        'noMatchChecks' => (int) ($history[$username]['noMatchChecks'] ?? 0),
+                        'permanentlyDismissed' => false,
+                    ];
+                }
+
+                foreach ($scanPayload['checkedCandidates'] ?? [] as $candidate) {
+                    if (! is_array($candidate)) {
+                        continue;
+                    }
+
+                    $rawUsername = $candidate['username'] ?? null;
+
+                    if (! is_scalar($rawUsername)) {
+                        continue;
+                    }
+
+                    $username = $this->scraper->normalizeInstagramUsername((string) $rawUsername);
+
+                    if ($username === null || (bool) ($history[$username]['hasMatch'] ?? false)) {
+                        continue;
+                    }
+
+                    $hasCandidateMatch = (bool) ($candidate['targetFoundAsSuggestion'] ?? false)
+                        || (bool) ($candidate['targetFoundInPublicLists'] ?? false)
+                        || (bool) ($candidate['targetFoundInFollowers'] ?? false)
+                        || (bool) ($candidate['targetFoundInFollowing'] ?? false);
+
+                    if ($hasCandidateMatch) {
+                        $history[$username] = [
+                            ...($history[$username] ?? []),
+                            'hasMatch' => true,
+                            'noMatchChecks' => (int) ($history[$username]['noMatchChecks'] ?? 0),
+                            'permanentlyDismissed' => false,
+                        ];
+
+                        continue;
+                    }
+
+                    $checkMode = is_scalar($candidate['checkMode'] ?? null)
+                        ? (string) $candidate['checkMode']
+                        : 'profile-suggestions';
+                    $wasDefinitiveNoMatch = (bool) ($candidate['checked'] ?? false)
+                        && ! filled($candidate['error'] ?? null)
+                        && (
+                            $checkMode === 'public-lists'
+                                ? (bool) ($candidate['publicListSearchConclusive'] ?? false)
+                                    && ! (bool) ($candidate['publicListRateLimited'] ?? false)
+                                : (bool) ($candidate['suggestionsAvailable'] ?? false)
+                                    && ! (bool) ($candidate['suggestionsRateLimited'] ?? false)
+                        );
+
+                    if (! $wasDefinitiveNoMatch) {
+                        continue;
+                    }
+
+                    $noMatchChecks = (int) ($history[$username]['noMatchChecks'] ?? 0) + 1;
+                    $history[$username] = [
+                        ...($history[$username] ?? []),
+                        'hasMatch' => false,
+                        'noMatchChecks' => $noMatchChecks,
+                        'permanentlyDismissed' => $noMatchChecks >= 2
+                            || (bool) ($candidate['finalDismissedAfterSecondMiss'] ?? false),
+                    ];
+                }
+            });
+
+        return $history;
+    }
+
     private function normalizeSuggestionConnections(mixed $connections): array
     {
         if (! is_array($connections)) {
@@ -257,6 +386,7 @@ class TrackedPersonInstagramSuggestionScanService
             $sourceUsername = $this->scraper->normalizeInstagramUsername(
                 (string) ($connection['sourceSuggestionUsername'] ?? $connection['sourcePublicUsername'] ?? $username),
             ) ?? $username;
+            $sourceLists = $this->normalizeSourceLists($connection, (bool) ($connection['targetFoundAsSuggestion'] ?? true));
 
             $normalized[$username] = [
                 'username' => $username,
@@ -266,6 +396,13 @@ class TrackedPersonInstagramSuggestionScanService
                 'sourceSuggestionUsername' => $sourceUsername,
                 'sourcePublicUsername' => $sourceUsername,
                 'targetFoundAsSuggestion' => (bool) ($connection['targetFoundAsSuggestion'] ?? true),
+                'targetFoundInPublicLists' => (bool) ($connection['targetFoundInPublicLists'] ?? false),
+                'targetFoundInFollowers' => (bool) ($connection['targetFoundInFollowers'] ?? false),
+                'targetFoundInFollowing' => (bool) ($connection['targetFoundInFollowing'] ?? false),
+                'sourceLists' => $sourceLists,
+                'publicListSearch' => is_array($connection['publicListSearch'] ?? null)
+                    ? $connection['publicListSearch']
+                    : [],
                 'suggestionPreview' => is_array($connection['suggestionPreview'] ?? null)
                     ? array_values(array_slice($connection['suggestionPreview'], 0, 12))
                     : [],
@@ -273,6 +410,40 @@ class TrackedPersonInstagramSuggestionScanService
         }
 
         return array_values($normalized);
+    }
+
+    private function normalizeSourceLists(array $connection, bool $targetFoundAsSuggestion): array
+    {
+        $sourceLists = [];
+        $rawSourceLists = $connection['sourceLists'] ?? $connection['source_lists'] ?? [];
+
+        if (is_array($rawSourceLists)) {
+            foreach ($rawSourceLists as $sourceList) {
+                if (! is_scalar($sourceList)) {
+                    continue;
+                }
+
+                $sourceList = $this->nullableTrim($sourceList);
+
+                if ($sourceList !== null) {
+                    $sourceLists[] = $sourceList;
+                }
+            }
+        }
+
+        if ($targetFoundAsSuggestion) {
+            $sourceLists[] = 'profile_suggestions';
+        }
+
+        if ((bool) ($connection['targetFoundInFollowers'] ?? false)) {
+            $sourceLists[] = 'public_profile_followers';
+        }
+
+        if ((bool) ($connection['targetFoundInFollowing'] ?? false)) {
+            $sourceLists[] = 'public_profile_following';
+        }
+
+        return array_values(array_unique($sourceLists ?: ['profile_suggestions']));
     }
 
     private function mergeSuggestionConnections(array ...$connectionGroups): array

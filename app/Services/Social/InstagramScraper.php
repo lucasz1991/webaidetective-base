@@ -511,8 +511,18 @@ class InstagramScraper
                 'profileUrl' => is_scalar($item['profileUrl'] ?? null)
                     ? trim((string) $item['profileUrl'])
                     : 'https://www.instagram.com/'.$username.'/',
+                'sourceSuggestionUsername' => $this->normalizeInstagramUsername((string) ($item['sourceSuggestionUsername'] ?? $item['sourcePublicUsername'] ?? '')),
                 'sourcePublicUsername' => $this->normalizeInstagramUsername((string) ($item['sourcePublicUsername'] ?? $item['sourceSuggestionUsername'] ?? '')),
                 'sourceLists' => is_array($item['sourceLists'] ?? null) ? array_values(array_filter($item['sourceLists'], 'is_scalar')) : [],
+                'targetFoundAsSuggestion' => array_key_exists('targetFoundAsSuggestion', $item)
+                    ? (bool) $item['targetFoundAsSuggestion']
+                    : true,
+                'targetFoundInPublicLists' => (bool) ($item['targetFoundInPublicLists'] ?? false),
+                'targetFoundInFollowers' => (bool) ($item['targetFoundInFollowers'] ?? false),
+                'targetFoundInFollowing' => (bool) ($item['targetFoundInFollowing'] ?? false),
+                'publicListSearch' => is_array($item['publicListSearch'] ?? null)
+                    ? $item['publicListSearch']
+                    : [],
             ];
         }
 
