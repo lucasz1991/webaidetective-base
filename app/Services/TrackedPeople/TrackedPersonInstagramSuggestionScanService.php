@@ -189,6 +189,7 @@ class TrackedPersonInstagramSuggestionScanService
             $candidateProfile = $this->profileRelationshipStore->ensureProfile($candidateUsername, [
                 'display_name' => $this->nullableTrim($connection['displayName'] ?? null),
                 'profile_url' => $this->nullableTrim($connection['profileUrl'] ?? null),
+                'profile_image_url' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
             ]);
             $existing = TrackedPersonInstagramInferredConnection::query()
                 ->where('tracked_person_id', $trackedPerson->id)
@@ -393,6 +394,7 @@ class TrackedPersonInstagramSuggestionScanService
                 'displayName' => $this->nullableTrim($connection['displayName'] ?? null),
                 'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? null)
                     ?: 'https://www.instagram.com/'.$username.'/',
+                'profileImageUrl' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
                 'sourceSuggestionUsername' => $sourceUsername,
                 'sourcePublicUsername' => $sourceUsername,
                 'targetFoundAsSuggestion' => (bool) ($connection['targetFoundAsSuggestion'] ?? true),

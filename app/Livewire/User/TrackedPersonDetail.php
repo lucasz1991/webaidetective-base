@@ -923,11 +923,7 @@ class TrackedPersonDetail extends Component
             ->chunk(1000)
             ->flatMap(fn (Collection $chunk): Collection => InstagramProfile::withTrashed()
                 ->whereIn('username', $chunk->all())
-                ->where(function ($query): void {
-                    $query
-                        ->whereNotNull('profile_image_path')
-                        ->orWhereNotNull('profile_image_url');
-                })
+                ->whereNotNull('profile_image_path')
                 ->get(['username', 'profile_image_url', 'profile_image_path']))
             ->mapWithKeys(function (InstagramProfile $profile): array {
                 $username = Str::lower(ltrim((string) $profile->username, '@'));
@@ -996,7 +992,7 @@ class TrackedPersonDetail extends Component
             return Storage::disk('public')->url($profile->profile_image_path);
         }
 
-        return filled($profile->profile_image_url) ? $profile->profile_image_url : null;
+        return null;
     }
 
     private function nullableTrim(?string $value): ?string

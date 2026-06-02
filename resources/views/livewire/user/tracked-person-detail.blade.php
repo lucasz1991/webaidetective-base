@@ -19,12 +19,6 @@
         };
         $relationshipProfileImages = collect($relationshipProfileImages ?? []);
         $relationshipProfileImageUrl = function ($item) use ($relationshipProfileImages) {
-            $imageUrl = data_get($item, 'profileImageUrl') ?: data_get($item, 'profile_image_url');
-
-            if (filled($imageUrl)) {
-                return $imageUrl;
-            }
-
             $username = \Illuminate\Support\Str::lower(ltrim(trim((string) data_get($item, 'username', '')), '@'));
 
             return $username !== '' ? $relationshipProfileImages->get($username) : null;

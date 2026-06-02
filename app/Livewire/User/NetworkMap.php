@@ -843,13 +843,7 @@ class NetworkMap extends Component
 
     private function profileImageUrlForRelationshipItem(mixed $item): ?string
     {
-        if (! is_array($item)) {
-            return null;
-        }
-
-        $imageUrl = $item['profileImageUrl'] ?? $item['profile_image_url'] ?? null;
-
-        return filled($imageUrl) ? (string) $imageUrl : null;
+        return null;
     }
 
     private function mergeInstagramProfileNodeDetails(
@@ -1007,10 +1001,6 @@ class NetworkMap extends Component
 
     private function profileImageUrlForPerson(TrackedPerson $person): ?string
     {
-        if (filled($person->profile_image_url)) {
-            return $person->profile_image_url;
-        }
-
         if (filled($person->instagram_profile_image_path)) {
             return Storage::disk('public')->url($person->instagram_profile_image_path);
         }
@@ -1030,10 +1020,6 @@ class NetworkMap extends Component
 
         if (filled($profile->profile_image_path)) {
             return Storage::disk('public')->url($profile->profile_image_path);
-        }
-
-        if (filled($profile->profile_image_url)) {
-            return $profile->profile_image_url;
         }
 
         return null;

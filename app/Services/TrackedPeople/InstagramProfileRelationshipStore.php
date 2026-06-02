@@ -10,6 +10,7 @@ use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramProfileLink;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\TrackedPersonPublicProfile;
+use App\Services\Social\InstagramProfileImageStorage;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
@@ -17,6 +18,11 @@ use Illuminate\Support\Str;
 
 class InstagramProfileRelationshipStore
 {
+    public function __construct(
+        private readonly InstagramProfileImageStorage $profileImageStorage,
+    ) {
+    }
+
     private ?bool $ready = null;
 
     private array $columnCache = [];
@@ -224,6 +230,7 @@ class InstagramProfileRelationshipStore
         }
 
         $payload = $this->profilePayload($username, $attributes);
+        $sourceImageUrl = $this->nullableTrim($payload['profile_image_url'] ?? $attributes['profile_image_url'] ?? null);
         $profile = InstagramProfile::withTrashed()
             ->where('username', $username)
             ->first();
@@ -237,14 +244,33 @@ class InstagramProfileRelationshipStore
                 $profile->forceFill($payload)->save();
             }
 
+            $profile = $this->storeLocalProfileImageIfNeeded($profile->fresh(), $sourceImageUrl);
+
             return $profile->fresh();
         }
 
-        return InstagramProfile::create([
+        $profile = InstagramProfile::create([
             'username' => $username,
             'profile_url' => 'https://www.instagram.com/'.$username.'/',
             ...$payload,
         ]);
+
+        return $this->storeLocalProfileImageIfNeeded($profile, $sourceImageUrl)->fresh();
+    }
+
+    private function storeLocalProfileImageIfNeeded(InstagramProfile $profile, ?string $sourceImageUrl): InstagramProfile
+    {
+        $sourceImageUrl ??= $profile->profile_image_url;
+        $hasLocalImage = filled($profile->profile_image_path)
+            && Storage::disk('public')->exists($profile->profile_image_path);
+
+        if (blank($sourceImageUrl) || $hasLocalImage) {
+            return $profile;
+        }
+
+        $this->profileImageStorage->storeFromUrl($profile, $sourceImageUrl);
+
+        return $profile->fresh();
     }
 
     private function linkTrackedPersonToProfile(TrackedPerson $trackedPerson, InstagramProfile $profile): void
