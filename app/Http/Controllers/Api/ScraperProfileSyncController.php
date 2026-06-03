@@ -134,8 +134,21 @@ class ScraperProfileSyncController extends Controller
     private function authorizeRequest(Request $request): void
     {
         $configuredPassword = trim((string) config('services.scraper_profile_sync.password'));
+
+        // Primary fallback: legacy services.scraper_profile_sync settings
         $fallbackSettings = Setting::getValue('services', 'scraper_profile_sync');
-        $fallbackPassword = is_array($fallbackSettings) ? trim((string) ($fallbackSettings['password'] ?? $fallbackSettings['token'] ?? '')) : '';
+        $fallbackPassword = is_array($fallbackSettings)
+            ? trim((string) ($fallbackSettings['password'] ?? $fallbackSettings['token'] ?? ''))
+            : '';
+
+        // Secondary fallback: Factory may store credentials under services.webaidetective_base
+        if ($fallbackPassword === '') {
+            $altSettings = Setting::getValue('services', 'webaidetective_base');
+            $fallbackPassword = is_array($altSettings)
+                ? trim((string) ($altSettings['scraper_profile_sync_password'] ?? $altSettings['scraper_profile_sync_token'] ?? ''))
+                : '';
+        }
+
         $configuredPassword = $configuredPassword !== '' ? $configuredPassword : $fallbackPassword;
 
         abort_if($configuredPassword === '', 503, 'Scraper profile sync is not configured.');
