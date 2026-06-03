@@ -17,6 +17,7 @@ class ScraperProfileSyncController extends Controller
         $this->authorizeRequest($request);
 
         $validated = $request->validate([
+            'password' => ['required', 'string'],
             'active_profile_id' => ['nullable', 'string', 'max:255'],
             'active_profile_ids' => ['nullable', 'array'],
             'active_profile_ids.*' => ['string', 'max:255'],
@@ -132,13 +133,13 @@ class ScraperProfileSyncController extends Controller
 
     private function authorizeRequest(Request $request): void
     {
-        $configuredToken = trim((string) config('services.scraper_profile_sync.token'));
+        $configuredPassword = trim((string) config('services.scraper_profile_sync.password'));
         $fallbackSettings = Setting::getValue('services', 'scraper_profile_sync');
-        $fallbackToken = is_array($fallbackSettings) ? trim((string) ($fallbackSettings['token'] ?? '')) : '';
-        $configuredToken = $configuredToken !== '' ? $configuredToken : $fallbackToken;
+        $fallbackPassword = is_array($fallbackSettings) ? trim((string) ($fallbackSettings['password'] ?? $fallbackSettings['token'] ?? '')) : '';
+        $configuredPassword = $configuredPassword !== '' ? $configuredPassword : $fallbackPassword;
 
-        abort_if($configuredToken === '', 503, 'Scraper profile sync is not configured.');
-        abort_if(! hash_equals($configuredToken, (string) $request->bearerToken()), 403, 'Invalid scraper profile sync token.');
+        abort_if($configuredPassword === '', 503, 'Scraper profile sync is not configured.');
+        abort_if(! hash_equals($configuredPassword, (string) $request->input('password')), 403, 'Invalid scraper profile sync password.');
     }
 
     private function nullableString(mixed $value): ?string
