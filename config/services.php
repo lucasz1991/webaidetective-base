@@ -35,4 +35,8 @@ return [
         'binary' => env('NODE_BINARY'),
     ],
 
+    'scraper_profile_sync' => [
+        'token' => env('SCRAPER_PROFILE_SYNC_TOKEN'),
+    ],
+
 ];

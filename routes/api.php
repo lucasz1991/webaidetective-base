@@ -3,6 +3,7 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\PagebuilderProjectController;
+use App\Http\Controllers\Api\ScraperProfileSyncController;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Artisan;
 /*
@@ -29,3 +30,5 @@ Route::post('/trigger-build', function () {
         'output' => Artisan::output()
     ]);
 })->middleware('auth:sanctum');
+
+Route::post('/scraper-profiles/sync', ScraperProfileSyncController::class);

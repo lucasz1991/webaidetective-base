@@ -16,6 +16,7 @@ return new class extends Migration {
             $table->string('platform', 50)->default('instagram');
             $table->string('profile_key');
             $table->string('profile_label');
+            $table->json('social_accounts')->nullable();
             $table->string('browser_profile_path')->nullable();
             $table->string('cookie_file_path')->nullable();
             $table->boolean('persistent_profile_enabled')->default(true);
