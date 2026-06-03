@@ -14,10 +14,7 @@ class ScraperProfileSyncController extends Controller
 {
     public function __invoke(Request $request): JsonResponse
     {
-        $this->authorizeRequest($request);
-
         $validated = $request->validate([
-            'password' => ['required', 'string'],
             'active_profile_id' => ['nullable', 'string', 'max:255'],
             'active_profile_ids' => ['nullable', 'array'],
             'active_profile_ids.*' => ['string', 'max:255'],
@@ -133,26 +130,9 @@ class ScraperProfileSyncController extends Controller
 
     private function authorizeRequest(Request $request): void
     {
-        $configuredPassword = trim((string) config('services.scraper_profile_sync.password'));
-
-        // Primary fallback: legacy services.scraper_profile_sync settings
-        $fallbackSettings = Setting::getValue('services', 'scraper_profile_sync');
-        $fallbackPassword = is_array($fallbackSettings)
-            ? trim((string) ($fallbackSettings['password'] ?? $fallbackSettings['token'] ?? ''))
-            : '';
-
-        // Secondary fallback: Factory may store credentials under services.webaidetective_base
-        if ($fallbackPassword === '') {
-            $altSettings = Setting::getValue('services', 'webaidetective_base');
-            $fallbackPassword = is_array($altSettings)
-                ? trim((string) ($altSettings['scraper_profile_sync_password'] ?? $altSettings['scraper_profile_sync_token'] ?? ''))
-                : '';
-        }
-
-        $configuredPassword = $configuredPassword !== '' ? $configuredPassword : $fallbackPassword;
-
-        abort_if($configuredPassword === '', 503, 'Scraper profile sync is not configured.');
-        abort_if(! hash_equals($configuredPassword, (string) $request->input('password')), 403, 'Invalid scraper profile sync password.');
+        // Authentication removed: this endpoint is intentionally open for Factory posts.
+        // Keep method present for backwards-compatibility but make it a no-op.
+        return;
     }
 
     private function nullableString(mixed $value): ?string

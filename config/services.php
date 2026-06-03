@@ -36,7 +36,7 @@ return [
     ],
 
     'scraper_profile_sync' => [
-        'password' => env('SCRAPER_PROFILE_SYNC_PASSWORD', env('SCRAPER_PROFILE_SYNC_TOKEN')),
+        'url' => env('SCRAPER_PROFILE_SYNC_URL'),
     ],
 
 ];
