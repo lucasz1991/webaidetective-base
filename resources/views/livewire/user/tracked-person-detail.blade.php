@@ -6,6 +6,7 @@
             'error' => 'border-rose-200 bg-rose-50 text-rose-900',
             default => 'border-slate-200 bg-slate-50 text-slate-800',
         };
+        $isStandaloneDetailPage = request()->routeIs('tracked-people.show');
         $latestSnapshot = $trackedPerson->latestInstagramSnapshot;
         $latestCountSources = data_get($latestSnapshot?->raw_payload, 'extractedProfile.countSources', []);
         $latestCountWarnings = data_get($latestSnapshot?->raw_payload, 'extractedProfile.countWarnings', []);
@@ -242,6 +243,24 @@
             return $screenshots->unique('path')->values();
         };
     @endphp
+
+    @if($isStandaloneDetailPage)
+        <section class="rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-5">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Personendetails</p>
+                    <h1 class="truncate text-xl font-bold text-slate-950">{{ $trackedPerson->display_name }}</h1>
+                </div>
+                <a
+                    href="{{ route('dashboard') }}"
+                    wire:navigate
+                    class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+                >
+                    Zurueck zur Uebersicht
+                </a>
+            </div>
+        </section>
+    @endif
 
     <div
         wire:loading.flex

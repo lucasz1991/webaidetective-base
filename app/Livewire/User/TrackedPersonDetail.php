@@ -847,12 +847,18 @@ class TrackedPersonDetail extends Component
             ->values();
         $relationshipProfileImages = $this->relationshipProfileImagesForSnapshot($trackedPerson->latestInstagramSnapshot);
 
-        return view('livewire.user.tracked-person-detail', [
+        $view = view('livewire.user.tracked-person-detail', [
             'trackedPerson' => $trackedPerson,
             'profileImageHistory' => $profileImageHistory,
             'publicProfileCandidates' => $publicProfileCandidates,
             'relationshipProfileImages' => $relationshipProfileImages,
         ]);
+
+        if (request()->routeIs('tracked-people.show')) {
+            return $view->layout('layouts.app');
+        }
+
+        return $view;
     }
 
     private function resolveTrackedPerson(): TrackedPerson
