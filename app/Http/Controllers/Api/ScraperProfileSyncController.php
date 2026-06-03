@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\ScraperProfile;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use App\Models\Setting;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 
@@ -132,6 +133,9 @@ class ScraperProfileSyncController extends Controller
     private function authorizeRequest(Request $request): void
     {
         $configuredToken = trim((string) config('services.scraper_profile_sync.token'));
+        $fallbackSettings = Setting::getValue('services', 'scraper_profile_sync');
+        $fallbackToken = is_array($fallbackSettings) ? trim((string) ($fallbackSettings['token'] ?? '')) : '';
+        $configuredToken = $configuredToken !== '' ? $configuredToken : $fallbackToken;
 
         abort_if($configuredToken === '', 503, 'Scraper profile sync is not configured.');
         abort_if(! hash_equals($configuredToken, (string) $request->bearerToken()), 403, 'Invalid scraper profile sync token.');
