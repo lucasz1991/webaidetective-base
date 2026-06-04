@@ -186,6 +186,11 @@
                 $selectedLastInstagramAnalyzedAt = $selectedTrackedPerson?->last_instagram_analyzed_at
                     ? $selectedTrackedPerson->last_instagram_analyzed_at->copy()->timezone(config('app.timezone'))
                     : null;
+                $selectedLatestChangeSnapshot = $selectedTrackedPerson?->latestChangedInstagramSnapshot;
+                $selectedLatestChange = collect($selectedLatestChangeSnapshot?->detected_changes ?? [])->first();
+                $selectedLatestChangeAnalyzedAt = $selectedLatestChangeSnapshot?->analyzed_at
+                    ? $selectedLatestChangeSnapshot->analyzed_at->copy()->timezone(config('app.timezone'))
+                    : null;
             @endphp
 
             <div class="flex max-h-[92vh] flex-col overflow-hidden bg-white">
@@ -207,47 +212,49 @@
 
                 <div class="overflow-y-auto p-4 sm:p-5">
                     @if($selectedTrackedPerson)
-                        <div class="flex flex-col gap-4 sm:flex-row sm:items-start">
-                            <div class="rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-0.5">
-                                <div class="h-20 w-20 overflow-hidden rounded-full border-2 border-white bg-slate-100">
-                                    @if($selectedTrackedPerson->profile_image_url)
-                                        <img src="{{ $selectedTrackedPerson->profile_image_url }}" alt="{{ $selectedTrackedPerson->display_name }}" class="h-full w-full object-cover">
-                                    @else
-                                        <div class="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-500">IG</div>
+                        <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.72fr)] lg:items-start">
+                            <div class="flex flex-col gap-4 sm:flex-row sm:items-start">
+                                <div class="rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-0.5">
+                                    <div class="h-20 w-20 overflow-hidden rounded-full border-2 border-white bg-slate-100">
+                                        @if($selectedTrackedPerson->profile_image_url)
+                                            <img src="{{ $selectedTrackedPerson->profile_image_url }}" alt="{{ $selectedTrackedPerson->display_name }}" class="h-full w-full object-cover">
+                                        @else
+                                            <div class="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-500">IG</div>
+                                        @endif
+                                    </div>
+                                </div>
+
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <h4 class="truncate text-xl font-bold text-slate-950">{{ $selectedTrackedPerson->display_name }}</h4>
+                                        <span class="rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 {{ $selectedStatusBadgeClass }}">{{ $selectedStatusLabel }}</span>
+                                    </div>
+
+                                    <div class="mt-1 text-sm text-slate-600">
+                                        {{ $selectedTrackedPerson->instagram_username ? '@'.$selectedTrackedPerson->instagram_username : 'Instagram-Handle fehlt' }}
+                                    </div>
+
+                                    @if($selectedTrackedPerson->last_instagram_status_message)
+                                        <p class="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                                            {{ $selectedTrackedPerson->last_instagram_status_message }}
+                                        </p>
                                     @endif
                                 </div>
                             </div>
 
-                            <div class="min-w-0 flex-1">
-                                <div class="flex flex-wrap items-center gap-2">
-                                    <h4 class="truncate text-xl font-bold text-slate-950">{{ $selectedTrackedPerson->display_name }}</h4>
-                                    <span class="rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 {{ $selectedStatusBadgeClass }}">{{ $selectedStatusLabel }}</span>
+                            <div class="grid grid-cols-3 gap-2 text-center">
+                                <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                                    <div class="text-lg font-bold text-slate-950">{{ $selectedTrackedPerson->instagram_posts_count !== null ? number_format($selectedTrackedPerson->instagram_posts_count) : '-' }}</div>
+                                    <div class="text-xs text-slate-500">Beitraege</div>
                                 </div>
-
-                                <div class="mt-1 text-sm text-slate-600">
-                                    {{ $selectedTrackedPerson->instagram_username ? '@'.$selectedTrackedPerson->instagram_username : 'Instagram-Handle fehlt' }}
+                                <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                                    <div class="text-lg font-bold text-slate-950">{{ $selectedTrackedPerson->instagram_followers_count !== null ? number_format($selectedTrackedPerson->instagram_followers_count) : '-' }}</div>
+                                    <div class="text-xs text-slate-500">Follower</div>
                                 </div>
-
-                                @if($selectedTrackedPerson->last_instagram_status_message)
-                                    <p class="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                                        {{ $selectedTrackedPerson->last_instagram_status_message }}
-                                    </p>
-                                @endif
-                            </div>
-                        </div>
-
-                        <div class="mt-5 grid grid-cols-3 gap-2 text-center">
-                            <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
-                                <div class="text-lg font-bold text-slate-950">{{ $selectedTrackedPerson->instagram_posts_count !== null ? number_format($selectedTrackedPerson->instagram_posts_count) : '-' }}</div>
-                                <div class="text-xs text-slate-500">Beitraege</div>
-                            </div>
-                            <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
-                                <div class="text-lg font-bold text-slate-950">{{ $selectedTrackedPerson->instagram_followers_count !== null ? number_format($selectedTrackedPerson->instagram_followers_count) : '-' }}</div>
-                                <div class="text-xs text-slate-500">Follower</div>
-                            </div>
-                            <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
-                                <div class="text-lg font-bold text-slate-950">{{ $selectedTrackedPerson->instagram_following_count !== null ? number_format($selectedTrackedPerson->instagram_following_count) : '-' }}</div>
-                                <div class="text-xs text-slate-500">Gefolgt</div>
+                                <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3">
+                                    <div class="text-lg font-bold text-slate-950">{{ $selectedTrackedPerson->instagram_following_count !== null ? number_format($selectedTrackedPerson->instagram_following_count) : '-' }}</div>
+                                    <div class="text-xs text-slate-500">Gefolgt</div>
+                                </div>
                             </div>
                         </div>
 
@@ -258,6 +265,25 @@
                                 Noch nicht analysiert.
                             @endif
                         </div>
+
+                        @if($selectedLatestChange)
+                            <div class="mt-4 rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-950">
+                                <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <div class="text-xs font-semibold uppercase tracking-wide text-sky-700">Zuletzt erkannte Aenderung</div>
+                                    @if($selectedLatestChangeAnalyzedAt)
+                                        <div class="text-xs font-semibold text-sky-800" title="{{ $selectedLatestChangeAnalyzedAt->format('d.m.Y H:i') }}">
+                                            {{ $selectedLatestChangeAnalyzedAt->diffForHumans() }}
+                                        </div>
+                                    @endif
+                                </div>
+                                <div class="mt-2">
+                                    <span class="font-semibold">{{ $selectedLatestChange['label'] ?? $selectedLatestChange['field'] ?? 'Aenderung' }}:</span>
+                                    <span>{{ filled($selectedLatestChange['before'] ?? null) ? $selectedLatestChange['before'] : '-' }}</span>
+                                    <span class="mx-1">-&gt;</span>
+                                    <span>{{ filled($selectedLatestChange['after'] ?? null) ? $selectedLatestChange['after'] : '-' }}</span>
+                                </div>
+                            </div>
+                        @endif
 
                         <div class="mt-5">
                             <livewire:user.tracked-person-detail

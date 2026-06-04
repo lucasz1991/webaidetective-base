@@ -122,6 +122,13 @@ class TrackedPerson extends Model
         return $this->hasOne(TrackedPersonInstagramSnapshot::class)->latestOfMany('analyzed_at');
     }
 
+    public function latestChangedInstagramSnapshot(): HasOne
+    {
+        return $this->hasOne(TrackedPersonInstagramSnapshot::class)
+            ->where('has_changes', true)
+            ->latestOfMany('analyzed_at');
+    }
+
     public function getDisplayNameAttribute(): string
     {
         return trim(collect([$this->first_name, $this->last_name])->implode(' '))

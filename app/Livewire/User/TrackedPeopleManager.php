@@ -188,6 +188,7 @@ class TrackedPeopleManager extends Component
         $user = Auth::user();
         $trackedPeople = $user
             ? $user->trackedPeople()
+                ->with(['latestInstagramSnapshot', 'latestChangedInstagramSnapshot'])
                 ->orderByRaw('instagram_username IS NULL')
                 ->orderByDesc('last_instagram_analyzed_at')
                 ->orderBy('instagram_username')

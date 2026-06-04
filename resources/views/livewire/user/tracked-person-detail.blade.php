@@ -286,9 +286,7 @@
             <nav class="flex gap-2 overflow-x-auto px-4 py-3 text-sm sm:px-5" aria-label="Detailbereiche">
                 <a href="#profil" class="shrink-0 rounded-lg bg-slate-950 px-3 py-1.5 font-semibold text-white">Profil</a>
                 <a href="#kennzahlen" class="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">Kennzahlen</a>
-                <a href="#notizen" class="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">Notizen</a>
-                <a href="#verbindungen" class="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">Verbindungen</a>
-                <a href="#analyse" class="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">Analyse</a>
+                <a href="#profilinfos" class="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">Informationen</a>
             </nav>
         </section>
     @endif
@@ -1175,9 +1173,38 @@
         </x-slot>
     </x-confirmation-modal>
 
-    <section class="grid gap-4 2xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.8fr)]">
-        <div class="space-y-4">
-            <div id="notizen" class="scroll-mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <section id="profilinfos" x-data="{ activeProfileTab: 'notizen' }" class="scroll-mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div class="border-b border-slate-200 px-4 py-3">
+            <div class="flex gap-2 overflow-x-auto text-sm" role="tablist" aria-label="Profilinformationen">
+                <button
+                    type="button"
+                    x-on:click="activeProfileTab = 'notizen'"
+                    x-bind:class="activeProfileTab === 'notizen' ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
+                    class="shrink-0 rounded-lg px-3 py-1.5 font-semibold"
+                >
+                    Notizen
+                </button>
+                <button
+                    type="button"
+                    x-on:click="activeProfileTab = 'verbindungen'"
+                    x-bind:class="activeProfileTab === 'verbindungen' ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
+                    class="shrink-0 rounded-lg px-3 py-1.5 font-semibold"
+                >
+                    Verbindungen
+                </button>
+                <button
+                    type="button"
+                    x-on:click="activeProfileTab = 'analyse'"
+                    x-bind:class="activeProfileTab === 'analyse' ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
+                    class="shrink-0 rounded-lg px-3 py-1.5 font-semibold"
+                >
+                    Analyse
+                </button>
+            </div>
+        </div>
+
+        <div class="p-4">
+            <div id="notizen" x-show="activeProfileTab === 'notizen'" class="scroll-mt-4">
                 <h3 class="text-lg font-bold text-slate-900">Instagram-Notizen</h3>
                 <div class="mt-3 space-y-2">
                     @forelse($trackedPerson->knownFacts as $knownFact)
@@ -1227,7 +1254,7 @@
                 </div>
             </div>
 
-            <div id="verbindungen" class="scroll-mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div id="verbindungen" x-show="activeProfileTab === 'verbindungen'" class="scroll-mt-4">
                 <div class="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Bekannte Instagram-Profile</h3>
@@ -1619,9 +1646,8 @@
                     </div>
                 </div>
             </div>
-        </div>
 
-        <div id="analyse" class="scroll-mt-4 space-y-4">
+            <div id="analyse" x-show="activeProfileTab === 'analyse'" class="scroll-mt-4 space-y-4">
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Letzte Instagram-Analyse</h3>
 
@@ -1853,6 +1879,7 @@
                         <p class="text-sm text-slate-500">Noch keine Verlaufseintraege mit erkannten Aenderungen vorhanden.</p>
                     @endforelse
                 </div>
+            </div>
             </div>
         </div>
     </section>
