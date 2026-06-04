@@ -124,7 +124,7 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 4;
+        $data['graph_version'] = 5;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
 
         // Also include primary person flag
@@ -520,6 +520,22 @@ class NetworkMap extends Component
 
         $nodesByInstagram = $this->indexGraphNodesByInstagramUsername($nodes);
 
+        if ($primaryPerson && $this->contextTrackedPersonId) {
+            $focalProfiles = collect([$primaryPerson->currentInstagramProfile])
+                ->merge($primaryPerson->publicProfiles->pluck('instagramProfile'))
+                ->filter()
+                ->unique(fn (InstagramProfile $profile) => $profile->id)
+                ->values();
+
+            $this->addSystemConnectionsForFocusedProfiles(
+                $focalProfiles,
+                $peopleByInstagram,
+                $nodesByInstagram,
+                $nodes,
+                $edges,
+            );
+        }
+
         $this->addStoredInstagramProfileListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addTrackedRelationshipListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addObservedTrackedPersonConnectionsToPrimary($trackedPeople, $primaryPerson, $nodesByInstagram, $nodes, $edges);
@@ -760,6 +776,141 @@ class NetworkMap extends Component
         }
     }
 
+    private function addSystemConnectionsForFocusedProfiles(
+        Collection $focalProfiles,
+        Collection $peopleByInstagram,
+        Collection $nodesByInstagram,
+        array &$nodes,
+        array &$edges,
+    ): void {
+        foreach ($focalProfiles as $focalProfile) {
+            if (! $focalProfile instanceof InstagramProfile || ! filled($focalProfile->username)) {
+                continue;
+            }
+
+            $focalUsername = $this->normalizeUsername($focalProfile->username);
+            $focalNode = $nodesByInstagram->get($focalUsername);
+            $focalNodeId = $focalNode['id'] ?? $this->ensureInstagramProfileNode(
+                $nodes,
+                $nodesByInstagram,
+                $peopleByInstagram,
+                $focalProfile,
+                'Fokusprofil',
+            );
+
+            if (! $focalNodeId) {
+                continue;
+            }
+
+            $focalProfile->loadMissing([
+                'sourceRelationships' => fn ($query) => $query
+                    ->where('status', 'active')
+                    ->whereIn('list_type', ['followers', 'following'])
+                    ->whereNull('removed_at')
+                    ->with('relatedInstagramProfile'),
+                'relatedRelationships' => fn ($query) => $query
+                    ->where('status', 'active')
+                    ->whereIn('list_type', ['followers', 'following'])
+                    ->whereNull('removed_at')
+                    ->with('sourceInstagramProfile'),
+            ]);
+
+            foreach ($focalProfile->sourceRelationships as $relationship) {
+                if (! $this->isActiveListRelationship($relationship)) {
+                    continue;
+                }
+
+                $relatedProfile = $relationship->relatedInstagramProfile;
+                $targetId = $this->ensureInstagramProfileNode(
+                    $nodes,
+                    $nodesByInstagram,
+                    $peopleByInstagram,
+                    $relatedProfile,
+                    'Systemverbindung',
+                );
+
+                if (! $targetId || $targetId === $focalNodeId || ! $relatedProfile) {
+                    continue;
+                }
+
+                if ($relationship->list_type === 'followers') {
+                    $this->mergeTrackedRelationshipEdge(
+                        $edges,
+                        $targetId,
+                        $focalNodeId,
+                        'System Followerliste',
+                        sprintf(
+                            '%s folgt %s laut systemweiter Followerliste.',
+                            $this->displayUsernameForInstagramProfile($relatedProfile),
+                            $this->displayUsernameForInstagramProfile($focalProfile),
+                        ),
+                    );
+
+                    continue;
+                }
+
+                $this->mergeTrackedRelationshipEdge(
+                    $edges,
+                    $focalNodeId,
+                    $targetId,
+                    'System Gefolgt-Liste',
+                    sprintf(
+                        '%s folgt %s laut systemweiter Gefolgt-Liste.',
+                        $this->displayUsernameForInstagramProfile($focalProfile),
+                        $this->displayUsernameForInstagramProfile($relatedProfile),
+                    ),
+                );
+            }
+
+            foreach ($focalProfile->relatedRelationships as $relationship) {
+                if (! $this->isActiveListRelationship($relationship)) {
+                    continue;
+                }
+
+                $sourceProfile = $relationship->sourceInstagramProfile;
+                $sourceId = $this->ensureInstagramProfileNode(
+                    $nodes,
+                    $nodesByInstagram,
+                    $peopleByInstagram,
+                    $sourceProfile,
+                    'Systemverbindung',
+                );
+
+                if (! $sourceId || $sourceId === $focalNodeId || ! $sourceProfile) {
+                    continue;
+                }
+
+                if ($relationship->list_type === 'followers') {
+                    $this->mergeTrackedRelationshipEdge(
+                        $edges,
+                        $focalNodeId,
+                        $sourceId,
+                        'System Followerliste',
+                        sprintf(
+                            '%s folgt %s laut systemweiter Followerliste.',
+                            $this->displayUsernameForInstagramProfile($focalProfile),
+                            $this->displayUsernameForInstagramProfile($sourceProfile),
+                        ),
+                    );
+
+                    continue;
+                }
+
+                $this->mergeTrackedRelationshipEdge(
+                    $edges,
+                    $sourceId,
+                    $focalNodeId,
+                    'System Gefolgt-Liste',
+                    sprintf(
+                        '%s folgt %s laut systemweiter Gefolgt-Liste.',
+                        $this->displayUsernameForInstagramProfile($sourceProfile),
+                        $this->displayUsernameForInstagramProfile($focalProfile),
+                    ),
+                );
+            }
+        }
+    }
+
     private function addTrackedRelationshipListEdges(
         ?TrackedPerson $primaryPerson,
         Collection $peopleByInstagram,
@@ -825,9 +976,9 @@ class NetworkMap extends Component
             return;
         }
 
-        $primaryUsername = $this->normalizeUsername($primaryPerson->instagram_username);
+        $targetUsernames = $this->focusedObservedTargetUsernames($primaryPerson);
 
-        if ($primaryUsername === '') {
+        if ($targetUsernames->isEmpty()) {
             return;
         }
 
@@ -861,7 +1012,7 @@ class NetworkMap extends Component
 
                 $relatedUsername = $this->normalizeUsername($relationship->relatedInstagramProfile?->username);
 
-                if ($relatedUsername !== $primaryUsername) {
+                if (! $targetUsernames->contains($relatedUsername)) {
                     continue;
                 }
 
@@ -899,7 +1050,7 @@ class NetworkMap extends Component
             }
 
             foreach ($this->loadSnapshotRelationshipItems($person->latestInstagramSnapshot, 'followersList') as $item) {
-                if (! $this->relationshipItemMatchesUsername($item, $primaryUsername)) {
+                if (! $this->relationshipItemMatchesUsernames($item, $targetUsernames)) {
                     continue;
                 }
 
@@ -917,7 +1068,7 @@ class NetworkMap extends Component
             }
 
             foreach ($this->loadSnapshotRelationshipItems($person->latestInstagramSnapshot, 'followingList') as $item) {
-                if (! $this->relationshipItemMatchesUsername($item, $primaryUsername)) {
+                if (! $this->relationshipItemMatchesUsernames($item, $targetUsernames)) {
                     continue;
                 }
 
@@ -936,6 +1087,24 @@ class NetworkMap extends Component
         }
     }
 
+    private function focusedObservedTargetUsernames(TrackedPerson $primaryPerson): Collection
+    {
+        $usernames = collect([$primaryPerson->instagram_username]);
+
+        if ($this->contextTrackedPersonId) {
+            $usernames = $usernames
+                ->merge([$primaryPerson->currentInstagramProfile?->username])
+                ->merge($primaryPerson->publicProfiles->pluck('username'))
+                ->merge($primaryPerson->publicProfiles->pluck('instagramProfile.username'));
+        }
+
+        return $usernames
+            ->map(fn (mixed $username): string => $this->normalizeUsername((string) $username))
+            ->filter()
+            ->unique()
+            ->values();
+    }
+
     private function relationshipItemMatchesUsername(mixed $item, string $username): bool
     {
         if (! is_array($item) || ! filled($item['username'] ?? null)) {
@@ -943,6 +1112,15 @@ class NetworkMap extends Component
         }
 
         return $this->normalizeUsername((string) $item['username']) === $username;
+    }
+
+    private function relationshipItemMatchesUsernames(mixed $item, Collection $usernames): bool
+    {
+        if ($usernames->isEmpty() || ! is_array($item) || ! filled($item['username'] ?? null)) {
+            return false;
+        }
+
+        return $usernames->contains($this->normalizeUsername((string) $item['username']));
     }
 
     private function indexGraphNodesByInstagramUsername(array $nodes): Collection
@@ -1448,6 +1626,8 @@ class NetworkMap extends Component
         // Calculate connection count for each node to determine proximity
         $connectionCounts = $this->calculateConnectionCounts($nodes, $edges);
 
+        $maxConnections = max(1, max(array_values($connectionCounts) ?: [1]));
+
         // Find primary person (center)
         $primaryNode = collect($nodes)->firstWhere('isPrimary', true);
         if ($primaryNode) {
@@ -1483,13 +1663,12 @@ class NetworkMap extends Component
         // Place profiles with adaptive radius based on connection density
         foreach ($profiles as $index => $node) {
             $connectionCount = $connectionCounts[$node['id']] ?? 0;
-            $maxConnections = max(1, max(array_values($connectionCounts) ?: [1]));
             $ring = (int) floor($index / 36);
             $ringStart = $ring * 36;
             $ringCount = min(36, count($profiles) - $ringStart);
             $angle = $this->angle($index - $ringStart, max(1, $ringCount), -75 + ($ring * 11));
-            $connectionPull = min(85, (int) round(($connectionCount / $maxConnections) * 85));
-            $radius = 230 + ($ring * 120) - $connectionPull;
+            $connectionPull = min(125, (int) round(($connectionCount / $maxConnections) * 125));
+            $radius = 240 + ($ring * 120) - $connectionPull;
             $positions[$node['id']] = [
                 'x' => $centerX + cos($angle) * $radius,
                 'y' => $centerY + sin($angle) * $radius,
@@ -1511,10 +1690,15 @@ class NetworkMap extends Component
 
         foreach ($nodes as $index => $node) {
             $position = $positions[$node['id']] ?? ['x' => $centerX, 'y' => $centerY];
+            $connectionCount = $connectionCounts[$node['id']] ?? 0;
+            $visualMetrics = $this->visualMetricsForNode($node, $connectionCount, $maxConnections);
             $nodes[$index] = [
                 ...$node,
                 'x' => round($position['x'], 1),
                 'y' => round($position['y'], 1),
+                'connectionCount' => $connectionCount,
+                'nodeSize' => $visualMetrics['size'],
+                'nodeFontSize' => $visualMetrics['fontSize'],
             ];
         }
 
@@ -1566,6 +1750,37 @@ class NetworkMap extends Component
         }
 
         return $counts;
+    }
+
+    private function visualMetricsForNode(array $node, int $connectionCount, int $maxConnections): array
+    {
+        $ratio = $maxConnections > 0 ? min(1, $connectionCount / $maxConnections) : 0;
+
+        if ((bool) ($node['isPrimary'] ?? false)) {
+            return [
+                'size' => 112,
+                'fontSize' => 14,
+            ];
+        }
+
+        if (($node['type'] ?? null) === 'person') {
+            return [
+                'size' => (int) round(72 + ($ratio * 22)),
+                'fontSize' => (int) round(12 + ($ratio * 1.5)),
+            ];
+        }
+
+        if (($node['type'] ?? null) === 'candidate') {
+            return [
+                'size' => (int) round(42 + ($ratio * 34)),
+                'fontSize' => (int) round(10 + ($ratio * 1.5)),
+            ];
+        }
+
+        return [
+            'size' => (int) round(46 + ($ratio * 42)),
+            'fontSize' => (int) round(10 + ($ratio * 2)),
+        ];
     }
 
     private function angle(int $index, int $count, float $offsetDegrees = 0): float

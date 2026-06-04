@@ -367,6 +367,7 @@ function arrangeVisibleGraph(root, cy, animate = true) {
     const primary = nodes.find((node) => Boolean(node.data('isPrimary'))) || nodes.find((node) => node.data('type') === 'person') || nodes[0];
     const buckets = {
         person: [],
+        hub: [],
         high: [],
         medium: [],
         low: [],
@@ -384,7 +385,9 @@ function arrangeVisibleGraph(root, cy, animate = true) {
 
         const degree = visibleDegree(node);
 
-        if (degree >= 8) {
+        if (degree >= 12) {
+            buckets.hub.push(node);
+        } else if (degree >= 8) {
             buckets.high.push(node);
         } else if (degree >= 4) {
             buckets.medium.push(node);
@@ -416,10 +419,11 @@ function arrangeVisibleGraph(root, cy, animate = true) {
         });
     };
 
-    placeBucket(buckets.person, 160, 18, -Math.PI / 2);
-    placeBucket(buckets.high, 255, 24, -Math.PI / 2.5);
-    placeBucket(buckets.medium, 410, 34, -Math.PI / 3);
-    placeBucket(buckets.low, 590, 46, -Math.PI / 4);
+    placeBucket(buckets.person, 165, 18, -Math.PI / 2);
+    placeBucket(buckets.hub, 220, 18, -Math.PI / 2.6);
+    placeBucket(buckets.high, 320, 24, -Math.PI / 2.5);
+    placeBucket(buckets.medium, 470, 34, -Math.PI / 3);
+    placeBucket(buckets.low, 650, 46, -Math.PI / 4);
 
     updates.forEach(({ node, position }) => {
         if (animate) {
@@ -741,14 +745,14 @@ async function initNetworkMap(root) {
             {
                 selector: 'node',
                 style: {
-                    width: 48,
-                    height: 48,
+                    width: 'data(nodeSize)',
+                    height: 'data(nodeSize)',
                     'background-color': '#eff6ff',
                     'border-color': '#94a3b8',
                     'border-width': 2,
                     color: '#0f172a',
                     label: 'data(label)',
-                    'font-size': 11,
+                    'font-size': 'data(nodeFontSize)',
                     'font-weight': 700,
                     'text-background-color': '#ffffff',
                     'text-background-opacity': 0.88,
@@ -765,8 +769,6 @@ async function initNetworkMap(root) {
             {
                 selector: 'node[type = "person"]',
                 style: {
-                    width: 68,
-                    height: 68,
                     'background-color': '#0f172a',
                     'border-color': '#38bdf8',
                     'border-width': 3,
@@ -795,8 +797,6 @@ async function initNetworkMap(root) {
             {
                 selector: '.network-primary',
                 style: {
-                    width: 94,
-                    height: 94,
                     'border-color': '#f59e0b',
                     'border-width': 6,
                     'z-index': 30,
