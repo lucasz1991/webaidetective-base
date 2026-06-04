@@ -22,6 +22,7 @@ use Livewire\Component;
 class TrackedPersonDetail extends Component
 {
     public int $trackedPersonId;
+    public bool $compact = false;
 
     public $first_name = '';
     public $last_name = '';
@@ -64,9 +65,10 @@ class TrackedPersonDetail extends Component
         'tracked-person-refresh' => '$refresh',
     ];
 
-    public function mount(int $trackedPersonId): void
+    public function mount(int $trackedPersonId, bool $compact = false): void
     {
         $this->trackedPersonId = $trackedPersonId;
+        $this->compact = $compact;
         $this->fillFormFromModel($this->resolveTrackedPerson());
     }
 
@@ -796,6 +798,12 @@ class TrackedPersonDetail extends Component
 
     public function render()
     {
+        if ($this->compact) {
+            return view('livewire.user.tracked-person-scan-controls', [
+                'trackedPerson' => $this->resolveTrackedPerson(),
+            ]);
+        }
+
         $trackedPerson = $this->resolveTrackedPerson()
             ->load([
                 'knownFacts' => fn ($query) => $query->latest(),

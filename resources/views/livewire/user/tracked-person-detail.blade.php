@@ -245,20 +245,29 @@
     @endphp
 
     @if($isStandaloneDetailPage)
-        <section class="rounded-lg border border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-5">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div class="min-w-0">
-                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Personendetails</p>
-                    <h1 class="truncate text-xl font-bold text-slate-950">{{ $trackedPerson->display_name }}</h1>
+        <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <div class="border-b border-slate-200 px-4 py-4 sm:px-5">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="min-w-0">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Personendetails</p>
+                        <h1 class="truncate text-xl font-bold text-slate-950">{{ $trackedPerson->display_name }}</h1>
+                    </div>
+                    <a
+                        href="{{ route('dashboard') }}"
+                        wire:navigate
+                        class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+                    >
+                        Zurueck zur Uebersicht
+                    </a>
                 </div>
-                <a
-                    href="{{ route('dashboard') }}"
-                    wire:navigate
-                    class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-                >
-                    Zurueck zur Uebersicht
-                </a>
             </div>
+            <nav class="flex gap-2 overflow-x-auto px-4 py-3 text-sm sm:px-5" aria-label="Detailbereiche">
+                <a href="#profil" class="shrink-0 rounded-lg bg-slate-950 px-3 py-1.5 font-semibold text-white">Profil</a>
+                <a href="#kennzahlen" class="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">Kennzahlen</a>
+                <a href="#notizen" class="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">Notizen</a>
+                <a href="#verbindungen" class="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">Verbindungen</a>
+                <a href="#analyse" class="shrink-0 rounded-lg border border-slate-200 px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-50">Analyse</a>
+            </nav>
         </section>
     @endif
 
@@ -327,7 +336,7 @@
         </div>
     </div>
 
-    <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+    <section id="profil" class="scroll-mt-4 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="h-1.5 bg-gradient-to-r from-amber-400 via-rose-500 to-fuchsia-600"></div>
         <div class="p-4 sm:p-5">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -414,7 +423,7 @@
         </div>
     </section>
 
-    <section class="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-5">
+    <section id="kennzahlen" class="scroll-mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-5">
         <div class="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
             <div class="flex items-center justify-between gap-3">
                 <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
@@ -1083,7 +1092,7 @@
 
     <section class="grid gap-4 2xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.8fr)]">
         <div class="space-y-4">
-            <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div id="notizen" class="scroll-mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Instagram-Notizen</h3>
                 <div class="mt-3 space-y-2">
                     @forelse($trackedPerson->knownFacts as $knownFact)
@@ -1104,7 +1113,7 @@
                     @endforelse
                 </div>
 
-                <div class="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+                <div class="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
                     <div>
                         <label class="mb-1 block text-sm font-medium text-slate-700">Bezeichnung</label>
                         <input type="text" wire:model.defer="knownFactLabel" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="z. B. Wohnort">
@@ -1133,7 +1142,7 @@
                 </div>
             </div>
 
-            <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div id="verbindungen" class="scroll-mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <div class="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Bekannte Instagram-Profile</h3>
@@ -1527,8 +1536,8 @@
             </div>
         </div>
 
-        <div class="space-y-4">
-            <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div id="analyse" class="scroll-mt-4 space-y-4">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Letzte Instagram-Analyse</h3>
 
                 @if($latestSnapshot)
@@ -1681,7 +1690,7 @@
                 @endif
             </div>
 
-            <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Profilbild-Historie</h3>
                 <p class="mt-1 text-sm text-slate-600">
                     Gespeichert werden nur eindeutig dem analysierten Profil zuordenbare Profilbilder, keine Vorschlagsbilder oder Bilder des eingeloggten Such-Profils.
@@ -1703,7 +1712,7 @@
                 @endif
             </div>
 
-            <div class="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Analyse-Historie</h3>
                 <div class="mt-3 space-y-2">
                     @forelse($trackedPerson->instagramSnapshots as $snapshot)

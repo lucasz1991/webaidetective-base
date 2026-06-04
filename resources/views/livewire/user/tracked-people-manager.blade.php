@@ -305,6 +305,14 @@
                             @endif
                         </div>
 
+                        <div class="mt-5">
+                            <livewire:user.tracked-person-detail
+                                :tracked-person-id="$selectedTrackedPerson->id"
+                                :compact="true"
+                                :key="'tracked-person-scan-controls-'.$selectedTrackedPerson->id"
+                            />
+                        </div>
+
                         <div class="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                             <button
                                 type="button"
