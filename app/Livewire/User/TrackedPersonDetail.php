@@ -15,6 +15,7 @@ use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Livewire\Component;
@@ -49,6 +50,7 @@ class TrackedPersonDetail extends Component
     public bool $showFollowersModal = false;
     public bool $showFollowingModal = false;
     public bool $showSettingsModal = false;
+    public bool $showDeleteConfirmationModal = false;
 
     public $knownFactLabel = '';
     public $knownFactValue = '';
@@ -137,6 +139,57 @@ class TrackedPersonDetail extends Component
         $this->showSettingsModal = false;
         $this->setDetailStatus('Personendaten wurden gespeichert.', 'success');
         $this->dispatch('tracked-person-refresh');
+    }
+
+    public function confirmTrackedPersonDeletion(): void
+    {
+        $this->showDeleteConfirmationModal = true;
+    }
+
+    public function cancelTrackedPersonDeletion(): void
+    {
+        $this->showDeleteConfirmationModal = false;
+    }
+
+    public function deleteTrackedPerson(): void
+    {
+        $user = Auth::user();
+
+        if (! $user) {
+            $this->cancelTrackedPersonDeletion();
+
+            return;
+        }
+
+        $trackedPerson = $this->resolveTrackedPerson();
+        $displayName = $trackedPerson->display_name;
+        $wasPrimary = (bool) $trackedPerson->is_primary;
+
+        try {
+            DB::transaction(function () use ($user, $trackedPerson, $wasPrimary): void {
+                $trackedPerson->delete();
+
+                if ($wasPrimary) {
+                    $user->trackedPeople()
+                        ->orderByRaw('instagram_username IS NULL')
+                        ->orderByDesc('last_instagram_analyzed_at')
+                        ->orderBy('instagram_username')
+                        ->first()
+                        ?->update(['is_primary' => true]);
+                }
+            });
+        } catch (\Throwable $exception) {
+            $this->cancelTrackedPersonDeletion();
+            $this->setDetailStatus(
+                'Person "'.$displayName.'" konnte nicht geloescht werden: '.$exception->getMessage(),
+                'error',
+            );
+
+            return;
+        }
+
+        $this->dispatch('tracked-person-refresh');
+        $this->redirectRoute('dashboard', navigate: true);
     }
 
     public function analyzeInstagramMini(): void

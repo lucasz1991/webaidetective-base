@@ -6,6 +6,19 @@
             'error' => 'border-rose-200 bg-rose-50 text-rose-900',
             default => 'border-slate-200 bg-slate-50 text-slate-800',
         };
+        $instagramStatusLevel = $trackedPerson->last_instagram_status_level ?: 'neutral';
+        $instagramStatusLabel = match ($instagramStatusLevel) {
+            'success' => 'Aktuell',
+            'partial' => 'Teilweise',
+            'error' => 'Fehler',
+            default => 'Offen',
+        };
+        $instagramStatusBadgeClass = match ($instagramStatusLevel) {
+            'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+            'partial' => 'bg-amber-50 text-amber-800 ring-amber-200',
+            'error' => 'bg-rose-50 text-rose-700 ring-rose-200',
+            default => 'bg-slate-100 text-slate-600 ring-slate-200',
+        };
         $isStandaloneDetailPage = request()->routeIs('tracked-people.show');
         $latestSnapshot = $trackedPerson->latestInstagramSnapshot;
         $latestCountSources = data_get($latestSnapshot?->raw_payload, 'extractedProfile.countSources', []);
@@ -247,18 +260,27 @@
     @if($isStandaloneDetailPage)
         <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
             <div class="border-b border-slate-200 px-4 py-4 sm:px-5">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div class="min-w-0">
                         <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">Personendetails</p>
                         <h1 class="truncate text-xl font-bold text-slate-950">{{ $trackedPerson->display_name }}</h1>
                     </div>
-                    <a
-                        href="{{ route('dashboard') }}"
-                        wire:navigate
-                        class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-                    >
-                        Zurueck zur Uebersicht
-                    </a>
+                    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                        <button
+                            type="button"
+                            wire:click="confirmTrackedPersonDeletion"
+                            class="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-white px-3 py-2 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-50"
+                        >
+                            Person loeschen
+                        </button>
+                        <a
+                            href="{{ route('dashboard') }}"
+                            wire:navigate
+                            class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+                        >
+                            Zurueck zur Uebersicht
+                        </a>
+                    </div>
                 </div>
             </div>
             <nav class="flex gap-2 overflow-x-auto px-4 py-3 text-sm sm:px-5" aria-label="Detailbereiche">
@@ -339,9 +361,9 @@
     <section id="profil" class="scroll-mt-4 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="h-1.5 bg-gradient-to-r from-amber-400 via-rose-500 to-fuchsia-600"></div>
         <div class="p-4 sm:p-5">
-        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-start">
-                <div class="h-24 w-24 shrink-0 rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-1 sm:h-32 sm:w-32">
+        <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(280px,auto)] lg:items-start">
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-start">
+                <div class="h-24 w-24 shrink-0 rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-1 sm:h-28 sm:w-28">
                     @if($trackedPerson->profile_image_url)
                         <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full rounded-full border-4 border-white object-cover">
                     @else
@@ -350,12 +372,23 @@
                         </div>
                     @endif
                 </div>
-                <div class="min-w-0">
-                    <h2 class="break-words text-2xl font-bold text-slate-950">
+                <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 {{ $instagramStatusBadgeClass }}">{{ $instagramStatusLabel }}</span>
+                        @if($trackedPerson->monitoring_enabled)
+                            <span class="rounded-lg bg-slate-950 px-2.5 py-1 text-xs font-semibold text-white">Live</span>
+                        @endif
+                    </div>
+                    <h2 class="mt-2 break-words text-2xl font-bold text-slate-950">
                         {{ $trackedPerson->instagram_username ? '@'.$trackedPerson->instagram_username : $trackedPerson->display_name }}
                     </h2>
                     <div class="mt-1 text-sm font-semibold text-slate-700">{{ $trackedPerson->display_name }}</div>
-                    <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600 sm:text-sm">
+                    @if($trackedPerson->last_instagram_status_message)
+                        <p class="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                            {{ $trackedPerson->last_instagram_status_message }}
+                        </p>
+                    @endif
+                    <div class="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600 sm:text-sm">
                         <span>Alias: {{ $trackedPerson->alias ?: '—' }}</span>
                         <span>Ort: {{ $trackedPerson->city ?: '—' }}</span>
                         <span>Land: {{ $trackedPerson->country ?: '—' }}</span>
@@ -386,24 +419,39 @@
                 </div>
             </div>
 
-            <div class="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:justify-end">
+            <div class="grid w-full gap-2 sm:grid-cols-2 lg:w-80 lg:grid-cols-1">
                 <button
+                    type="button"
                     wire:click="analyzeInstagramMini"
                     wire:loading.attr="disabled"
                     wire:target="analyzeInstagramMini"
-                    class="inline-flex justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+                    @disabled(! $trackedPerson->instagram_username)
+                    class="inline-flex justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     <span wire:loading.remove wire:target="analyzeInstagramMini">Mini-Scan</span>
                     <span wire:loading wire:target="analyzeInstagramMini">Mini-Scan laeuft...</span>
                 </button>
                 <button
+                    type="button"
                     wire:click="analyzeInstagram"
                     wire:loading.attr="disabled"
                     wire:target="analyzeInstagram"
-                    class="inline-flex justify-center rounded-lg bg-gradient-to-r from-rose-500 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow hover:from-rose-600 hover:to-fuchsia-700"
+                    @disabled(! $trackedPerson->instagram_username)
+                    class="inline-flex justify-center rounded-lg bg-gradient-to-r from-rose-500 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow hover:from-rose-600 hover:to-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     <span wire:loading.remove wire:target="analyzeInstagram">Instagram voll analysieren</span>
                     <span wire:loading wire:target="analyzeInstagram">Vollanalyse laeuft...</span>
+                </button>
+                <button
+                    type="button"
+                    wire:click="scanInstagramSuggestions"
+                    wire:loading.attr="disabled"
+                    wire:target="scanInstagramSuggestions"
+                    @disabled(! $trackedPerson->instagram_username)
+                    class="inline-flex justify-center rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-4 py-2 text-sm font-semibold text-fuchsia-700 shadow-sm hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <span wire:loading.remove wire:target="scanInstagramSuggestions">Vorschlaege scannen</span>
+                    <span wire:loading wire:target="scanInstagramSuggestions">Vorschlags-Scan laeuft...</span>
                 </button>
                 <button
                     type="button"
@@ -1089,6 +1137,43 @@
             </div>
         </div>
     </x-modal>
+
+    <x-confirmation-modal wire:model="showDeleteConfirmationModal" maxWidth="lg">
+        <x-slot name="title">
+            Person loeschen
+        </x-slot>
+
+        <x-slot name="content">
+            <p>
+                Soll
+                <span class="font-semibold text-slate-900">{{ $trackedPerson->display_name }}</span>
+                wirklich geloescht werden?
+            </p>
+            <p class="mt-3">
+                Damit werden auch gespeicherte Instagram-Scans, Profile, Medien und Verknuepfungen dieser Person entfernt. Diese Aktion kann nicht rueckgaengig gemacht werden.
+            </p>
+        </x-slot>
+
+        <x-slot name="footer">
+            <button
+                type="button"
+                wire:click="cancelTrackedPersonDeletion"
+                class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+            >
+                Abbrechen
+            </button>
+            <button
+                type="button"
+                wire:click="deleteTrackedPerson"
+                wire:loading.attr="disabled"
+                wire:target="deleteTrackedPerson"
+                class="ml-3 inline-flex items-center justify-center rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-rose-700 disabled:opacity-60"
+            >
+                <span wire:loading.remove wire:target="deleteTrackedPerson">Endgueltig loeschen</span>
+                <span wire:loading wire:target="deleteTrackedPerson">Loesche...</span>
+            </button>
+        </x-slot>
+    </x-confirmation-modal>
 
     <section class="grid gap-4 2xl:grid-cols-[minmax(0,1.05fr)_minmax(320px,0.8fr)]">
         <div class="space-y-4">

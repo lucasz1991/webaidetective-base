@@ -10,7 +10,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions"
         class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-white/20 bg-white p-5 text-center shadow-2xl">
@@ -26,6 +26,7 @@
             </p>
             <div wire:stream="instagram-progress-live-preview"></div>
             <div class="mt-2 text-xs font-semibold text-slate-500" wire:stream="instagram-progress-live-counts"></div>
+            <div wire:stream="instagram-progress-connection-results"></div>
             <div class="mt-5">
                 <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
                     <span>Fortschritt</span>
@@ -118,6 +119,17 @@
             >
                 <span wire:loading.remove wire:target="scanInstagramFollowingList">Gefolgt scannen</span>
                 <span wire:loading wire:target="scanInstagramFollowingList">Gefolgt-Scan laeuft...</span>
+            </button>
+            <button
+                type="button"
+                wire:click="scanInstagramSuggestions"
+                wire:loading.attr="disabled"
+                wire:target="scanInstagramSuggestions"
+                @disabled(! $trackedPerson->instagram_username)
+                class="inline-flex justify-center rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-3 py-2 text-sm font-semibold text-fuchsia-700 shadow-sm hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+                <span wire:loading.remove wire:target="scanInstagramSuggestions">Vorschlaege scannen</span>
+                <span wire:loading wire:target="scanInstagramSuggestions">Vorschlags-Scan laeuft...</span>
             </button>
         </div>
     </div>

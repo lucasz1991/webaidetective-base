@@ -9,9 +9,6 @@
         $selectedTrackedPerson = $selectedTrackedPersonId
             ? $trackedPeople->firstWhere('id', $selectedTrackedPersonId)
             : null;
-        $trackedPersonPendingDeletion = $trackedPersonIdPendingDeletion
-            ? $trackedPeople->firstWhere('id', $trackedPersonIdPendingDeletion)
-            : null;
         $instagramProfiles = $trackedPeople->filter(fn ($person) => filled($person->instagram_username));
         $monitoredProfiles = $instagramProfiles->filter(fn ($person) => $person->monitoring_enabled);
         $alertProfiles = $instagramProfiles->filter(fn ($person) => $person->notify_social_changes && $person->notify_instagram_changes);
@@ -101,22 +98,6 @@
         @forelse($trackedPeople as $trackedPerson)
             @php
                 $isSelected = $selectedTrackedPersonId === $trackedPerson->id;
-                $statusLevel = $trackedPerson->last_instagram_status_level ?: 'neutral';
-                $statusLabel = match ($statusLevel) {
-                    'success' => 'Aktuell',
-                    'partial' => 'Teilweise',
-                    'error' => 'Fehler',
-                    default => 'Offen',
-                };
-                $statusBadgeClass = match ($statusLevel) {
-                    'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-                    'partial' => 'bg-amber-50 text-amber-800 ring-amber-200',
-                    'error' => 'bg-rose-50 text-rose-700 ring-rose-200',
-                    default => 'bg-slate-100 text-slate-600 ring-slate-200',
-                };
-                $lastInstagramAnalyzedAt = $trackedPerson->last_instagram_analyzed_at
-                    ? $trackedPerson->last_instagram_analyzed_at->copy()->timezone(config('app.timezone'))
-                    : null;
             @endphp
 
             <article
@@ -139,7 +120,7 @@
                     <span class="h-5 w-5 animate-spin rounded-full border-2 border-pink-200 border-t-pink-600"></span>
                     <span>Profil wird geladen...</span>
                 </div>
-                <div class="grid gap-4 p-4 lg:grid-cols-[minmax(260px,1.1fr)_minmax(0,1fr)_auto] lg:items-center">
+                <div class="grid gap-4 p-4 lg:grid-cols-[minmax(260px,1.1fr)_minmax(0,1fr)] lg:items-center">
                     <div class="flex min-w-0 items-center gap-3">
                         <div class="rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-0.5">
                             <div class="h-14 w-14 overflow-hidden rounded-full border-2 border-white bg-slate-100">
@@ -176,33 +157,6 @@
                             <div class="text-sm font-bold text-slate-950">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
                             <div class="text-xs text-slate-500">Gefolgt</div>
                         </div>
-                    </div>
-
-                    <div class="flex flex-wrap items-center gap-2 lg:justify-end">
-                        <span class="rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 {{ $statusBadgeClass }}">{{ $statusLabel }}</span>
-                        @if($trackedPerson->monitoring_enabled)
-                            <span class="rounded-lg bg-slate-950 px-2.5 py-1 text-xs font-semibold text-white">Live</span>
-                        @endif
-                        @if($lastInstagramAnalyzedAt)
-                            <span class="text-xs text-slate-500" title="{{ $lastInstagramAnalyzedAt->format('d.m.Y H:i') }}">{{ $lastInstagramAnalyzedAt->diffForHumans() }}</span>
-                        @endif
-                        <a
-                            href="{{ route('tracked-people.show', $trackedPerson->id) }}"
-                            wire:navigate
-                            x-on:click.stop
-                            class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-                        >
-                            Detailseite
-                        </a>
-                        <button
-                            type="button"
-                            wire:click.stop="confirmTrackedPersonDeletion({{ $trackedPerson->id }})"
-                            wire:loading.attr="disabled"
-                            wire:target="confirmTrackedPersonDeletion({{ $trackedPerson->id }})"
-                            class="rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 shadow-sm hover:bg-rose-50 disabled:opacity-60"
-                        >
-                            Loeschen
-                        </button>
                     </div>
                 </div>
             </article>
@@ -334,43 +288,4 @@
             </div>
         </x-modal>
     @endif
-
-    <x-confirmation-modal wire:model="showDeleteConfirmationModal" maxWidth="lg">
-        <x-slot name="title">
-            Person loeschen
-        </x-slot>
-
-        <x-slot name="content">
-            <p>
-                Soll die Person
-                <span class="font-semibold text-slate-900">
-                    {{ $trackedPersonPendingDeletion?->display_name ?? 'dieser Datensatz' }}
-                </span>
-                wirklich geloescht werden?
-            </p>
-            <p class="mt-3">
-                Damit werden auch die gespeicherten Scans, Profile, Medien und Verknuepfungen dieser Person entfernt. Diese Aktion kann nicht rueckgaengig gemacht werden.
-            </p>
-        </x-slot>
-
-        <x-slot name="footer">
-            <button
-                type="button"
-                wire:click="cancelTrackedPersonDeletion"
-                class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
-            >
-                Abbrechen
-            </button>
-            <button
-                type="button"
-                wire:click="deleteTrackedPerson"
-                wire:loading.attr="disabled"
-                wire:target="deleteTrackedPerson"
-                class="ml-3 inline-flex items-center justify-center rounded-lg bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-rose-700 disabled:opacity-60"
-            >
-                <span wire:loading.remove wire:target="deleteTrackedPerson">Endgueltig loeschen</span>
-                <span wire:loading wire:target="deleteTrackedPerson">Loesche...</span>
-            </button>
-        </x-slot>
-    </x-confirmation-modal>
 </div>
