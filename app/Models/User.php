@@ -77,6 +77,26 @@ class User extends Authenticatable
     {
         return $this->hasMany(TrackedPerson::class);
     }
+
+    public function subscriptions()
+    {
+        return $this->hasMany(Subscription::class);
+    }
+
+    public function activeSubscription()
+    {
+        return $this->hasOne(Subscription::class)->where('status', 'active')->latestOfMany();
+    }
+
+    public function creditWallet()
+    {
+        return $this->hasOne(CreditWallet::class);
+    }
+
+    public function creditTransactions()
+    {
+        return $this->hasMany(CreditTransaction::class);
+    }
     
     public function receivedMessages()
     {

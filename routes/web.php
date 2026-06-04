@@ -8,6 +8,7 @@ use App\Livewire\Auth\Register;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use App\Livewire\Dashboard;
+use App\Livewire\AdminConfig;
 use App\Livewire\User\NetworkMap;
 use App\Livewire\User\TrackedPersonDetail;
 use App\Models\TrackedPerson;
@@ -118,6 +119,11 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session'), 'verified']
         Route::get('/howto', HowTo::class)->name('howto');
         Route::get('/faqs', Faqs::class)->name('faqs');
     });
+
+    Route::middleware(['role:admin'])->prefix('admin')->group(function () {
+        Route::get('/config', AdminConfig::class)->name('admin.config');
+    });
+
     // Tutor Routes
     Route::middleware(['role:tutor'])->prefix('tutor')->group(function () {
         Route::get('/dashboard', TutorDashboard::class)->name('tutor.dashboard');
