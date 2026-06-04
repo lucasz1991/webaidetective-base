@@ -8,6 +8,10 @@
     x-data="{
         networkNode: { id: null, type: null, isKnownProfile: false },
         setNetworkNode(event) {
+            if (event.detail?.mapId && event.detail.mapId !== '{{ $mapId }}') {
+                return;
+            }
+
             this.networkNode = event.detail || { id: null, type: null, isKnownProfile: false };
         }
     }"
@@ -138,6 +142,14 @@
                         <div class="mt-4 space-y-2" x-show="networkNode.id && networkNode.type !== 'person'" x-cloak>
                             <button
                                 type="button"
+                                class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                                wire:loading.attr="disabled"
+                                x-on:click="$wire.openProfilePreview(networkNode.id)"
+                            >
+                                Profil öffnen
+                            </button>
+                            <button
+                                type="button"
                                 class="w-full rounded-lg border border-pink-200 bg-pink-50 px-3 py-2 text-sm font-semibold text-pink-700 transition hover:bg-pink-100 disabled:opacity-50"
                                 x-show="!networkNode.isKnownProfile"
                                 wire:loading.attr="disabled"
@@ -179,4 +191,127 @@
             </aside>
         </div>
     </main>
+
+    <x-modal wire:model="showProfilePreviewModal" maxWidth="3xl">
+        <x-slot name="title">
+            Instagram-Profil
+        </x-slot>
+
+        <x-slot name="content">
+            @if($profilePreview)
+                <div class="space-y-4">
+                    <div class="flex items-start gap-4">
+                        <div class="h-16 w-16 shrink-0 overflow-hidden rounded-full bg-slate-100 ring-2 ring-slate-200">
+                            @if($profilePreview['image_url'] ?? null)
+                                <img src="{{ $profilePreview['image_url'] }}" alt="{{ $profilePreview['handle'] }}" class="h-full w-full object-cover">
+                            @else
+                                <div class="flex h-full w-full items-center justify-center text-xl font-bold text-slate-500">
+                                    {{ strtoupper(substr(ltrim($profilePreview['username'] ?? '?', '@'), 0, 1)) }}
+                                </div>
+                            @endif
+                        </div>
+                        <div class="min-w-0 flex-1">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <h3 class="break-words text-xl font-bold text-slate-950">{{ $profilePreview['display_name'] }}</h3>
+                                @if($profilePreview['is_known_profile'])
+                                    <span class="rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-800">bekannt</span>
+                                @else
+                                    <span class="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">unbekannt</span>
+                                @endif
+                                <span class="rounded-full bg-white px-2 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+                                    {{ $profilePreview['visibility'] ?? 'unknown' }}
+                                </span>
+                            </div>
+                            <div class="mt-1 text-sm font-semibold text-slate-500">{{ $profilePreview['handle'] }}</div>
+                            @if($profilePreview['last_status_message'] ?? null)
+                                <p class="mt-2 text-sm text-slate-600">{{ $profilePreview['last_status_message'] }}</p>
+                            @endif
+                        </div>
+                    </div>
+
+                    <div class="grid gap-2 sm:grid-cols-3">
+                        <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
+                            <div class="mt-1 text-lg font-bold text-slate-950">{{ ($profilePreview['followers_count'] ?? null) !== null ? number_format($profilePreview['followers_count']) : '-' }}</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gefolgt</div>
+                            <div class="mt-1 text-lg font-bold text-slate-950">{{ ($profilePreview['following_count'] ?? null) !== null ? number_format($profilePreview['following_count']) : '-' }}</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Posts</div>
+                            <div class="mt-1 text-lg font-bold text-slate-950">{{ ($profilePreview['posts_count'] ?? null) !== null ? number_format($profilePreview['posts_count']) : '-' }}</div>
+                        </div>
+                    </div>
+
+                    <div class="grid gap-2 sm:grid-cols-3">
+                        <div class="rounded-lg border border-slate-200 bg-white p-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Aktive Followerliste</div>
+                            <div class="mt-1 text-lg font-bold text-slate-950">{{ number_format($profilePreview['active_followers_count'] ?? 0) }}</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-200 bg-white p-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Aktive Gefolgt-Liste</div>
+                            <div class="mt-1 text-lg font-bold text-slate-950">{{ number_format($profilePreview['active_following_count'] ?? 0) }}</div>
+                        </div>
+                        <div class="rounded-lg border border-slate-200 bg-white p-3">
+                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Eingehende Verbindungen</div>
+                            <div class="mt-1 text-lg font-bold text-slate-950">{{ number_format($profilePreview['known_incoming_count'] ?? 0) }}</div>
+                        </div>
+                    </div>
+
+                    <div class="rounded-lg border border-slate-200 bg-white p-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <div class="text-sm font-bold text-slate-950">Scans</div>
+                                <div class="mt-1 text-xs text-slate-500">
+                                    Zuletzt gescannt: {{ $profilePreview['last_scanned_at'] ?? '-' }}
+                                </div>
+                            </div>
+                            @if($profilePreview['profile_url'] ?? null)
+                                <a href="{{ $profilePreview['profile_url'] }}" target="_blank" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                                    Instagram öffnen
+                                </a>
+                            @endif
+                        </div>
+
+                        <div class="mt-3 space-y-2">
+                            @forelse($profilePreview['list_scans'] ?? [] as $scan)
+                                <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <span class="font-semibold text-slate-900">{{ $scan['list_type'] }}</span>
+                                        <span>{{ $scan['scanned_at'] ?? '-' }}</span>
+                                        <span class="rounded-full bg-white px-2 py-0.5 font-semibold">{{ $scan['status_level'] }}</span>
+                                    </div>
+                                    <div class="mt-1">
+                                        Aktiv: {{ number_format($scan['active_count'] ?? 0) }} / beobachtet: {{ number_format($scan['observed_count'] ?? 0) }}
+                                    </div>
+                                    @if($scan['status_message'])
+                                        <div class="mt-1">{{ $scan['status_message'] }}</div>
+                                    @endif
+                                </div>
+                            @empty
+                                <p class="text-sm text-slate-500">Fuer dieses Profil sind noch keine gespeicherten Listenscans vorhanden.</p>
+                            @endforelse
+                        </div>
+                    </div>
+                </div>
+            @endif
+        </x-slot>
+
+        <x-slot name="footer">
+            <button type="button" wire:click="closeProfilePreview" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                Schliessen
+            </button>
+            @if($profilePreview && ! ($profilePreview['is_known_profile'] ?? false))
+                <button type="button" wire:click="addPreviewProfileAsKnown" wire:loading.attr="disabled" class="ml-3 rounded-lg border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-100 disabled:opacity-50">
+                    Als bekannt speichern
+                </button>
+            @endif
+            @if($profilePreview)
+                <button type="button" wire:click="scanPreviewProfile" wire:loading.attr="disabled" class="ml-3 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
+                    Scan starten
+                </button>
+            @endif
+        </x-slot>
+    </x-modal>
 </div>

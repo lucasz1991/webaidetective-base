@@ -185,7 +185,12 @@ function updateSelectionPanel(root, cy) {
         }
 
         window.dispatchEvent(new CustomEvent('network-map-node-selected', {
-            detail: { id: null, type: null, isKnownProfile: false },
+            detail: {
+                mapId: root.dataset.networkMapId || null,
+                id: null,
+                type: null,
+                isKnownProfile: false,
+            },
         }));
 
         return;
@@ -214,6 +219,7 @@ function updateSelectionPanel(root, cy) {
 
     window.dispatchEvent(new CustomEvent('network-map-node-selected', {
         detail: {
+            mapId: root.dataset.networkMapId || null,
             id: node.id(),
             type: node.data('type') || 'unknown',
             isKnownProfile: Boolean(node.data('isKnownProfile')),

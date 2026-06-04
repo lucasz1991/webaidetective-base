@@ -32,6 +32,12 @@ class NetworkMap extends Component
 
     public ?string $graphToken = null;
 
+    public bool $showProfilePreviewModal = false;
+
+    public ?string $previewNodeId = null;
+
+    public array $profilePreview = [];
+
     public array $graphStats = [
         'people' => 0,
         'nodes' => 0,
@@ -101,6 +107,10 @@ class NetworkMap extends Component
 
     public function setPrimaryTrackedPerson($trackedPersonId): void
     {
+        if ($this->embedded) {
+            return;
+        }
+
         $user = Auth::user();
         $trackedPersonId = (int) $trackedPersonId;
 
@@ -1606,6 +1616,110 @@ class NetworkMap extends Component
         }
     }
 
+    public function openProfilePreview(string $nodeId): void
+    {
+        $user = Auth::user();
+
+        if (! $user) {
+            return;
+        }
+
+        [$profile, $username] = $this->resolveInstagramProfileFromNodeId($nodeId);
+
+        if (! $profile && filled($username)) {
+            $profile = app(InstagramProfileRelationshipStore::class)->ensureProfile($username);
+        }
+
+        if (! $profile) {
+            $this->dispatch('notification', type: 'error', message: 'Profil konnte nicht geoeffnet werden');
+
+            return;
+        }
+
+        $profile->load([
+            'listScans' => fn ($query) => $query->latest('scanned_at')->limit(5),
+        ]);
+
+        $trackedPerson = $this->getPrimaryTrackedPerson($user);
+        $normalizedUsername = $this->normalizeUsername($profile->username);
+        $knownPublicProfile = $trackedPerson
+            ? $trackedPerson->publicProfiles()
+                ->where('platform', 'instagram')
+                ->where('username', $normalizedUsername)
+                ->first()
+            : null;
+
+        $activeSourceRelationships = $profile->sourceRelationships()
+            ->where('status', 'active')
+            ->whereNull('removed_at');
+        $activeRelatedRelationships = $profile->relatedRelationships()
+            ->where('status', 'active')
+            ->whereNull('removed_at');
+
+        $this->previewNodeId = $nodeId;
+        $this->profilePreview = [
+            'id' => $profile->id,
+            'username' => $normalizedUsername,
+            'handle' => $profile->display_handle,
+            'display_name' => $profile->display_name ?: $profile->full_name ?: $profile->display_handle,
+            'profile_url' => $profile->profile_url ?: 'https://www.instagram.com/'.$normalizedUsername.'/',
+            'image_url' => $this->profileImageUrlForInstagramProfile($profile),
+            'visibility' => $this->profileStatusForInstagramProfile($profile),
+            'followers_count' => $profile->followers_count,
+            'following_count' => $profile->following_count,
+            'posts_count' => $profile->posts_count,
+            'last_scanned_at' => $profile->last_scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i'),
+            'last_status_level' => $profile->last_status_level,
+            'last_status_message' => $profile->last_status_message,
+            'is_known_profile' => (bool) $knownPublicProfile,
+            'known_public_profile_id' => $knownPublicProfile?->id,
+            'active_followers_count' => (clone $activeSourceRelationships)->where('list_type', 'followers')->count(),
+            'active_following_count' => (clone $activeSourceRelationships)->where('list_type', 'following')->count(),
+            'known_incoming_count' => $activeRelatedRelationships->count(),
+            'list_scans' => $profile->listScans
+                ->map(fn ($scan): array => [
+                    'id' => $scan->id,
+                    'list_type' => $scan->list_type,
+                    'status_level' => $scan->status_level,
+                    'status_message' => $scan->status_message,
+                    'active_count' => $scan->active_count,
+                    'observed_count' => $scan->observed_count,
+                    'scanned_at' => $scan->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i'),
+                ])
+                ->values()
+                ->all(),
+        ];
+
+        $this->showProfilePreviewModal = true;
+    }
+
+    public function closeProfilePreview(): void
+    {
+        $this->showProfilePreviewModal = false;
+        $this->previewNodeId = null;
+        $this->profilePreview = [];
+    }
+
+    public function addPreviewProfileAsKnown(): void
+    {
+        if (! $this->previewNodeId) {
+            return;
+        }
+
+        $this->addProfileAsKnown($this->previewNodeId);
+        $this->openProfilePreview($this->previewNodeId);
+    }
+
+    public function scanPreviewProfile(): void
+    {
+        if (! $this->previewNodeId) {
+            return;
+        }
+
+        $this->scanProfile($this->previewNodeId);
+        $this->openProfilePreview($this->previewNodeId);
+    }
+
     /**
      * @return array{0: ?InstagramProfile, 1: ?string}
      */
@@ -1673,6 +1787,16 @@ class NetworkMap extends Component
      */
     private function getPrimaryTrackedPerson(User $user): ?TrackedPerson
     {
+        if ($this->contextTrackedPersonId) {
+            $contextPerson = $user->trackedPeople()
+                ->whereKey($this->contextTrackedPersonId)
+                ->first();
+
+            if ($contextPerson) {
+                return $contextPerson;
+            }
+        }
+
         return $user->trackedPeople()
             ->orderByDesc('is_primary')
             ->first();
