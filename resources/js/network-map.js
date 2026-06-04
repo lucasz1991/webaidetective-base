@@ -184,10 +184,9 @@ function updateSelectionPanel(root, cy) {
             list.replaceChildren();
         }
 
-        // Update Alpine.js state
-        if (root.__x?.$data?.setNetworkNode) {
-            root.__x.$data.setNetworkNode(null, null);
-        }
+        window.dispatchEvent(new CustomEvent('network-map-node-selected', {
+            detail: { id: null, type: null, isKnownProfile: false },
+        }));
 
         return;
     }
@@ -213,10 +212,13 @@ function updateSelectionPanel(root, cy) {
     const edges = visibleConnectedEdges(node);
     root.querySelector('[data-network-detail-edge-count]').textContent = edges.length;
 
-    // Update Alpine.js state with selected node information
-    if (root.__x?.$data?.setNetworkNode) {
-        root.__x.$data.setNetworkNode(node.id(), node.data('type') || 'unknown');
-    }
+    window.dispatchEvent(new CustomEvent('network-map-node-selected', {
+        detail: {
+            id: node.id(),
+            type: node.data('type') || 'unknown',
+            isKnownProfile: Boolean(node.data('isKnownProfile')),
+        },
+    }));
 
     const connectedNodes = edges.connectedNodes().not(node);
     list.replaceChildren();
@@ -281,6 +283,7 @@ function applyFilters(root, cy) {
 
     if (!state.showTracked) {
         cy.edges('[networkType = "tracked-list"]').addClass('network-filtered');
+        cy.edges('[networkType = "tracked-profile-rel"]').addClass('network-filtered');
     }
 
     cy.nodes().forEach((node) => {
@@ -497,6 +500,16 @@ async function initNetworkMap(root) {
                     width: 3,
                     'line-color': '#059669',
                     'target-arrow-color': '#059669',
+                    'line-style': 'solid',
+                    opacity: 0.86,
+                },
+            },
+            {
+                selector: 'edge[networkType = "tracked-profile-rel"]',
+                style: {
+                    width: 3,
+                    'line-color': '#4f46e5',
+                    'target-arrow-color': '#4f46e5',
                     'line-style': 'solid',
                     opacity: 0.86,
                 },

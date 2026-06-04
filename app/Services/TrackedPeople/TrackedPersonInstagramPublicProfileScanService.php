@@ -30,7 +30,7 @@ class TrackedPersonInstagramPublicProfileScanService
 
     private ?array $activeScanControl = null;
 
-    public function scan(TrackedPerson $trackedPerson, ?callable $progress = null): Collection
+    public function scan(TrackedPerson $trackedPerson, ?callable $progress = null, ?int $onlyPublicProfileId = null): Collection
     {
         $targetUsername = $this->scraper->normalizeInstagramUsername($trackedPerson->instagram_username);
 
@@ -54,7 +54,7 @@ class TrackedPersonInstagramPublicProfileScanService
         $this->activeScanControl = $scanControl;
 
         try {
-            return $this->scanWithLock($trackedPerson, $targetUsername, $progress);
+            return $this->scanWithLock($trackedPerson, $targetUsername, $progress, $onlyPublicProfileId);
         } finally {
             $lock->release();
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
@@ -62,12 +62,18 @@ class TrackedPersonInstagramPublicProfileScanService
         }
     }
 
-    private function scanWithLock(TrackedPerson $trackedPerson, string $targetUsername, ?callable $progress = null): Collection
+    private function scanWithLock(
+        TrackedPerson $trackedPerson,
+        string $targetUsername,
+        ?callable $progress = null,
+        ?int $onlyPublicProfileId = null,
+    ): Collection
     {
         $publicProfiles = $trackedPerson->publicProfiles()
             ->where('platform', 'instagram')
             ->where('is_public', true)
             ->whereNotNull('username')
+            ->when($onlyPublicProfileId, fn ($query) => $query->whereKey($onlyPublicProfileId))
             ->latest()
             ->get();
 

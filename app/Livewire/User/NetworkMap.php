@@ -6,6 +6,8 @@ use App\Models\InstagramProfile;
 use App\Models\InstagramProfileRelationship;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
+use App\Models\User;
+use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -48,16 +50,31 @@ class NetworkMap extends Component
     private function generateDataHash(Collection $trackedPeople): string
     {
         $data = $trackedPeople->map(function (TrackedPerson $person) {
+            $currentRelationships = $person->currentInstagramProfile?->sourceRelationships ?? collect();
+            $publicProfiles = $person->publicProfiles ?? collect();
+            $publicProfileRelationships = $publicProfiles
+                ->pluck('instagramProfile.sourceRelationships')
+                ->flatten();
+
             return [
                 'id' => $person->id,
                 'instagram_username' => $person->instagram_username,
+                'is_primary' => (bool) $person->is_primary,
                 'updated_at' => $person->updated_at?->timestamp,
                 'current_instagram_profile_id' => $person->current_instagram_profile_id,
-                'public_profiles_count' => $person->publicProfiles()->count(),
-                'inferred_connections_count' => $person->instagramInferredConnections()->count(),
+                'public_profiles_count' => $publicProfiles->count(),
+                'public_profiles_updated_at' => $publicProfiles->max('updated_at')?->timestamp,
+                'inferred_connections_count' => $person->instagramInferredConnections->count(),
+                'inferred_connections_updated_at' => $person->instagramInferredConnections->max('updated_at')?->timestamp,
+                'current_relationships_count' => $currentRelationships->count(),
+                'current_relationships_updated_at' => $currentRelationships->max('updated_at')?->timestamp,
+                'public_profile_relationships_count' => $publicProfileRelationships->count(),
+                'public_profile_relationships_updated_at' => $publicProfileRelationships->max('updated_at')?->timestamp,
                 'latest_snapshot_updated' => $person->latestInstagramSnapshot?->updated_at?->timestamp,
             ];
         })->toArray();
+
+        $data['graph_version'] = 2;
 
         // Also include primary person flag
         $data['primary_person_id'] = $this->primaryTrackedPersonId;
@@ -79,8 +96,7 @@ class NetworkMap extends Component
             $user->trackedPeople()->whereKey($trackedPersonId)->update(['is_primary' => true]);
         });
 
-        // Invalidate graph cache when primary person changes
-        Cache::forget(self::graphHashCacheKey((int) $user->id));
+        $this->forgetGraphCache((int) $user->id);
 
         $this->primaryTrackedPersonId = $trackedPersonId;
         $this->graphToken = null;
@@ -316,7 +332,10 @@ class NetworkMap extends Component
                         'role' => 'Bekanntes Profil',
                         'status' => $publicProfile->is_public ? 'public' : 'unknown',
                         'detail' => $publicProfile->relationship_label,
+                        'isKnownProfile' => true,
                     ];
+                } else {
+                    $nodes[$targetId]['isKnownProfile'] = true;
                 }
 
                 foreach ($this->publicProfileEdges($sourceId, $targetId, $publicProfile->relationship_type) as $edge) {
@@ -329,6 +348,8 @@ class NetworkMap extends Component
                 }
             }
 
+            $nodesByInstagram = $this->indexGraphNodesByInstagramUsername($nodes);
+
             foreach ($person->instagramInferredConnections as $connection) {
                 if (! filled($connection->candidate_username)) {
                     continue;
@@ -336,7 +357,10 @@ class NetworkMap extends Component
 
                 $candidateUsername = $this->normalizeUsername($connection->candidate_username);
                 $candidatePerson = $peopleByInstagram->get($candidateUsername);
-                $candidateId = $candidatePerson ? $this->ensureTrackedPersonNode($nodes, $candidatePerson) : 'candidate-'.$candidateUsername;
+                $existingCandidateNode = $nodesByInstagram->get($candidateUsername);
+                $candidateId = $candidatePerson
+                    ? $this->ensureTrackedPersonNode($nodes, $candidatePerson)
+                    : ($existingCandidateNode['id'] ?? 'profile-instagram-'.$candidateUsername);
 
                 if (! isset($nodes[$candidateId])) {
                     $candidateImageUrl = $this->profileImageUrlForInstagramProfile($connection->candidateInstagramProfile);
@@ -354,7 +378,14 @@ class NetworkMap extends Component
                         'role' => 'Rekonstruierter Kandidat',
                         'status' => 'inferred',
                         'detail' => $connection->relationship_label,
+                        'isKnownProfile' => false,
                     ];
+                    $nodesByInstagram->put($candidateUsername, $nodes[$candidateId]);
+                } elseif (($nodes[$candidateId]['type'] ?? null) !== 'person') {
+                    $nodes[$candidateId]['detail'] = $this->mergeNodeDetail(
+                        $nodes[$candidateId]['detail'] ?? null,
+                        $connection->relationship_label,
+                    );
                 }
 
                 if ($connection->relationship_type === 'suggestion_connection') {
@@ -410,6 +441,7 @@ class NetworkMap extends Component
             'role' => $person->is_primary ? 'Hauptperson' : 'Beobachtete Person',
             'status' => $person->last_instagram_status_level ?: 'neutral',
             'detail' => $person->last_instagram_status_message ?: null,
+            'isKnownProfile' => false,
         ];
 
         return $nodeId;
@@ -812,6 +844,7 @@ class NetworkMap extends Component
             'role' => $role,
             'status' => $this->profileStatusForInstagramProfile($profile),
             'detail' => $this->profileDetailForInstagramProfile($profile),
+            'isKnownProfile' => false,
         ];
 
         $nodes[$node['id']] = $node;
@@ -873,6 +906,7 @@ class NetworkMap extends Component
             'role' => 'Listeneintrag',
             'status' => 'listed',
             'detail' => 'Aus einer gespeicherten Instagram-Liste. '.($profileUrl ? 'Profil: '.$profileUrl : ''),
+            'isKnownProfile' => false,
         ];
 
         $nodes[$node['id']] = $node;
@@ -907,6 +941,17 @@ class NetworkMap extends Component
         if ($username !== '') {
             $nodesByInstagram->put($username, $nodes[$id]);
         }
+    }
+
+    private function mergeNodeDetail(?string $current, ?string $additional): ?string
+    {
+        $parts = collect([$current, $additional])
+            ->filter(fn (?string $value): bool => filled($value))
+            ->map(fn (string $value): string => trim($value))
+            ->unique()
+            ->values();
+
+        return $parts->isNotEmpty() ? $parts->implode(' | ') : null;
     }
 
     private function profileImageUrlForRelationshipItem(mixed $item): ?string
@@ -1268,7 +1313,8 @@ class NetworkMap extends Component
             $angle = $this->angle($index, max(1, count($profiles)), -75);
             $max_radius = min(340, 210 + count($profiles) * 4);
             // Adaptive radius: more connections = smaller radius
-            $radius = $max_radius * (1 - min(0.6, $connectionCount / max(1, array_max(array_values($connectionCounts)) ?: 1)));
+            $maxConnections = max(1, max(array_values($connectionCounts) ?: [1]));
+            $radius = $max_radius * (1 - min(0.6, $connectionCount / $maxConnections));
             $positions[$node['id']] = [
                 'x' => $centerX + cos($angle) * $radius,
                 'y' => $centerY + sin($angle) * $radius,
@@ -1443,18 +1489,31 @@ class NetworkMap extends Component
             return;
         }
 
-        $profile = $this->resolveInstagramProfileFromNodeId($nodeId);
+        [$profile, $username] = $this->resolveInstagramProfileFromNodeId($nodeId);
+
+        if (! $profile && filled($username)) {
+            $profile = app(InstagramProfileRelationshipStore::class)->ensureProfile($username);
+        }
+
         if (! $profile) {
             $this->dispatch('notification', type: 'error', message: 'Profil konnte nicht gefunden werden');
             return;
         }
 
         try {
-            // Dispatch background job
-            \App\Jobs\ScanInstagramProfileJob::dispatch($profile->id, $user->id);
-            $this->dispatch('notification', type: 'success', message: 'Profil-Scan wurde gestartet');
+            $trackedPerson = $this->getPrimaryTrackedPerson($user);
+
+            if (! $trackedPerson) {
+                $this->dispatch('notification', type: 'error', message: 'Keine Hauptperson ausgewaehlt');
+                return;
+            }
+
+            $publicProfile = $this->firstOrCreateKnownProfile($trackedPerson, $profile);
+
+            \App\Jobs\ScanInstagramProfileJob::dispatch($trackedPerson->id, $publicProfile->id, (int) $user->id);
+            $this->dispatch('notification', type: 'success', message: 'Profil-Scan wurde als Hintergrund-Job gestartet');
         } catch (\Throwable $e) {
-            $this->dispatch('notification', type: 'error', message: 'Fehler beim Starten des Scans: ' . $e->getMessage());
+            $this->dispatch('notification', type: 'error', message: 'Fehler beim Starten des Scans: '.$e->getMessage());
         }
     }
 
@@ -1469,7 +1528,11 @@ class NetworkMap extends Component
             return;
         }
 
-        $profile = $this->resolveInstagramProfileFromNodeId($nodeId);
+        [$profile, $username] = $this->resolveInstagramProfileFromNodeId($nodeId);
+
+        if (! $profile && filled($username)) {
+            $profile = app(InstagramProfileRelationshipStore::class)->ensureProfile($username);
+        }
         if (! $profile || ! filled($profile->username)) {
             $this->dispatch('notification', type: 'error', message: 'Profil konnte nicht hinzugefügt werden');
             return;
@@ -1485,7 +1548,7 @@ class NetworkMap extends Component
             // Check if profile already exists
             $existingPublicProfile = $trackedPerson->publicProfiles()
                 ->where('platform', 'instagram')
-                ->where('username', $profile->username)
+                ->where('username', $this->normalizeUsername($profile->username))
                 ->exists();
 
             if ($existingPublicProfile) {
@@ -1493,19 +1556,9 @@ class NetworkMap extends Component
                 return;
             }
 
-            // Create new public profile link
-            \DB::transaction(function () use ($trackedPerson, $profile): void {
-                $trackedPerson->publicProfiles()->create([
-                    'platform' => 'instagram',
-                    'username' => $profile->username,
-                    'instagram_profile_id' => $profile->id,
-                    'relationship_type' => 'known_profile',
-                    'verified_at' => now(),
-                ]);
-            });
+            $this->firstOrCreateKnownProfile($trackedPerson, $profile);
 
-            // Invalidate graph cache when new profile is added
-            Cache::forget(self::graphHashCacheKey((int) $user->id));
+            $this->forgetGraphCache((int) $user->id);
 
             // Reset graph to refresh UI
             $this->graphToken = null;
@@ -1513,27 +1566,70 @@ class NetworkMap extends Component
             $this->dispatch('notification', type: 'success', message: 'Profil wurde als bekannt gespeichert');
 
         } catch (\Throwable $e) {
-            $this->dispatch('notification', type: 'error', message: 'Fehler beim Speichern: ' . $e->getMessage());
+            $this->dispatch('notification', type: 'error', message: 'Fehler beim Speichern: '.$e->getMessage());
         }
     }
 
     /**
-     * Resolve InstagramProfile from graph node ID.
-     * Node IDs format: 'profile-instagram-{username}' or 'candidate-{username}'
+     * @return array{0: ?InstagramProfile, 1: ?string}
      */
-    private function resolveInstagramProfileFromNodeId(string $nodeId): ?InstagramProfile
+    private function resolveInstagramProfileFromNodeId(string $nodeId): array
     {
-        $parts = explode('-', $nodeId, 3);
-        if (count($parts) < 3) {
-            return null;
+        $username = null;
+
+        if (str_starts_with($nodeId, 'profile-instagram-')) {
+            $username = substr($nodeId, strlen('profile-instagram-'));
+        } elseif (str_starts_with($nodeId, 'candidate-')) {
+            $username = substr($nodeId, strlen('candidate-'));
         }
 
-        $username = $parts[2] ?? null;
         if (! filled($username)) {
-            return null;
+            return [null, null];
         }
 
-        return InstagramProfile::where('username', $this->normalizeUsername($username))->first();
+        $username = $this->normalizeUsername($username);
+
+        return [InstagramProfile::where('username', $username)->first(), $username];
+    }
+
+    private function firstOrCreateKnownProfile(TrackedPerson $trackedPerson, InstagramProfile $profile)
+    {
+        $username = $this->normalizeUsername($profile->username);
+
+        $publicProfile = $trackedPerson->publicProfiles()->firstOrCreate(
+            [
+                'platform' => 'instagram',
+                'username' => $username,
+            ],
+            [
+                'user_id' => $trackedPerson->user_id,
+                'instagram_profile_id' => $profile->id,
+                'display_name' => $profile->display_name ?: $profile->full_name,
+                'relationship_type' => 'public_connection',
+                'profile_url' => 'https://www.instagram.com/'.$username.'/',
+                'is_public' => $this->instagramProfileIsPublic($profile),
+            ],
+        );
+
+        if ((int) $publicProfile->instagram_profile_id !== (int) $profile->id) {
+            $publicProfile->forceFill(['instagram_profile_id' => $profile->id])->save();
+        }
+
+        app(InstagramProfileRelationshipStore::class)->syncPublicProfile($publicProfile);
+
+        return $publicProfile;
+    }
+
+    private function forgetGraphCache(int $userId): void
+    {
+        $token = Cache::get(self::graphHashCacheKey($userId));
+
+        if (is_string($token) && $token !== '') {
+            Cache::forget(self::graphCacheKey($userId, $token));
+            Cache::forget(self::graphHashCacheKey($userId, $token));
+        }
+
+        Cache::forget(self::graphHashCacheKey($userId));
     }
 
     /**
