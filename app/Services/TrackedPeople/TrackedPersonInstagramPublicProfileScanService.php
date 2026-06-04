@@ -383,12 +383,39 @@ class TrackedPersonInstagramPublicProfileScanService
                     continue;
                 }
 
+                $profileVisibility = $this->nullableProfileVisibility(
+                    $item['profileVisibility'] ?? data_get($item, 'hoverCard.profileVisibility'),
+                );
+                $isPrivate = is_bool($item['isPrivate'] ?? null)
+                    ? $item['isPrivate']
+                    : (is_bool(data_get($item, 'hoverCard.isPrivate')) ? data_get($item, 'hoverCard.isPrivate') : null);
+                $profileImageUrl = $this->nullableTrim($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null);
+                $postsCount = $this->nullableInteger($item['postsCount'] ?? data_get($item, 'hoverCard.postsCount'));
+                $followersCount = $this->nullableInteger($item['followersCount'] ?? data_get($item, 'hoverCard.followersCount'));
+                $followingCount = $this->nullableInteger($item['followingCount'] ?? data_get($item, 'hoverCard.followingCount'));
+                $hoverCard = is_array($item['hoverCard'] ?? null) ? $item['hoverCard'] : null;
+
                 $existing = $candidates[$username] ?? [
                     'username' => $username,
                     'displayName' => $this->nullableTrim($item['displayName'] ?? null),
                     'profileUrl' => $this->nullableTrim($item['profileUrl'] ?? null) ?: 'https://www.instagram.com/'.$username.'/',
+                    'profileImageUrl' => $profileImageUrl,
+                    'profileVisibility' => $profileVisibility,
+                    'isPrivate' => $isPrivate,
+                    'postsCount' => $postsCount,
+                    'followersCount' => $followersCount,
+                    'followingCount' => $followingCount,
+                    'hoverCard' => $hoverCard,
                     'sourceLists' => [],
                 ];
+
+                $existing['profileImageUrl'] ??= $profileImageUrl;
+                $existing['profileVisibility'] ??= $profileVisibility;
+                $existing['isPrivate'] ??= $isPrivate;
+                $existing['postsCount'] ??= $postsCount;
+                $existing['followersCount'] ??= $followersCount;
+                $existing['followingCount'] ??= $followingCount;
+                $existing['hoverCard'] ??= $hoverCard;
 
                 if (! in_array($sourceList, $existing['sourceLists'], true)) {
                     $existing['sourceLists'][] = $sourceList;
@@ -1255,6 +1282,11 @@ class TrackedPersonInstagramPublicProfileScanService
         return is_numeric($value) ? max(0, (int) $value) : null;
     }
 
+    private function nullableProfileVisibility(mixed $value): ?string
+    {
+        return in_array($value, ['public', 'private', 'unknown'], true) ? $value : null;
+    }
+
     private function nullableArray(mixed $value): ?array
     {
         return is_array($value) && $value !== [] ? $value : null;
@@ -1307,6 +1339,16 @@ class TrackedPersonInstagramPublicProfileScanService
                 'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? $connection['candidate_profile_url'] ?? null)
                     ?: 'https://www.instagram.com/'.$candidateUsername.'/',
                 'profileImageUrl' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
+                'profileVisibility' => $this->nullableProfileVisibility(
+                    $connection['profileVisibility'] ?? data_get($connection, 'hoverCard.profileVisibility'),
+                ),
+                'isPrivate' => is_bool($connection['isPrivate'] ?? null)
+                    ? $connection['isPrivate']
+                    : (is_bool(data_get($connection, 'hoverCard.isPrivate')) ? data_get($connection, 'hoverCard.isPrivate') : null),
+                'postsCount' => $this->nullableInteger($connection['postsCount'] ?? data_get($connection, 'hoverCard.postsCount')),
+                'followersCount' => $this->nullableInteger($connection['followersCount'] ?? data_get($connection, 'hoverCard.followersCount')),
+                'followingCount' => $this->nullableInteger($connection['followingCount'] ?? data_get($connection, 'hoverCard.followingCount')),
+                'hoverCard' => is_array($connection['hoverCard'] ?? null) ? $connection['hoverCard'] : null,
                 'sourcePublicUsername' => $connectionSourceUsername,
                 'sourceLists' => array_values(array_filter($sourceLists)),
             ];
@@ -1342,6 +1384,16 @@ class TrackedPersonInstagramPublicProfileScanService
                     'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? null)
                         ?: 'https://www.instagram.com/'.$username.'/',
                     'profileImageUrl' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
+                    'profileVisibility' => $this->nullableProfileVisibility(
+                        $connection['profileVisibility'] ?? data_get($connection, 'hoverCard.profileVisibility'),
+                    ),
+                    'isPrivate' => is_bool($connection['isPrivate'] ?? null)
+                        ? $connection['isPrivate']
+                        : (is_bool(data_get($connection, 'hoverCard.isPrivate')) ? data_get($connection, 'hoverCard.isPrivate') : null),
+                    'postsCount' => $this->nullableInteger($connection['postsCount'] ?? data_get($connection, 'hoverCard.postsCount')),
+                    'followersCount' => $this->nullableInteger($connection['followersCount'] ?? data_get($connection, 'hoverCard.followersCount')),
+                    'followingCount' => $this->nullableInteger($connection['followingCount'] ?? data_get($connection, 'hoverCard.followingCount')),
+                    'hoverCard' => is_array($connection['hoverCard'] ?? null) ? $connection['hoverCard'] : null,
                     'sourcePublicUsername' => $sourcePublicUsername,
                     'sourceLists' => is_array($connection['sourceLists'] ?? null)
                         ? array_values(array_unique(array_map(

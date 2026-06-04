@@ -199,14 +199,6 @@ class TrackedPersonDetail extends Component
 
     public function analyzeInstagram(): void
     {
-        $trackedPerson = $this->resolveTrackedPerson()->loadMissing('latestInstagramSnapshot');
-
-        if (! $this->trackedPersonInstagramProfileIsPublic($trackedPerson)) {
-            $this->setDetailStatus('Die Vollanalyse ist nur fuer als oeffentlich erkannte Instagram-Profile verfuegbar.', 'partial');
-
-            return;
-        }
-
         $this->runInstagramAnalysis(true);
     }
 
@@ -363,12 +355,6 @@ class TrackedPersonDetail extends Component
             return;
         }
 
-        if ($fullScan && ! $this->trackedPersonInstagramProfileIsPublic($trackedPerson->loadMissing('latestInstagramSnapshot'))) {
-            $this->setDetailStatus('Die Vollanalyse ist nur fuer als oeffentlich erkannte Instagram-Profile verfuegbar.', 'partial');
-
-            return;
-        }
-
         $progress = fn (array $state) => $this->streamInstagramProgress($state);
         $this->cancelInstagramScanWhenClientDisconnects($trackedPerson->id);
 
@@ -418,6 +404,44 @@ class TrackedPersonDetail extends Component
         }
 
         $queuedFullScan = false;
+        $privateSuggestionScan = null;
+        $privateSuggestionScanFailed = false;
+        $privateSuggestionScanMessage = '';
+
+        if ($fullScan && $this->instagramSnapshotIsPrivate($snapshot)) {
+            try {
+                $this->streamInstagramProgress([
+                    'phase' => 'suggestions',
+                    'percent' => 1,
+                    'message' => 'Privates Profil erkannt; Profilvorschlag-Verbindungsscan wird gestartet.',
+                    'foundSuggestions' => 0,
+                    'suggestionConnections' => [],
+                ]);
+
+                $privateSuggestionScan = app(TrackedPersonInstagramSuggestionScanService::class)
+                    ->scan($trackedPerson->fresh(), $progress);
+                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlag-Scan abgeschlossen mit '
+                    .number_format((int) $privateSuggestionScan->suggestion_matches_count, 0, ',', '.')
+                    .' gefundenen Vorschlag-Verbindungen.';
+            } catch (TrackedPersonInstagramScanCancelledException $exception) {
+                $this->streamInstagramProgress([
+                    'phase' => 'done',
+                    'percent' => 100,
+                    'message' => 'Vorschlag-Scan wurde beendet, weil ein neuer Scan gestartet wurde.',
+                ]);
+
+                $this->setDetailStatus('Instagram-Analyse abgeschlossen; Vorschlag-Scan wurde durch einen neuen Scan beendet.', 'partial');
+
+                return;
+            } catch (\Throwable $exception) {
+                $privateSuggestionScanFailed = true;
+                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlag-Scan fehlgeschlagen: '.$exception->getMessage();
+                ($trackedPerson->fresh() ?: $trackedPerson)->forceFill([
+                    'last_instagram_status_level' => 'partial',
+                    'last_instagram_status_message' => 'Instagram-Analyse abgeschlossen; Vorschlag-Scan fehlgeschlagen: '.$exception->getMessage(),
+                ])->save();
+            }
+        }
 
         if (! $fullScan && MonitorTrackedPersonInstagram::shouldRunFullScanAfterSnapshot($snapshot)) {
             $queuedFullScan = MonitorTrackedPersonInstagram::dispatchFullScanIfNotQueued($trackedPerson->id, true);
@@ -431,9 +455,15 @@ class TrackedPersonDetail extends Component
         }
 
         $this->fillFormFromModel($trackedPerson->fresh());
+        $statusLevel = $snapshot->status_level === 'success' ? 'success' : ($snapshot->status_level === 'partial' ? 'partial' : 'error');
+
+        if ($privateSuggestionScanFailed || ($privateSuggestionScan && $privateSuggestionScan->status_level !== 'success')) {
+            $statusLevel = 'partial';
+        }
+
         $this->setDetailStatus(
-            ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' abgeschlossen: '.$snapshot->status_message.($queuedFullScan ? ' Eine Vollanalyse wurde als Hintergrund-Job eingereiht.' : ''),
-            $snapshot->status_level === 'success' ? 'success' : ($snapshot->status_level === 'partial' ? 'partial' : 'error'),
+            ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' abgeschlossen: '.$snapshot->status_message.$privateSuggestionScanMessage.($queuedFullScan ? ' Eine Vollanalyse wurde als Hintergrund-Job eingereiht.' : ''),
+            $statusLevel,
         );
         $this->dispatch('tracked-person-refresh');
     }
@@ -1023,6 +1053,13 @@ class TrackedPersonDetail extends Component
     private function trackedPersonInstagramProfileIsPrivate(TrackedPerson $trackedPerson): bool
     {
         return $this->trackedPersonInstagramProfileVisibility($trackedPerson) === 'private';
+    }
+
+    private function instagramSnapshotIsPrivate(?TrackedPersonInstagramSnapshot $snapshot): bool
+    {
+        return $snapshot?->profile_visibility === 'private'
+            || data_get($snapshot?->raw_payload, 'extractedProfile.profileVisibility') === 'private'
+            || data_get($snapshot?->raw_payload, 'extractedProfile.isPrivate') === true;
     }
 
     private function trackedPersonInstagramProfileVisibility(TrackedPerson $trackedPerson): string

@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\Mail;
 use App\Models\TrackedPerson;
+use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -122,6 +123,7 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             ])->save();
 
             $snapshot = $trackedPerson->analyzeInstagram(null, $fullScan);
+            $this->runPrivateProfileSuggestionScanIfNeeded($trackedPerson, $snapshot);
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
             Log::info('Instagram-Monitoring-Scan wurde beendet, weil ein neuer Scan fuer dieselbe Person gestartet wurde.', [
                 'tracked_person_id' => $trackedPerson->id,
@@ -228,6 +230,58 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             'instagram_username' => $trackedPerson->instagram_username,
             'snapshot_id' => $snapshot->id,
         ]);
+    }
+
+    private function runPrivateProfileSuggestionScanIfNeeded(TrackedPerson $trackedPerson, $snapshot): void
+    {
+        if (! $this->isFullScan() || $this->snapshotProfileVisibility($snapshot) !== 'private') {
+            return;
+        }
+
+        try {
+            app(TrackedPersonInstagramSuggestionScanService::class)->scan($trackedPerson->fresh() ?: $trackedPerson);
+
+            Log::info('Privates Instagram-Profil in Vollanalyse erkannt; Vorschlag-Verbindungsscan wurde im Hintergrund ausgefuehrt.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'instagram_username' => $trackedPerson->instagram_username,
+                'snapshot_id' => $snapshot?->id,
+            ]);
+        } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            Log::info('Vorschlag-Verbindungsscan nach privater Vollanalyse wurde beendet, weil ein neuer Scan gestartet wurde.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'instagram_username' => $trackedPerson->instagram_username,
+                'snapshot_id' => $snapshot?->id,
+            ]);
+        } catch (\Throwable $exception) {
+            Log::warning('Vorschlag-Verbindungsscan nach privater Vollanalyse fehlgeschlagen.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'instagram_username' => $trackedPerson->instagram_username,
+                'snapshot_id' => $snapshot?->id,
+                'error' => $exception->getMessage(),
+            ]);
+
+            ($trackedPerson->fresh() ?: $trackedPerson)->forceFill([
+                'last_instagram_status_level' => 'partial',
+                'last_instagram_status_message' => 'Instagram-Vollanalyse abgeschlossen; Vorschlag-Scan fuer privates Profil fehlgeschlagen: '.$exception->getMessage(),
+            ])->save();
+        }
+    }
+
+    private function snapshotProfileVisibility($snapshot): string
+    {
+        if (in_array($snapshot?->profile_visibility, ['public', 'private'], true)) {
+            return $snapshot->profile_visibility;
+        }
+
+        $visibility = data_get($snapshot?->raw_payload, 'extractedProfile.profileVisibility');
+
+        if (in_array($visibility, ['public', 'private'], true)) {
+            return $visibility;
+        }
+
+        return data_get($snapshot?->raw_payload, 'extractedProfile.isPrivate') === true
+            ? 'private'
+            : 'unknown';
     }
 
     private function resolveNotificationDeliveryType(TrackedPerson $trackedPerson): string

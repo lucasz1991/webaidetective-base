@@ -100,9 +100,13 @@ class TrackedPersonInstagramSuggestionScanService
                 ]);
             },
             $this->withActiveScanControl([
-                'suggestionScanMaxItems' => 60,
-                'suggestionCandidateMaxItems' => 40,
-                'suggestionPublicListSearchMaxScrollRounds' => 60,
+                'suggestionScanMaxItems' => 140,
+                'suggestionCandidateMaxItems' => 80,
+                'suggestionPublicListSearchMaxScrollRounds' => 90,
+                'suggestionInlineMaxRounds' => 36,
+                'suggestionDialogMaxRounds' => 48,
+                'suggestionCandidateInlineMaxRounds' => 24,
+                'suggestionCandidateDialogMaxRounds' => 36,
                 'suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson),
             ]),
         );
@@ -395,6 +399,14 @@ class TrackedPersonInstagramSuggestionScanService
                 'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? null)
                     ?: 'https://www.instagram.com/'.$username.'/',
                 'profileImageUrl' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
+                'profileVisibility' => in_array(($connection['profileVisibility'] ?? null), ['public', 'private', 'unknown'], true)
+                    ? $connection['profileVisibility']
+                    : null,
+                'isPrivate' => is_bool($connection['isPrivate'] ?? null) ? $connection['isPrivate'] : null,
+                'postsCount' => is_numeric($connection['postsCount'] ?? null) ? (int) $connection['postsCount'] : null,
+                'followersCount' => is_numeric($connection['followersCount'] ?? null) ? (int) $connection['followersCount'] : null,
+                'followingCount' => is_numeric($connection['followingCount'] ?? null) ? (int) $connection['followingCount'] : null,
+                'hoverCard' => is_array($connection['hoverCard'] ?? null) ? $connection['hoverCard'] : null,
                 'sourceSuggestionUsername' => $sourceUsername,
                 'sourcePublicUsername' => $sourceUsername,
                 'targetFoundAsSuggestion' => (bool) ($connection['targetFoundAsSuggestion'] ?? true),

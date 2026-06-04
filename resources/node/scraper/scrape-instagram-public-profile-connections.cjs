@@ -53,6 +53,13 @@ function normalizeIntegerInRange(value, fallback, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, normalizedValue));
 }
 
+function hasFiniteNumericValue(value) {
+  return value !== null
+    && value !== undefined
+    && value !== ''
+    && Number.isFinite(Number(value));
+}
+
 function normalizeItem(item) {
   if (!item || typeof item !== 'object') {
     return null;
@@ -82,6 +89,12 @@ function normalizeItem(item) {
     displayName: item.displayName ? String(item.displayName).trim() : null,
     profileUrl: item.profileUrl ? String(item.profileUrl) : `https://www.instagram.com/${username}/`,
     profileImageUrl: item.profileImageUrl || item.profile_image_url ? String(item.profileImageUrl || item.profile_image_url).trim() : null,
+    profileVisibility: ['public', 'private', 'unknown'].includes(item.profileVisibility) ? item.profileVisibility : null,
+    isPrivate: typeof item.isPrivate === 'boolean' ? item.isPrivate : null,
+    postsCount: hasFiniteNumericValue(item.postsCount) ? Number(item.postsCount) : null,
+    followersCount: hasFiniteNumericValue(item.followersCount) ? Number(item.followersCount) : null,
+    followingCount: hasFiniteNumericValue(item.followingCount) ? Number(item.followingCount) : null,
+    hoverCard: item.hoverCard && typeof item.hoverCard === 'object' ? item.hoverCard : null,
     sourceLists: Array.isArray(item.sourceLists) ? item.sourceLists.filter(Boolean) : [],
   };
 }

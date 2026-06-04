@@ -97,6 +97,14 @@ class InstagramProfileDataExtractor
                 'profileImageUrl' => filled($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null)
                     ? (string) ($item['profileImageUrl'] ?? $item['profile_image_url'])
                     : null,
+                'profileVisibility' => in_array(($item['profileVisibility'] ?? null), ['public', 'private', 'unknown'], true)
+                    ? $item['profileVisibility']
+                    : null,
+                'isPrivate' => is_bool($item['isPrivate'] ?? null) ? $item['isPrivate'] : null,
+                'postsCount' => is_numeric($item['postsCount'] ?? null) ? (int) $item['postsCount'] : null,
+                'followersCount' => is_numeric($item['followersCount'] ?? null) ? (int) $item['followersCount'] : null,
+                'followingCount' => is_numeric($item['followingCount'] ?? null) ? (int) $item['followingCount'] : null,
+                'hoverCard' => is_array($item['hoverCard'] ?? null) ? $item['hoverCard'] : null,
             ])
             ->unique('username')
             ->values()

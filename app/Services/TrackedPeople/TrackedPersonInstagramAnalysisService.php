@@ -664,7 +664,7 @@ class TrackedPersonInstagramAnalysisService
             $lastPayload = $payload;
             $lastExtracted = $extracted;
 
-            if ($extracted['visible_counts_complete'] ?? false) {
+            if (($extracted['visible_counts_complete'] ?? false) || $this->extractedProfileVisibility($extracted) === 'private') {
                 break;
             }
 
@@ -713,6 +713,27 @@ class TrackedPersonInstagramAnalysisService
             ],
         ];
         $phaseWarnings = [];
+
+        if ($this->extractedProfileVisibility($extracted) === 'private') {
+            $this->reportProgress($progress, [
+                'phase' => 'profile',
+                'percent' => 95,
+                'message' => 'Privates Profil erkannt; Follower- und Gefolgt-Listen werden uebersprungen.',
+            ]);
+
+            $phaseWarnings[] = 'Privates Profil erkannt; Follower- und Gefolgt-Listen wurden uebersprungen. Fuer die Netzwerkerweiterung wird der Vorschlag-Scan genutzt.';
+            $payload['warnings'] = array_values(array_unique(array_filter(array_merge(
+                $payload['warnings'] ?? [],
+                $phaseWarnings,
+            ))));
+            $payload['scrapePhases'] = $phaseResults;
+            $attemptInfo['scan_mode'] = 'full';
+            $attemptInfo['phases'] = $phaseResults;
+            $attemptInfo['private_profile_detected'] = true;
+            $attemptInfo['relationship_phases_skipped'] = 'private_profile';
+
+            return [$payload, $extracted, $attemptInfo];
+        }
 
         foreach ([
             'followers' => [
@@ -863,6 +884,10 @@ class TrackedPersonInstagramAnalysisService
 
         if ((bool) ($payload['gracefullyStopped'] ?? false) || (bool) ($attemptInfo['gracefully_stopped'] ?? false)) {
             return 'Instagram-Scan wurde beendet; bisher ermittelte Daten wurden gespeichert.';
+        }
+
+        if (($attemptInfo['private_profile_detected'] ?? false) === true) {
+            return 'Privates Instagram-Profil erkannt; Follower- und Gefolgt-Listen wurden uebersprungen.';
         }
 
         if (($attemptInfo['scan_mode'] ?? null) === 'mini') {
@@ -1462,6 +1487,14 @@ class TrackedPersonInstagramAnalysisService
                     'profileImageUrl' => filled($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null)
                         ? (string) ($item['profileImageUrl'] ?? $item['profile_image_url'])
                         : null,
+                    'profileVisibility' => in_array(($item['profileVisibility'] ?? null), ['public', 'private', 'unknown'], true)
+                        ? $item['profileVisibility']
+                        : null,
+                    'isPrivate' => is_bool($item['isPrivate'] ?? null) ? $item['isPrivate'] : null,
+                    'postsCount' => is_numeric($item['postsCount'] ?? null) ? (int) $item['postsCount'] : null,
+                    'followersCount' => is_numeric($item['followersCount'] ?? null) ? (int) $item['followersCount'] : null,
+                    'followingCount' => is_numeric($item['followingCount'] ?? null) ? (int) $item['followingCount'] : null,
+                    'hoverCard' => is_array($item['hoverCard'] ?? null) ? $item['hoverCard'] : null,
                 ];
 
                 foreach (['firstSeenAt', 'lastSeenAt', 'removedAt'] as $timestampKey) {

@@ -106,18 +106,18 @@
                 <span wire:loading.remove wire:target="analyzeInstagramMini">Mini-Scan</span>
                 <span wire:loading wire:target="analyzeInstagramMini">Mini-Scan laeuft...</span>
             </button>
+            <button
+                type="button"
+                wire:click="analyzeInstagram"
+                wire:loading.attr="disabled"
+                wire:target="analyzeInstagram"
+                @disabled(! $trackedPerson->instagram_username)
+                class="inline-flex justify-center rounded-lg bg-pink-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pink-700 disabled:cursor-wait disabled:opacity-60"
+            >
+                <span wire:loading.remove wire:target="analyzeInstagram">Vollanalyse</span>
+                <span wire:loading wire:target="analyzeInstagram">Vollanalyse laeuft...</span>
+            </button>
             @if($profileIsPublic)
-                <button
-                    type="button"
-                    wire:click="analyzeInstagram"
-                    wire:loading.attr="disabled"
-                    wire:target="analyzeInstagram"
-                    @disabled(! $trackedPerson->instagram_username)
-                    class="inline-flex justify-center rounded-lg bg-pink-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pink-700 disabled:cursor-wait disabled:opacity-60"
-                >
-                    <span wire:loading.remove wire:target="analyzeInstagram">Vollanalyse</span>
-                    <span wire:loading wire:target="analyzeInstagram">Vollanalyse laeuft...</span>
-                </button>
                 <button
                     type="button"
                     wire:click="scanInstagramFollowersList"

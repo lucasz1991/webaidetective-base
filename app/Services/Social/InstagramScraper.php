@@ -576,6 +576,14 @@ class InstagramScraper
                 'profileImageUrl' => is_scalar($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null)
                     ? trim((string) ($item['profileImageUrl'] ?? $item['profile_image_url']))
                     : null,
+                'profileVisibility' => in_array(($item['profileVisibility'] ?? null), ['public', 'private', 'unknown'], true)
+                    ? $item['profileVisibility']
+                    : null,
+                'isPrivate' => is_bool($item['isPrivate'] ?? null) ? $item['isPrivate'] : null,
+                'postsCount' => is_numeric($item['postsCount'] ?? null) ? max(0, (int) $item['postsCount']) : null,
+                'followersCount' => is_numeric($item['followersCount'] ?? null) ? max(0, (int) $item['followersCount']) : null,
+                'followingCount' => is_numeric($item['followingCount'] ?? null) ? max(0, (int) $item['followingCount']) : null,
+                'hoverCard' => is_array($item['hoverCard'] ?? null) ? $item['hoverCard'] : null,
                 'sourceSuggestionUsername' => $this->normalizeInstagramUsername((string) ($item['sourceSuggestionUsername'] ?? $item['sourcePublicUsername'] ?? '')),
                 'sourcePublicUsername' => $this->normalizeInstagramUsername((string) ($item['sourcePublicUsername'] ?? $item['sourceSuggestionUsername'] ?? '')),
                 'sourceLists' => is_array($item['sourceLists'] ?? null) ? array_values(array_filter($item['sourceLists'], 'is_scalar')) : [],
@@ -612,6 +620,14 @@ class InstagramScraper
             'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? null)
                 ?: 'https://www.instagram.com/'.$username.'/',
             'profileImageUrl' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
+            'profileVisibility' => in_array(($connection['profileVisibility'] ?? null), ['public', 'private', 'unknown'], true)
+                ? $connection['profileVisibility']
+                : null,
+            'isPrivate' => is_bool($connection['isPrivate'] ?? null) ? $connection['isPrivate'] : null,
+            'postsCount' => is_numeric($connection['postsCount'] ?? null) ? max(0, (int) $connection['postsCount']) : null,
+            'followersCount' => is_numeric($connection['followersCount'] ?? null) ? max(0, (int) $connection['followersCount']) : null,
+            'followingCount' => is_numeric($connection['followingCount'] ?? null) ? max(0, (int) $connection['followingCount']) : null,
+            'hoverCard' => is_array($connection['hoverCard'] ?? null) ? $connection['hoverCard'] : null,
             'sourceLists' => is_array($connection['sourceLists'] ?? null)
                 ? array_values(array_filter($connection['sourceLists'], 'is_scalar'))
                 : [],

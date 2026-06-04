@@ -723,12 +723,20 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
     relationshipSearchTargetMaxItems: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxItems, merged.relationshipSearchTargetMaxItems),
     relationshipSearchTargetMaxScrollRounds: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxScrollRounds, merged.relationshipSearchTargetMaxScrollRounds),
     relationshipSearchInputMaxAttempts: Math.floor(normalizeNumberAtLeast(input?.relationshipSearchInputMaxAttempts, merged.relationshipSearchInputMaxAttempts || 3, 1)),
-    suggestionScanMaxItems: normalizeOptionalPositiveInteger(input?.suggestionScanMaxItems, merged.suggestionScanMaxItems || 60) || 60,
-    suggestionCandidateMaxItems: normalizeOptionalPositiveInteger(input?.suggestionCandidateMaxItems, merged.suggestionCandidateMaxItems || 40) || 40,
+    suggestionScanMaxItems: normalizeOptionalPositiveInteger(input?.suggestionScanMaxItems, merged.suggestionScanMaxItems || 140) || 140,
+    suggestionCandidateMaxItems: normalizeOptionalPositiveInteger(input?.suggestionCandidateMaxItems, merged.suggestionCandidateMaxItems || 80) || 80,
     suggestionPublicListSearchMaxScrollRounds: normalizeOptionalPositiveInteger(
       input?.suggestionPublicListSearchMaxScrollRounds,
-      merged.suggestionPublicListSearchMaxScrollRounds || 60,
-    ) || 60,
+      merged.suggestionPublicListSearchMaxScrollRounds || 90,
+    ) || 90,
+    suggestionInlineMaxRounds: normalizeOptionalPositiveInteger(input?.suggestionInlineMaxRounds, merged.suggestionInlineMaxRounds || 36) || 36,
+    suggestionDialogMaxRounds: normalizeOptionalPositiveInteger(input?.suggestionDialogMaxRounds, merged.suggestionDialogMaxRounds || 48) || 48,
+    suggestionCandidateInlineMaxRounds: normalizeOptionalPositiveInteger(input?.suggestionCandidateInlineMaxRounds, merged.suggestionCandidateInlineMaxRounds || 24) || 24,
+    suggestionCandidateDialogMaxRounds: normalizeOptionalPositiveInteger(input?.suggestionCandidateDialogMaxRounds, merged.suggestionCandidateDialogMaxRounds || 36) || 36,
+    profileHoverCardsEnabled: input?.profileHoverCardsEnabled !== false
+      && input?.profile_hover_cards_enabled !== false
+      && merged.profileHoverCardsEnabled !== false,
+    profileHoverCardWaitMs: normalizeNumberAtLeast(input?.profileHoverCardWaitMs || input?.profile_hover_card_wait_ms, merged.profileHoverCardWaitMs || 850, 250),
     suggestionDismissChecked: input?.suggestionDismissChecked === true || input?.suggestion_dismiss_checked === true,
     suggestionCandidateHistory: normalizeSuggestionCandidateHistory(input?.suggestionCandidateHistory || input?.suggestion_candidate_history || merged.suggestionCandidateHistory),
     scriptWatchdogEnabled: input?.scriptWatchdogEnabled !== false && input?.script_watchdog_enabled !== false,
@@ -845,9 +853,15 @@ function loadRuntimeConfig(configPath) {
     relationshipSearchTargetMaxItems: 0,
     relationshipSearchTargetMaxScrollRounds: 60,
     relationshipSearchInputMaxAttempts: 3,
-    suggestionScanMaxItems: 60,
-    suggestionCandidateMaxItems: 40,
-    suggestionPublicListSearchMaxScrollRounds: 60,
+    suggestionScanMaxItems: 140,
+    suggestionCandidateMaxItems: 80,
+    suggestionPublicListSearchMaxScrollRounds: 90,
+    suggestionInlineMaxRounds: 36,
+    suggestionDialogMaxRounds: 48,
+    suggestionCandidateInlineMaxRounds: 24,
+    suggestionCandidateDialogMaxRounds: 36,
+    profileHoverCardsEnabled: true,
+    profileHoverCardWaitMs: 850,
     suggestionDismissChecked: false,
     suggestionCandidateHistory: {},
     scriptWatchdogEnabled: true,
@@ -1578,6 +1592,339 @@ async function closeInstagramDialog(page) {
   await sleep(400);
 }
 
+function hasFiniteNumericValue(value) {
+  return value !== null
+    && value !== undefined
+    && value !== ''
+    && Number.isFinite(Number(value));
+}
+
+function mergeProfileHoverCardData(item = {}, hoverCard = null) {
+  if (!hoverCard || typeof hoverCard !== 'object') {
+    return item;
+  }
+
+  return {
+    ...item,
+    displayName: item.displayName || hoverCard.displayName || null,
+    profileImageUrl: item.profileImageUrl || hoverCard.profileImageUrl || null,
+    profileVisibility: hoverCard.profileVisibility || item.profileVisibility || null,
+    isPrivate: typeof hoverCard.isPrivate === 'boolean' ? hoverCard.isPrivate : item.isPrivate,
+    postsCount: hasFiniteNumericValue(hoverCard.postsCount) ? Number(hoverCard.postsCount) : item.postsCount,
+    followersCount: hasFiniteNumericValue(hoverCard.followersCount) ? Number(hoverCard.followersCount) : item.followersCount,
+    followingCount: hasFiniteNumericValue(hoverCard.followingCount) ? Number(hoverCard.followingCount) : item.followingCount,
+    hoverCard,
+  };
+}
+
+async function collectVisibleProfileHoverCard(page, username, runtimeConfig = {}) {
+  const normalizedUsername = normalizeInstagramUsername(username);
+
+  if (!normalizedUsername || runtimeConfig.profileHoverCardsEnabled === false || runtimeConfig.profile_hover_cards_enabled === false) {
+    return null;
+  }
+
+  const hoverTarget = await page.evaluate((targetUsername) => {
+    const normalizeUsername = (value = '') => String(value || '')
+      .replace(/^@/, '')
+      .replace(/[^a-z0-9._]/gi, '')
+      .toLowerCase();
+    const isVisible = (element) => {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number(style.opacity || 1) > 0.05;
+    };
+    const anchors = Array.from(document.querySelectorAll('a[href]'))
+      .filter(isVisible)
+      .map((anchor) => {
+        let username = '';
+
+        try {
+          const parts = new URL(anchor.getAttribute('href'), window.location.origin).pathname
+            .split('/')
+            .filter(Boolean);
+
+          if (parts.length === 1) {
+            username = normalizeUsername(parts[0]);
+          }
+        } catch (error) {
+          username = '';
+        }
+
+        if (username !== targetUsername) {
+          return null;
+        }
+
+        const rect = anchor.getBoundingClientRect();
+        const text = String(anchor.innerText || anchor.textContent || '');
+        const row = anchor.closest('div[role="button"], li, article, div') || anchor;
+        const rowRect = row.getBoundingClientRect();
+
+        return {
+          element: anchor,
+          rect,
+          rowRect,
+          score: (text.toLowerCase().includes(targetUsername) ? 100 : 0)
+            + (Boolean(anchor.closest('div[role="dialog"]')) ? 20 : 0)
+            + (row.querySelector('img') ? 10 : 0)
+            - Math.max(0, Math.floor(rowRect.height / 150)),
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.score - left.score);
+    const target = anchors[0]?.element || null;
+
+    if (!target) {
+      return null;
+    }
+
+    target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    const rect = target.getBoundingClientRect();
+
+    return {
+      x: Math.max(1, Math.min(window.innerWidth - 1, rect.left + Math.min(rect.width * 0.45, 80))),
+      y: Math.max(1, Math.min(window.innerHeight - 1, rect.top + (rect.height / 2))),
+    };
+  }, normalizedUsername).catch(() => null);
+
+  if (!hoverTarget) {
+    return null;
+  }
+
+  await page.mouse.move(hoverTarget.x, hoverTarget.y).catch(() => {});
+  await sleep(Math.max(450, Number(runtimeConfig.profileHoverCardWaitMs || runtimeConfig.profile_hover_card_wait_ms || 850)));
+
+  const hoverCard = await page.evaluate((targetUsername) => {
+    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const normalizeUsername = (value = '') => String(value || '')
+      .replace(/^@/, '')
+      .replace(/[^a-z0-9._]/gi, '')
+      .toLowerCase();
+    const normalizeCountValue = (rawValue = '') => {
+      const value = normalizeElementText(rawValue).toLowerCase();
+
+      if (!value) {
+        return null;
+      }
+
+      let multiplier = 1;
+
+      if (/\bmio\b|\bm\b/.test(value)) {
+        multiplier = 1000000;
+      } else if (/\bk\b|\btsd\b/.test(value)) {
+        multiplier = 1000;
+      }
+
+      const numericPart = value.replace(/[^\d.,]/g, '');
+
+      if (!numericPart) {
+        return null;
+      }
+
+      if (multiplier === 1) {
+        const digits = numericPart.replace(/[^\d]/g, '');
+
+        return digits ? Number.parseInt(digits, 10) : null;
+      }
+
+      const decimalValue = Number.parseFloat(numericPart.replace(',', '.'));
+
+      return Number.isFinite(decimalValue) ? Math.round(decimalValue * multiplier) : null;
+    };
+    const isVisible = (element) => {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width >= 180
+        && rect.height >= 80
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number(style.opacity || 1) > 0.05;
+    };
+    const metricForLabel = (label = '') => {
+      if (/beitr(?:a|ä|Ã¤)ge?|posts?/i.test(label)) {
+        return 'posts';
+      }
+
+      if (/followers?/i.test(label)) {
+        return 'followers';
+      }
+
+      if (/gefolgt|following/i.test(label)) {
+        return 'following';
+      }
+
+      return null;
+    };
+    const parseCountsFromText = (text) => {
+      const counts = {
+        posts: null,
+        followers: null,
+        following: null,
+      };
+      const lines = String(text || '')
+        .split('\n')
+        .map((line) => normalizeElementText(line))
+        .filter(Boolean);
+      const inlinePatterns = {
+        posts: /([\d., ]+(?:\s*(?:k|m|mio|tsd))?)\s*(?:beitr(?:a|ä|Ã¤)ge?|posts?)/iu,
+        followers: /([\d., ]+(?:\s*(?:k|m|mio|tsd))?)\s*(?:followers?)/iu,
+        following: /([\d., ]+(?:\s*(?:k|m|mio|tsd))?)\s*(?:gefolgt|following)/iu,
+      };
+      const normalizedText = normalizeElementText(text);
+
+      for (const [metric, pattern] of Object.entries(inlinePatterns)) {
+        const match = normalizedText.match(pattern);
+
+        if (match) {
+          counts[metric] = normalizeCountValue(match[1] || '');
+        }
+      }
+
+      for (let index = 0; index < lines.length; index += 1) {
+        const metric = metricForLabel(lines[index]);
+
+        if (!metric || counts[metric] !== null) {
+          continue;
+        }
+
+        const before = index > 0 ? normalizeCountValue(lines[index - 1]) : null;
+        const after = index + 1 < lines.length ? normalizeCountValue(lines[index + 1]) : null;
+        counts[metric] = before ?? after;
+      }
+
+      return counts;
+    };
+    const privatePattern = /(?:dieses profil ist privat|dies ist ein privates konto|this account is private|private account|privates konto|privates profil)/i;
+    const cards = Array.from(document.querySelectorAll('div, article, section'))
+      .filter(isVisible)
+      .map((element) => {
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+        const rect = element.getBoundingClientRect();
+        const usernameSeen = text.toLowerCase().includes(targetUsername);
+        const privateSeen = privatePattern.test(text);
+        const countLabelSeen = /beitr(?:a|ä|Ã¤)ge?|posts?|followers?|gefolgt|following/i.test(text);
+        const linkCount = Array.from(element.querySelectorAll('a[href]')).filter((anchor) => {
+          try {
+            return new URL(anchor.getAttribute('href'), window.location.origin).pathname.split('/').filter(Boolean).length === 1;
+          } catch (error) {
+            return false;
+          }
+        }).length;
+        const zIndex = Number.parseInt(window.getComputedStyle(element).zIndex || '0', 10) || 0;
+        const score = (usernameSeen ? 100 : 0)
+          + (privateSeen ? 60 : 0)
+          + (countLabelSeen ? 40 : 0)
+          + (rect.width <= 520 ? 20 : 0)
+          + (rect.height <= 520 ? 20 : 0)
+          + Math.min(30, zIndex)
+          - Math.max(0, linkCount - 2) * 20
+          - Math.max(0, Math.floor(text.length / 600));
+
+        return {
+          element,
+          text,
+          rect,
+          usernameSeen,
+          privateSeen,
+          countLabelSeen,
+          score,
+        };
+      })
+      .filter((entry) => entry.usernameSeen && (entry.privateSeen || entry.countLabelSeen) && entry.score > 90)
+      .sort((left, right) => right.score - left.score);
+    const card = cards[0] || null;
+
+    if (!card) {
+      return null;
+    }
+
+    const counts = parseCountsFromText(card.text);
+    const image = Array.from(card.element.querySelectorAll('img'))
+      .find((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        const src = candidate.currentSrc || candidate.src || candidate.getAttribute('src') || '';
+
+        return src !== ''
+          && rect.width > 24
+          && rect.height > 24
+          && !/emoji|sprite|blank|transparent/i.test(src);
+      }) || null;
+    const privateSeen = privatePattern.test(card.text);
+    const hasAnyCount = counts.posts !== null || counts.followers !== null || counts.following !== null;
+    const textLines = card.text
+      .split('\n')
+      .map((line) => normalizeElementText(line))
+      .filter(Boolean);
+    const displayName = textLines.find((line) => {
+      const lower = line.toLowerCase();
+
+      return lower !== targetUsername
+        && normalizeUsername(line) !== targetUsername
+        && !metricForLabel(line)
+        && normalizeCountValue(line) === null
+        && !privatePattern.test(line)
+        && !/^(folgen|follow|following|nachricht|message)$/i.test(line)
+        && line.length <= 120;
+    }) || null;
+
+    return {
+      username: normalizeUsername(targetUsername),
+      displayName,
+      profileImageUrl: image ? (image.currentSrc || image.src || image.getAttribute('src') || null) : null,
+      profileVisibility: privateSeen ? 'private' : (hasAnyCount ? 'public' : 'unknown'),
+      isPrivate: privateSeen ? true : (hasAnyCount ? false : null),
+      postsCount: counts.posts,
+      followersCount: counts.followers,
+      followingCount: counts.following,
+      textPreview: card.text.slice(0, 800),
+      scannedAt: new Date().toISOString(),
+    };
+  }, normalizedUsername).catch(() => null);
+
+  await page.mouse.move(Math.max(1, hoverTarget.x - 160), Math.max(1, hoverTarget.y - 160)).catch(() => {});
+  await sleep(120);
+
+  return hoverCard;
+}
+
+async function enrichProfileEntriesWithHoverCards(page, entries = [], hoveredUsernames = new Set(), runtimeConfig = {}) {
+  if (runtimeConfig.profileHoverCardsEnabled === false || runtimeConfig.profile_hover_cards_enabled === false) {
+    return entries;
+  }
+
+  const enrichedEntries = [];
+
+  for (const entry of entries) {
+    const entryUsername = normalizeInstagramUsername(entry?.username || '');
+
+    if (!entryUsername || hoveredUsernames.has(entryUsername)) {
+      enrichedEntries.push(entry);
+      continue;
+    }
+
+    markScriptActivity(`hover-card:${entryUsername}`);
+    const hoverCard = await collectVisibleProfileHoverCard(page, entryUsername, runtimeConfig);
+    hoveredUsernames.add(entryUsername);
+    enrichedEntries.push(mergeProfileHoverCardData(entry, hoverCard));
+  }
+
+  return enrichedEntries;
+}
+
 async function collectFollowerEntriesFromDialog(page) {
   return page.evaluate(() => {
     const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
@@ -2133,6 +2480,12 @@ function addRelationshipEntriesToMap(entries, usersByUsername, targetUsername) {
       displayName: entry.displayName || existing?.displayName || null,
       profileUrl: entry.profileUrl || existing?.profileUrl || `https://www.instagram.com/${relatedUsername}/`,
       profileImageUrl: entry.profileImageUrl || entry.profile_image_url || existing?.profileImageUrl || null,
+      profileVisibility: entry.profileVisibility || existing?.profileVisibility || null,
+      isPrivate: typeof entry.isPrivate === 'boolean' ? entry.isPrivate : existing?.isPrivate,
+      postsCount: hasFiniteNumericValue(entry.postsCount) ? Number(entry.postsCount) : existing?.postsCount,
+      followersCount: hasFiniteNumericValue(entry.followersCount) ? Number(entry.followersCount) : existing?.followersCount,
+      followingCount: hasFiniteNumericValue(entry.followingCount) ? Number(entry.followingCount) : existing?.followingCount,
+      hoverCard: entry.hoverCard || existing?.hoverCard || null,
     };
 
     usersByUsername.set(relatedUsername, nextEntry);
@@ -2247,6 +2600,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
   const searchWaitMs = Number.isFinite(configuredSearchWaitMs)
     ? Math.max(500, configuredSearchWaitMs)
     : 900;
+  const hoverCardUsernames = options.hoverCardUsernames instanceof Set ? options.hoverCardUsernames : new Set();
   const searchInputMaxAttempts = Math.floor(normalizeNumberAtLeast(
     runtimeConfig.relationshipSearchInputMaxAttempts,
     3,
@@ -2453,7 +2807,8 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
 
     while (!targetReached() && searchRounds < maxScrollRounds) {
       const collection = await collectFollowerEntriesFromDialog(page);
-      const entries = Array.isArray(collection) ? collection : (collection.entries || []);
+      const rawEntries = Array.isArray(collection) ? collection : (collection.entries || []);
+      const entries = await enrichProfileEntriesWithHoverCards(page, rawEntries, hoverCardUsernames, runtimeConfig);
       const suggestionsVisible = !Array.isArray(collection) && Boolean(collection.suggestionsVisible);
       const rateLimited = !Array.isArray(collection) && Boolean(collection.rateLimited);
 
@@ -2850,6 +3205,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
 
   result.attempted = true;
   const usersByUsername = new Map();
+  const hoverCardUsernames = new Set();
   const targetUsername = normalizeInstagramUsername(username);
   let lastScrollState = null;
   let totalScrollRounds = 0;
@@ -2917,7 +3273,8 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
 
     while (totalScrollRounds < maxScrollRounds && !targetReached()) {
       const collection = await collectFollowerEntriesFromDialog(page);
-      const entries = Array.isArray(collection) ? collection : (collection.entries || []);
+      const rawEntries = Array.isArray(collection) ? collection : (collection.entries || []);
+      const entries = await enrichProfileEntriesWithHoverCards(page, rawEntries, hoverCardUsernames, runtimeConfig);
       const suggestionsVisible = !Array.isArray(collection) && Boolean(collection.suggestionsVisible);
       const rateLimited = !Array.isArray(collection) && Boolean(collection.rateLimited);
 
@@ -3117,6 +3474,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
       {
         ...options,
         maxScrollRounds,
+        hoverCardUsernames,
       },
       usersByUsername,
     );
@@ -3248,6 +3606,11 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
     {
       dismissUsernames: alreadyScannedSuggestionUsernames,
       includeSeeAll: true,
+      forceSeeAll: true,
+      continueUntilEnd: true,
+      runtimeConfig,
+      maxInlineRounds: runtimeConfig.suggestionInlineMaxRounds || 36,
+      maxDialogRounds: runtimeConfig.suggestionDialogMaxRounds || 48,
     },
   );
   const targetSeeAllClicked = Boolean(targetSuggestions.seeAllClicked);
@@ -3440,7 +3803,12 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
 
       await sleep(1300);
       const candidateProfile = await collectProfileInfo(page, candidate.username);
-      const candidateIsPublic = !candidateProfile.isPrivate && !candidateProfile.requiresLogin;
+      const candidateHoverCard = candidate.hoverCard && typeof candidate.hoverCard === 'object'
+        ? candidate.hoverCard
+        : null;
+      const candidateIsPublic = candidateProfile.isPrivate === false
+        || (candidateProfile.isPrivate !== true && candidateHoverCard?.isPrivate === false)
+        || (!candidateProfile.isPrivate && !candidateProfile.requiresLogin);
       let targetFound = false;
       let checkedCandidate = null;
       let progressMessage = null;
@@ -3485,6 +3853,12 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
           ...candidate,
           checked: true,
           checkMode: 'public-lists',
+          profileVisibility: candidateHoverCard?.profileVisibility || candidate.profileVisibility || (candidateProfile.isPrivate === false ? 'public' : null),
+          isPrivate: typeof candidateHoverCard?.isPrivate === 'boolean' ? candidateHoverCard.isPrivate : candidateProfile.isPrivate,
+          postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount) ? Number(candidateHoverCard.postsCount) : candidate.postsCount,
+          followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount) ? Number(candidateHoverCard.followersCount) : candidate.followersCount,
+          followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount) ? Number(candidateHoverCard.followingCount) : candidate.followingCount,
+          hoverCard: candidateHoverCard,
           targetFoundAsSuggestion: false,
           targetFoundInPublicLists: targetFound,
           targetFoundInFollowers: Boolean(publicListSearch.targetFoundInFollowers),
@@ -3524,6 +3898,12 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
             displayName: candidate.displayName || null,
             profileUrl: candidate.profileUrl,
             profileImageUrl: candidate.profileImageUrl || null,
+            profileVisibility: candidateHoverCard?.profileVisibility || candidate.profileVisibility || 'public',
+            isPrivate: typeof candidateHoverCard?.isPrivate === 'boolean' ? candidateHoverCard.isPrivate : false,
+            postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount) ? Number(candidateHoverCard.postsCount) : candidate.postsCount,
+            followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount) ? Number(candidateHoverCard.followersCount) : candidate.followersCount,
+            followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount) ? Number(candidateHoverCard.followingCount) : candidate.followingCount,
+            hoverCard: candidateHoverCard,
             sourceSuggestionUsername: candidate.username,
             sourcePublicUsername: candidate.username,
             targetFoundAsSuggestion: false,
@@ -3552,6 +3932,11 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
           maxCandidateSuggestions,
           {
             includeSeeAll: true,
+            forceSeeAll: true,
+            continueUntilEnd: true,
+            runtimeConfig,
+            maxInlineRounds: runtimeConfig.suggestionCandidateInlineMaxRounds || 24,
+            maxDialogRounds: runtimeConfig.suggestionCandidateDialogMaxRounds || 36,
           },
         );
 
@@ -3571,6 +3956,12 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
           ...candidate,
           checked: true,
           checkMode: 'profile-suggestions',
+          profileVisibility: candidateHoverCard?.profileVisibility || candidate.profileVisibility || (candidateProfile.isPrivate === true ? 'private' : null),
+          isPrivate: typeof candidateHoverCard?.isPrivate === 'boolean' ? candidateHoverCard.isPrivate : candidateProfile.isPrivate,
+          postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount) ? Number(candidateHoverCard.postsCount) : candidate.postsCount,
+          followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount) ? Number(candidateHoverCard.followersCount) : candidate.followersCount,
+          followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount) ? Number(candidateHoverCard.followingCount) : candidate.followingCount,
+          hoverCard: candidateHoverCard,
           targetFoundAsSuggestion: targetFound,
           finalDismissedAfterSecondMiss: definitiveNoMatch && Number(candidate.previousNoMatchChecks || 0) >= 1,
           dismissedFromSuggestions: Boolean(candidate.dismissedBeforeCheck),
@@ -3596,6 +3987,12 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
             displayName: candidate.displayName || null,
             profileUrl: candidate.profileUrl,
             profileImageUrl: candidate.profileImageUrl || null,
+            profileVisibility: candidateHoverCard?.profileVisibility || candidate.profileVisibility || null,
+            isPrivate: typeof candidateHoverCard?.isPrivate === 'boolean' ? candidateHoverCard.isPrivate : candidateProfile.isPrivate,
+            postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount) ? Number(candidateHoverCard.postsCount) : candidate.postsCount,
+            followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount) ? Number(candidateHoverCard.followersCount) : candidate.followersCount,
+            followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount) ? Number(candidateHoverCard.followingCount) : candidate.followingCount,
+            hoverCard: candidateHoverCard,
             sourceSuggestionUsername: candidate.username,
             sourcePublicUsername: candidate.username,
             targetFoundAsSuggestion: true,
@@ -4103,7 +4500,89 @@ async function advanceProfileSuggestionsViewport(page) {
       .filter((entry) => entry.profileAnchorCount > 0 && (entry.horizontalOverflow || entry.verticalOverflow || entry.suggestionText))
       .sort((left, right) => right.score - left.score);
 
-    const horizontalTarget = scrollables.find((entry) => entry.horizontalOverflow)?.element || null;
+    const horizontalTargetEntry = scrollables.find((entry) => entry.horizontalOverflow) || null;
+    const horizontalTarget = horizontalTargetEntry?.element || null;
+    const horizontalRect = horizontalTarget ? horizontalTarget.getBoundingClientRect() : null;
+    const nextPattern = /(?:weiter|n(?:a|\u00e4)chste|next)/i;
+    const previousPattern = /(?:zur(?:u|\u00fc)ck|vorherige|previous|back)/i;
+    const dismissPattern = /(?:entfernen|remove|dismiss|schlie(?:s|ss)en|close)/i;
+    const isDisabledControl = (element) => {
+      const ariaDisabled = String(element.getAttribute?.('aria-disabled') || '').toLowerCase();
+      const disabled = Boolean(element.disabled);
+      const style = window.getComputedStyle(element);
+
+      return disabled
+        || ariaDisabled === 'true'
+        || Number(style.opacity || 1) < 0.2
+        || style.pointerEvents === 'none';
+    };
+    const nextControl = Array.from(root.querySelectorAll('button, [role="button"], [aria-label]'))
+      .filter(isVisible)
+      .filter((element) => !isDisabledControl(element))
+      .map((element) => {
+        const label = normalizeElementText([
+          element.getAttribute?.('aria-label') || '',
+          element.getAttribute?.('title') || '',
+          element.innerText || '',
+          element.textContent || '',
+        ].join(' '));
+        const rect = element.getBoundingClientRect();
+        const centerY = rect.top + (rect.height / 2);
+        const inHorizontalBand = horizontalRect
+          ? centerY >= horizontalRect.top - 24 && centerY <= horizontalRect.bottom + 24
+          : false;
+        const onRightSide = horizontalRect
+          ? rect.left >= horizontalRect.left + (horizontalRect.width * 0.55)
+            && rect.right <= horizontalRect.right + 120
+          : rect.left >= window.innerWidth * 0.55;
+        const nearHorizontalRightEdge = horizontalRect
+          ? rect.left >= horizontalRect.right - 110 && rect.right <= horizontalRect.right + 120
+          : false;
+
+        return {
+          element,
+          label,
+          rect,
+          inHorizontalBand,
+          onRightSide,
+          nearHorizontalRightEdge,
+        };
+      })
+      .find((entry) => {
+        if (
+          nextPattern.test(entry.label)
+          && entry.rect.width <= 96
+          && entry.rect.height <= 96
+          && !previousPattern.test(entry.label)
+          && !dismissPattern.test(entry.label)
+          && entry.rect.right > 0
+          && entry.rect.left < window.innerWidth
+        ) {
+          return true;
+        }
+
+        return horizontalRect
+          && entry.inHorizontalBand
+          && entry.onRightSide
+          && entry.nearHorizontalRightEdge
+          && entry.rect.width >= 28
+          && entry.rect.height >= 28
+          && entry.rect.width <= 72
+          && entry.rect.height <= 72
+          && entry.label === ''
+          && !previousPattern.test(entry.label);
+      }) || null;
+
+    if (nextControl) {
+      nextControl.element.click();
+
+      return {
+        advanced: true,
+        mode: 'next-control',
+        atEnd: false,
+        rightNavigationVisible: true,
+      };
+    }
 
     if (horizontalTarget) {
       const before = horizontalTarget.scrollLeft;
@@ -4116,37 +4595,9 @@ async function advanceProfileSuggestionsViewport(page) {
           advanced: true,
           mode: 'horizontal-scroll',
           atEnd: after + horizontalTarget.clientWidth >= horizontalTarget.scrollWidth - 8,
+          rightNavigationVisible: false,
         };
       }
-    }
-
-    const nextPattern = /(?:weiter|n(?:a|\u00e4)chste|next)/i;
-    const nextControl = Array.from(root.querySelectorAll('button, [role="button"], [aria-label]'))
-      .filter(isVisible)
-      .find((element) => {
-        const label = normalizeElementText([
-          element.getAttribute?.('aria-label') || '',
-          element.getAttribute?.('title') || '',
-          element.innerText || '',
-          element.textContent || '',
-        ].join(' '));
-        const rect = element.getBoundingClientRect();
-
-        return nextPattern.test(label)
-          && rect.width <= 96
-          && rect.height <= 96
-          && rect.right > 0
-          && rect.left < window.innerWidth;
-      }) || null;
-
-    if (nextControl) {
-      nextControl.click();
-
-      return {
-        advanced: true,
-        mode: 'next-control',
-        atEnd: false,
-      };
     }
 
     const verticalTarget = scrollables.find((entry) => entry.verticalOverflow)?.element || null;
@@ -4215,6 +4666,9 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
   const maxInlineRounds = Math.max(4, Number(options.maxInlineRounds || 18));
   const maxDialogRounds = Math.max(4, Number(options.maxDialogRounds || 24));
   const collectLimit = Math.max(limit + dismissUsernames.size + 12, limit * 2);
+  const continueUntilEnd = options.continueUntilEnd === true;
+  const hoverCardUsernames = options.hoverCardUsernames instanceof Set ? options.hoverCardUsernames : new Set();
+  const runtimeConfig = options.runtimeConfig || {};
   let available = false;
   let rateLimited = false;
   let rateLimitText = null;
@@ -4237,6 +4691,13 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
         newItems: 0,
       };
     }
+
+    batch.items = await enrichProfileEntriesWithHoverCards(
+      page,
+      batch.items || [],
+      hoverCardUsernames,
+      runtimeConfig,
+    );
 
     let newItems = 0;
 
@@ -4278,7 +4739,7 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
     mergeSuggestionItemsByUsername(itemsByUsername, batch.items || [], dismissUsernames, limit);
 
     return {
-      stop: itemsByUsername.size >= limit,
+      stop: !continueUntilEnd && itemsByUsername.size >= limit,
       newItems,
     };
   };
@@ -4313,7 +4774,7 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
 
   await scanScrollableSuggestions('inline-carousel', maxInlineRounds);
 
-  if (options.includeSeeAll !== false && itemsByUsername.size < limit && !rateLimited) {
+  if (options.includeSeeAll !== false && (itemsByUsername.size < limit || options.forceSeeAll === true) && !rateLimited) {
     seeAllClicked = await clickProfileSuggestionsSeeAll(page);
 
     if (seeAllClicked) {
@@ -5715,6 +6176,12 @@ function normalizePublicConnectionCandidate(candidate) {
     displayName: normalizeText(String(candidate.displayName || '')) || null,
     profileUrl: normalizeText(String(candidate.profileUrl || '')) || `https://www.instagram.com/${candidateUsername}/`,
     profileImageUrl: normalizeText(String(candidate.profileImageUrl || candidate.profile_image_url || '')) || null,
+    profileVisibility: ['public', 'private', 'unknown'].includes(candidate.profileVisibility) ? candidate.profileVisibility : null,
+    isPrivate: typeof candidate.isPrivate === 'boolean' ? candidate.isPrivate : null,
+    postsCount: hasFiniteNumericValue(candidate.postsCount) ? Number(candidate.postsCount) : null,
+    followersCount: hasFiniteNumericValue(candidate.followersCount) ? Number(candidate.followersCount) : null,
+    followingCount: hasFiniteNumericValue(candidate.followingCount) ? Number(candidate.followingCount) : null,
+    hoverCard: candidate.hoverCard && typeof candidate.hoverCard === 'object' ? candidate.hoverCard : null,
     sourceLists: Array.isArray(candidate.sourceLists)
       ? candidate.sourceLists.map((sourceList) => normalizeText(String(sourceList || ''))).filter(Boolean)
       : [],
@@ -5738,6 +6205,12 @@ function buildBatchCandidateConnection(candidate, candidateFollowers, candidateF
     displayName: candidate.displayName,
     profileUrl: candidate.profileUrl,
     profileImageUrl: candidate.profileImageUrl || null,
+    profileVisibility: candidate.profileVisibility || null,
+    isPrivate: typeof candidate.isPrivate === 'boolean' ? candidate.isPrivate : null,
+    postsCount: hasFiniteNumericValue(candidate.postsCount) ? Number(candidate.postsCount) : null,
+    followersCount: hasFiniteNumericValue(candidate.followersCount) ? Number(candidate.followersCount) : null,
+    followingCount: hasFiniteNumericValue(candidate.followingCount) ? Number(candidate.followingCount) : null,
+    hoverCard: candidate.hoverCard || null,
     sourceLists: candidate.sourceLists,
     candidateFollowsTarget,
     targetFollowsCandidate,
@@ -5756,6 +6229,12 @@ function summarizeBatchCandidateConnectionForProgress(connection) {
     displayName: connection.displayName || null,
     profileUrl: connection.profileUrl || `https://www.instagram.com/${connection.username}/`,
     profileImageUrl: connection.profileImageUrl || null,
+    profileVisibility: connection.profileVisibility || null,
+    isPrivate: typeof connection.isPrivate === 'boolean' ? connection.isPrivate : null,
+    postsCount: hasFiniteNumericValue(connection.postsCount) ? Number(connection.postsCount) : null,
+    followersCount: hasFiniteNumericValue(connection.followersCount) ? Number(connection.followersCount) : null,
+    followingCount: hasFiniteNumericValue(connection.followingCount) ? Number(connection.followingCount) : null,
+    hoverCard: connection.hoverCard || null,
     sourceLists: Array.isArray(connection.sourceLists) ? connection.sourceLists : [],
   };
 }

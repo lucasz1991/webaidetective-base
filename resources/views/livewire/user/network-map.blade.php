@@ -57,7 +57,7 @@
     <div
         wire:loading.flex
         wire:target="scanPreviewProfile,scanProfileInGui"
-        class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
+        class="fixed inset-0 z-[10000] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
             <div class="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-pink-200 border-t-pink-600"></div>

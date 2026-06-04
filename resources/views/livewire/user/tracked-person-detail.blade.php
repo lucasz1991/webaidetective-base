@@ -517,7 +517,7 @@
                 </div>
 
                 <div class="grid gap-2 sm:grid-cols-1">
-                    @if($latestProfileIsPublic)
+                    @if($trackedPerson->exists)
                         <button
                             type="button"
                             wire:click="analyzeInstagram"
