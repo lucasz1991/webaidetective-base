@@ -1,4 +1,9 @@
-<div class="space-y-4" wire:poll.visible.4000ms>
+<div class="space-y-4" wire:poll.visible.4000ms x-data="{ toasts: [] }" x-init="window.addEventListener('toast', e => { toasts.push(e.detail); setTimeout(() => toasts.shift(), 3000); })" x-cloak>
+    <div class="fixed top-4 right-4 z-50 space-y-2">
+        <template x-for="(t, i) in toasts" :key="i">
+            <div x-text="t.message" :class="t.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'" class="rounded-lg px-4 py-2 shadow"></div>
+        </template>
+    </div>
     @php
         $detailStatusClass = match ($detailStatusLevel ?? 'neutral') {
             'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
@@ -1432,6 +1437,14 @@
                 <div class="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <div>
                         <label class="mb-1 block text-sm font-medium text-slate-700">Beobachtetes Profil</label>
+                        @php
+                            $reconstructedProfileCandidates = $inferredInstagramFollowers
+                                ->concat($inferredInstagramFollowing)
+                                ->concat($suggestionInstagramConnections)
+                                ->unique('candidate_username')
+                                ->values();
+                        @endphp
+
                         <select wire:model.defer="publicProfileTrackedPersonId" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500">
                             <option value="">Profil auswaehlen</option>
                             @foreach($publicProfileCandidates as $candidate)
@@ -1447,18 +1460,49 @@
                                     {{ '@'.$candidate->instagram_username }} - {{ $candidate->display_name }} ({{ $candidateVisibilityLabel }})
                                 </option>
                             @endforeach
+
+                            @if($reconstructedProfileCandidates->isNotEmpty())
+                                <optgroup label="Rekonstruierte Vorschläge">
+                                    @foreach($reconstructedProfileCandidates as $candidate)
+                                        <option value="reconstructed:{{ ltrim($candidate->candidate_username, '@') }}">
+                                            {{ '@'.ltrim($candidate->candidate_username, '@') }}
+                                            @if($candidate->candidate_display_name)
+                                                - {{ $candidate->candidate_display_name }}
+                                            @else
+                                                - rekonstruierter Vorschlag
+                                            @endif
+                                        </option>
+                                    @endforeach
+                                </optgroup>
+                            @endif
                         </select>
                         @error('publicProfileTrackedPersonId') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
-                        @if($publicProfileCandidates->isEmpty())
+                        @if($publicProfileCandidates->isEmpty() && $reconstructedProfileCandidates->isEmpty())
                             <p class="mt-2 text-xs text-amber-700">
-                                Es gibt noch kein weiteres beobachtetes Instagram-Profil, das im letzten Scan als oeffentlich erkannt wurde.
+                                Es gibt noch kein anderes beobachtetes Instagram-Profil als Vorschlag. Du kannst hier ein rekonstruertes oder frei eingetragenes Profil speichern.
                             </p>
                         @endif
+
+                        <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                            <div>
+                                <label class="mb-1 block text-sm font-medium text-slate-700">Anderes Instagram-Profil</label>
+                                <input type="text" wire:model.defer="manualPublicProfileUsername" placeholder="@username" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500">
+                                @error('manualPublicProfileUsername') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                            </div>
+                        </div>
+
+                        <p class="mt-2 text-xs text-slate-500">
+                            Wähle ein vorgeschlagenes Profil aus dem Dropdown oder gib ein frei eintragbares Instagram-Profil ein. Die Verbindung wird über den einzigen Button unten gespeichert.
+                        </p>
                     </div>
-                    <div class="grid gap-3 md:grid-cols-2">
+
+                    <div class="grid gap-3 md:grid-cols-1 lg:grid-cols-1">
                         <div>
                             <label class="mb-1 block text-sm font-medium text-slate-700">Beziehungsart</label>
                             <select wire:model.defer="publicProfileRelationshipType" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500">
+                                <option value="close_friend">Enger Freund</option>
+                                <option value="acquaintance">Bekannter</option>
+                                <option value="family">Familienmitglied</option>
                                 <option value="follows_target">Folgt der Person</option>
                                 <option value="followed_by_target">Wird von der Person gefolgt</option>
                                 <option value="mutual">Gegenseitige Verbindung</option>
@@ -1466,18 +1510,9 @@
                             </select>
                             @error('publicProfileRelationshipType') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
                         </div>
-                        <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
-                            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Quelle</div>
-                            <div class="mt-1 font-semibold text-slate-900">Beobachtete Profile</div>
-                        </div>
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Notizen</label>
-                        <textarea wire:model.defer="publicProfileNotes" rows="3" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500" placeholder="Warum dieses beobachtete Profil relevant ist, z. B. enge Verbindung, gegenseitige Erwaehnungen oder bekannte Beziehung"></textarea>
-                        @error('publicProfileNotes') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
                     </div>
                     <div class="flex justify-end">
-                        <button wire:click="savePublicProfile" @disabled($publicProfileCandidates->isEmpty()) class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
+                        <button wire:click="savePublicProfile" @disabled(!$publicProfileTrackedPersonId && ! $manualPublicProfileUsername) class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
                             Verbindung speichern
                         </button>
                     </div>

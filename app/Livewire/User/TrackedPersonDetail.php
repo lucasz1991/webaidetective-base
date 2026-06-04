@@ -58,7 +58,7 @@ class TrackedPersonDetail extends Component
     public $knownFactNotes = '';
     public $publicProfileTrackedPersonId = '';
     public $publicProfileRelationshipType = 'public_connection';
-    public $publicProfileNotes = '';
+    public $manualPublicProfileUsername = '';
 
     public $detailStatus = null;
     public $detailStatusLevel = 'neutral';
@@ -812,47 +812,71 @@ class TrackedPersonDetail extends Component
     public function savePublicProfile(): void
     {
         $validated = $this->validate([
-            'publicProfileTrackedPersonId' => ['required', 'integer'],
-            'publicProfileRelationshipType' => ['required', 'string', 'in:follows_target,followed_by_target,mutual,public_connection'],
-            'publicProfileNotes' => ['nullable', 'string'],
+            'publicProfileTrackedPersonId' => ['nullable', 'string'],
+            'manualPublicProfileUsername' => ['nullable', 'string', 'max:255'],
+            'publicProfileRelationshipType' => ['required', 'string', 'in:follows_target,followed_by_target,mutual,public_connection,close_friend,acquaintance,family'],
         ]);
 
         $trackedPerson = $this->resolveTrackedPerson();
-        $linkedTrackedPerson = Auth::user()
-            ->trackedPeople()
-            ->with('latestInstagramSnapshot')
-            ->whereKey((int) $validated['publicProfileTrackedPersonId'])
-            ->where('id', '!=', $trackedPerson->id)
-            ->whereNotNull('instagram_username')
-            ->first();
+        $selectedValue = trim((string) ($validated['publicProfileTrackedPersonId'] ?? ''));
+        $manualUsername = $this->normalizeHandle($validated['manualPublicProfileUsername'] ?? null);
 
-        if (! $linkedTrackedPerson) {
-            $this->addError('publicProfileTrackedPersonId', 'Bitte ein anderes beobachtetes Instagram-Profil auswaehlen.');
+        if ($selectedValue === '' && ! $manualUsername) {
+            $this->addError('publicProfileTrackedPersonId', 'Bitte ein Profil waehlen oder einen Instagram-Namen eintragen.');
 
             return;
         }
 
-        if (data_get($linkedTrackedPerson->latestInstagramSnapshot?->raw_payload, 'extractedProfile.profileVisibility') !== 'public') {
-            $this->addError('publicProfileTrackedPersonId', 'Dieses beobachtete Profil wurde noch nicht als oeffentlich erkannt.');
+        $displayName = null;
+        $profileUrl = null;
+        $isPublic = false;
 
-            return;
+        if ($selectedValue !== '') {
+            if (str_starts_with($selectedValue, 'reconstructed:')) {
+                $username = ltrim(substr($selectedValue, strlen('reconstructed:')), '@');
+                $displayName = null;
+                $profileUrl = 'https://www.instagram.com/'.$username.'/';
+                $isPublic = false;
+            } else {
+                $linkedTrackedPerson = Auth::user()
+                    ->trackedPeople()
+                    ->with('latestInstagramSnapshot')
+                    ->whereKey((int) $selectedValue)
+                    ->where('id', '!=', $trackedPerson->id)
+                    ->whereNotNull('instagram_username')
+                    ->first();
+
+                if (! $linkedTrackedPerson) {
+                    $this->addError('publicProfileTrackedPersonId', 'Bitte ein anderes beobachtetes Instagram-Profil auswaehlen.');
+
+                    return;
+                }
+
+                $username = $this->normalizeHandle($linkedTrackedPerson->instagram_username);
+                $displayName = $linkedTrackedPerson->display_name;
+                $profileUrl = 'https://www.instagram.com/'.$username.'/';
+                $visibility = data_get($linkedTrackedPerson->latestInstagramSnapshot?->raw_payload, 'extractedProfile.profileVisibility');
+                $isPublic = $visibility === 'public';
+            }
+        } else {
+            $username = $manualUsername;
+            $profileUrl = 'https://www.instagram.com/'.$username.'/';
+            $displayName = null;
+            $isPublic = false;
         }
-
-        $normalizedUsername = $this->normalizeHandle($linkedTrackedPerson->instagram_username);
 
         $publicProfile = $trackedPerson->publicProfiles()->firstOrNew([
             'platform' => 'instagram',
-            'username' => $normalizedUsername,
+            'username' => $username,
         ]);
         $wasExisting = $publicProfile->exists;
 
         $publicProfile->fill([
             'user_id' => Auth::id(),
-            'display_name' => $linkedTrackedPerson->display_name,
+            'display_name' => $displayName,
             'relationship_type' => $validated['publicProfileRelationshipType'],
-            'profile_url' => 'https://www.instagram.com/'.$normalizedUsername.'/',
-            'notes' => $this->nullableTrim($validated['publicProfileNotes'] ?? null),
-            'is_public' => true,
+            'profile_url' => $profileUrl,
+            'is_public' => $isPublic,
         ]);
         $publicProfile->save();
         app(InstagramProfileRelationshipStore::class)->syncPublicProfile($publicProfile);
@@ -860,8 +884,8 @@ class TrackedPersonDetail extends Component
         $this->resetPublicProfileForm();
         $this->setDetailStatus(
             $wasExisting
-                ? 'Bekanntes oeffentliches Profil wurde aktualisiert.'
-                : 'Bekanntes oeffentliches Profil wurde gespeichert.',
+                ? 'Bekannte Verbindung wurde aktualisiert.'
+                : 'Bekannte Verbindung wurde gespeichert.',
             'success',
         );
         $this->dispatch('tracked-person-refresh');
@@ -1022,7 +1046,45 @@ class TrackedPersonDetail extends Component
     {
         $this->publicProfileTrackedPersonId = '';
         $this->publicProfileRelationshipType = 'public_connection';
-        $this->publicProfileNotes = '';
+        $this->manualPublicProfileUsername = '';
+    }
+
+    public function saveManualPublicProfile(): void
+    {
+        $this->validate([
+            'manualPublicProfileUsername' => ['required', 'string', 'max:255'],
+            'publicProfileRelationshipType' => ['required', 'string', 'in:follows_target,followed_by_target,mutual,public_connection,close_friend,acquaintance,family'],
+        ]);
+
+        $trackedPerson = $this->resolveTrackedPerson();
+        $username = $this->normalizeHandle($this->manualPublicProfileUsername);
+
+        if (! $username) {
+            $this->addError('manualPublicProfileUsername', 'Bitte einen gueltigen Instagram-Namen angeben.');
+
+            return;
+        }
+
+        $publicProfile = $trackedPerson->publicProfiles()->firstOrNew([
+            'platform' => 'instagram',
+            'username' => $username,
+        ]);
+
+        $publicProfile->fill([
+            'user_id' => Auth::id(),
+            'display_name' => null,
+            'relationship_type' => $this->publicProfileRelationshipType,
+            'profile_url' => 'https://www.instagram.com/'.$username.'/',
+            'is_public' => true,
+        ]);
+
+        $publicProfile->save();
+        app(InstagramProfileRelationshipStore::class)->syncPublicProfile($publicProfile);
+
+        $this->resetPublicProfileForm();
+        $this->setDetailStatus('Manuelles Profil wurde gespeichert.', 'success');
+        $this->dispatch('tracked-person-refresh');
+        $this->dispatchBrowserEvent('toast', ['message' => 'Manuelles Profil wurde gespeichert.', 'type' => 'success']);
     }
 
     private function relationshipProfileImagesForSnapshot(?TrackedPersonInstagramSnapshot $snapshot): array
