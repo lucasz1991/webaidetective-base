@@ -3050,6 +3050,18 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     await sleep(900);
   }
 
+  const missingKnownRelationshipSearchQueries = getMissingPrioritizedRelationshipSearchQueries(
+    runtimeConfig,
+    normalizedRelationship,
+    usersByUsername,
+  );
+  const shouldAttemptRelationshipSearch = Boolean(
+    missingKnownRelationshipSearchQueries.length > 0
+    || (Array.isArray(runtimeConfig.relationshipSearchPartitionQueries)
+      && runtimeConfig.relationshipSearchPartitionQueries.length > 0)
+    || normalizeInstagramUsername(options.targetUsername || runtimeConfig.relationshipSearchTargetUsername || ''),
+  );
+
   if (
     stopReason !== 'instagram-rate-limit'
     && stopReason !== 'ui-stop-requested'
@@ -3057,6 +3069,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     && !targetReached()
     && expectedCount > 0
     && usersByUsername.size < expectedCount
+    && shouldAttemptRelationshipSearch
   ) {
     const searchResult = await collectRelationshipSearchPartitions(
       page,
