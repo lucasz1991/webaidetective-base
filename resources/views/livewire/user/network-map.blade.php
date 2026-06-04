@@ -366,29 +366,6 @@
             </aside>
         </div>
 
-        <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
-            <div class="flex flex-wrap items-center gap-3">
-                <span class="font-semibold text-slate-800">Cache Debug</span>
-                <span class="rounded-full bg-white px-2 py-0.5 font-semibold text-slate-700">{{ $cacheDebug['status'] ?? 'unbekannt' }}</span>
-                @if(!empty($cacheDebug['token']))
-                    <span>Token: <span class="font-mono">{{ $cacheDebug['token'] }}</span></span>
-                @endif
-                @if(!empty($cacheDebug['chunk_count']))
-                    <span>Chunks: {{ $cacheDebug['chunk_count'] }}</span>
-                @endif
-                @if(!empty($cacheDebug['tracked_people']))
-                    <span>Personen: {{ $cacheDebug['tracked_people'] }}</span>
-                @endif
-            </div>
-            <div class="mt-3 grid gap-2 md:grid-cols-2">
-                <div>Scope: <span class="font-mono">{{ $cacheDebug['scope'] ?? '-' }}</span></div>
-                <div>Erzeugt: <span class="font-mono">{{ $cacheDebug['generated_at'] ?? '-' }}</span></div>
-                <div>Hash aktuell: <span class="font-mono break-all">{{ $cacheDebug['data_hash'] ?? '-' }}</span></div>
-                <div>Hash Cache: <span class="font-mono break-all">{{ $cacheDebug['cached_hash'] ?? '-' }}</span></div>
-                <div>Meta Key: <span class="font-mono break-all">{{ $cacheDebug['meta_cache_key'] ?? '-' }}</span></div>
-                <div>Graph Key: <span class="font-mono break-all">{{ $cacheDebug['graph_cache_key'] ?? '-' }}</span></div>
-            </div>
-        </div>
     </main>
 
     <div
