@@ -1,6 +1,7 @@
 <div
-    class="min-h-screen bg-[#fafafa] pb-16"
+    class="{{ $embedded ? 'bg-transparent' : 'min-h-screen bg-[#fafafa] pb-16' }}"
     data-network-map-root
+    data-network-map-id="{{ $mapId }}"
     data-network-lazy="true"
     wire:init="prepareGraph"
     wire:loading.class="cursor-wait"
@@ -12,6 +13,7 @@
     }"
     x-on:network-map-node-selected.window="setNetworkNode($event)"
 >
+    @unless($embedded)
     <div class="border-b border-slate-200 bg-white">
         <div class="container mx-auto px-5 py-5">
             <div class="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
@@ -66,8 +68,9 @@
             </div>
         </div>
     </div>
+    @endunless
 
-    <main class="container mx-auto px-5 py-6">
+    <main class="{{ $embedded ? '' : 'container mx-auto px-5 py-6' }}">
         <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
             <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
                 <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">

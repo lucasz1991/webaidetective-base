@@ -793,14 +793,17 @@ async function loadPreparedGraph(root, detail) {
 }
 
 async function handlePreparedGraph(event) {
-    const root = document.querySelector('[data-network-map-root]');
+    const detail = eventDetail(event);
+    const root = detail.mapId
+        ? document.querySelector(`[data-network-map-root][data-network-map-id="${detail.mapId}"]`)
+        : document.querySelector('[data-network-map-root]');
 
     if (!root) {
         return;
     }
 
     try {
-        await loadPreparedGraph(root, eventDetail(event));
+        await loadPreparedGraph(root, detail);
     } catch (error) {
         console.error(error);
         updateBuildStatus(root, {
@@ -838,8 +841,11 @@ document.addEventListener('DOMContentLoaded', () => initNetworkMaps());
 document.addEventListener('livewire:navigating', () => destroyNetworkMaps());
 document.addEventListener('livewire:navigated', () => initNetworkMaps());
 window.addEventListener('network-map-graph-prepared', handlePreparedGraph);
-window.addEventListener('network-map-empty', () => {
-    const root = document.querySelector('[data-network-map-root]');
+window.addEventListener('network-map-empty', (event) => {
+    const detail = eventDetail(event);
+    const root = detail.mapId
+        ? document.querySelector(`[data-network-map-root][data-network-map-id="${detail.mapId}"]`)
+        : document.querySelector('[data-network-map-root]');
 
     if (root) {
         resetGraph(root);
@@ -852,8 +858,11 @@ window.addEventListener('network-map-empty', () => {
         });
     }
 });
-window.addEventListener('network-map-reset', () => {
-    const root = document.querySelector('[data-network-map-root]');
+window.addEventListener('network-map-reset', (event) => {
+    const detail = eventDetail(event);
+    const root = detail.mapId
+        ? document.querySelector(`[data-network-map-root][data-network-map-id="${detail.mapId}"]`)
+        : document.querySelector('[data-network-map-root]');
 
     if (root) {
         resetGraph(root);

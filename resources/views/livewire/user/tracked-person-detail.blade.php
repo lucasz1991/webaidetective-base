@@ -1212,6 +1212,14 @@
                     </div>
                 </div>
 
+                <div class="mt-4 rounded-xl border border-slate-200 bg-white p-3">
+                    <livewire:user.network-map
+                        :tracked-person-id="$trackedPerson->id"
+                        :embedded="true"
+                        :key="'tracked-person-network-map-'.$trackedPerson->id"
+                    />
+                </div>
+
                 <div class="mt-3 space-y-2">
                     @forelse($trackedPerson->publicProfiles as $publicProfile)
                         @php

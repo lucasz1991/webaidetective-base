@@ -24,6 +24,12 @@ class NetworkMap extends Component
 
     public ?int $primaryTrackedPersonId = null;
 
+    public ?int $contextTrackedPersonId = null;
+
+    public bool $embedded = false;
+
+    public string $mapId = '';
+
     public ?string $graphToken = null;
 
     public array $graphStats = [
@@ -39,12 +45,22 @@ class NetworkMap extends Component
         return 'network-map-graph:'.$userId.':'.$token;
     }
 
-    public static function graphHashCacheKey(int $userId, string $token = ''): string
+    public static function graphHashCacheKey(int $userId, string $token = '', ?int $contextTrackedPersonId = null): string
     {
+        $scope = $contextTrackedPersonId ? ':person-'.$contextTrackedPersonId : ':global';
+
         if ($token === '') {
-            return 'network-map-hash:'.$userId;
+            return 'network-map-hash:'.$userId.$scope;
         }
-        return 'network-map-hash:'.$userId.':'.$token;
+
+        return 'network-map-hash:'.$userId.$scope.':'.$token;
+    }
+
+    public function mount(?int $trackedPersonId = null, bool $embedded = false): void
+    {
+        $this->contextTrackedPersonId = $trackedPersonId;
+        $this->embedded = $embedded;
+        $this->mapId = 'network-map-'.Str::uuid();
     }
 
     private function generateDataHash(Collection $trackedPeople): string
@@ -75,6 +91,7 @@ class NetworkMap extends Component
         })->toArray();
 
         $data['graph_version'] = 2;
+        $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
 
         // Also include primary person flag
         $data['primary_person_id'] = $this->primaryTrackedPersonId;
@@ -101,7 +118,7 @@ class NetworkMap extends Component
         $this->primaryTrackedPersonId = $trackedPersonId;
         $this->graphToken = null;
         $this->graphStats = $this->emptyGraphStats($user->trackedPeople()->count());
-        $this->dispatch('network-map-reset');
+        $this->dispatch('network-map-reset', mapId: $this->mapId);
         $this->prepareGraph();
     }
 
@@ -119,23 +136,24 @@ class NetworkMap extends Component
         if ($trackedPeople->isEmpty()) {
             $this->graphToken = null;
             $this->graphStats = $this->emptyGraphStats();
-            $this->dispatch('network-map-empty', stats: $this->graphStats);
+            $this->dispatch('network-map-empty', mapId: $this->mapId, stats: $this->graphStats);
 
             return;
         }
 
         // Generate data hash for cache validation
         $dataHash = $this->generateDataHash($trackedPeople);
-        $cachedToken = Cache::get(self::graphHashCacheKey((int) $user->id));
+        $cachedToken = Cache::get(self::graphHashCacheKey((int) $user->id, contextTrackedPersonId: $this->contextTrackedPersonId));
 
         // If we have a cached token with the same data hash, reuse it
-        if ($cachedToken && $dataHash === Cache::get(self::graphHashCacheKey((int) $user->id, $cachedToken))) {
+        if ($cachedToken && $dataHash === Cache::get(self::graphHashCacheKey((int) $user->id, $cachedToken, $this->contextTrackedPersonId))) {
             $cachedData = Cache::get(self::graphCacheKey((int) $user->id, $cachedToken));
             if ($cachedData) {
                 $this->graphToken = $cachedToken;
                 $this->graphStats = $cachedData['stats'] ?? $this->graphStats;
                 $this->dispatch(
                     'network-map-graph-prepared',
+                    mapId: $this->mapId,
                     token: $cachedToken,
                     chunkCount: count($cachedData['chunks'] ?? []),
                     chunkUrl: route('network.graph-chunk', ['token' => $cachedToken, 'chunk' => '__CHUNK__']),
@@ -162,14 +180,14 @@ class NetworkMap extends Component
         
         // Cache the hash mapping for future validation
         Cache::put(
-            self::graphHashCacheKey((int) $user->id, $token),
+            self::graphHashCacheKey((int) $user->id, $token, $this->contextTrackedPersonId),
             $dataHash,
             now()->addMinutes(30),
         );
         
         // Store current token in primary cache key for quick lookup
         Cache::put(
-            self::graphHashCacheKey((int) $user->id),
+            self::graphHashCacheKey((int) $user->id, contextTrackedPersonId: $this->contextTrackedPersonId),
             $token,
             now()->addMinutes(30),
         );
@@ -178,6 +196,7 @@ class NetworkMap extends Component
         $this->graphStats = $stats;
         $this->dispatch(
             'network-map-graph-prepared',
+            mapId: $this->mapId,
             token: $token,
             chunkCount: count($chunks),
             chunkUrl: route('network.graph-chunk', ['token' => $token, 'chunk' => '__CHUNK__']),
@@ -199,10 +218,13 @@ class NetworkMap extends Component
         $stats = $this->graphStats;
         $stats['people'] = $trackedPeople->count();
 
-        return view('livewire.user.network-map', [
+        $view = view('livewire.user.network-map', [
             'trackedPeople' => $trackedPeople,
             'stats' => $stats,
-        ])->layout('layouts.app');
+            'embedded' => $this->embedded,
+        ]);
+
+        return $this->embedded ? $view : $view->layout('layouts.app');
     }
 
     private function loadTrackedPeopleForGraph($user): Collection
@@ -451,6 +473,20 @@ class NetworkMap extends Component
     {
         if ($trackedPeople->isEmpty()) {
             return null;
+        }
+
+        if ($this->contextTrackedPersonId) {
+            $contextPerson = $trackedPeople->firstWhere('id', $this->contextTrackedPersonId);
+
+            if ($contextPerson) {
+                $this->primaryTrackedPersonId = (int) $contextPerson->id;
+
+                $trackedPeople->each(function (TrackedPerson $person) use ($contextPerson): void {
+                    $person->is_primary = (int) $person->id === (int) $contextPerson->id;
+                });
+
+                return (int) $contextPerson->id;
+            }
         }
 
         $primary = $trackedPeople->firstWhere('is_primary', true);
@@ -1622,14 +1658,14 @@ class NetworkMap extends Component
 
     private function forgetGraphCache(int $userId): void
     {
-        $token = Cache::get(self::graphHashCacheKey($userId));
+        $token = Cache::get(self::graphHashCacheKey($userId, contextTrackedPersonId: $this->contextTrackedPersonId));
 
         if (is_string($token) && $token !== '') {
             Cache::forget(self::graphCacheKey($userId, $token));
-            Cache::forget(self::graphHashCacheKey($userId, $token));
+            Cache::forget(self::graphHashCacheKey($userId, $token, $this->contextTrackedPersonId));
         }
 
-        Cache::forget(self::graphHashCacheKey($userId));
+        Cache::forget(self::graphHashCacheKey($userId, contextTrackedPersonId: $this->contextTrackedPersonId));
     }
 
     /**
