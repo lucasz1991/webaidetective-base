@@ -143,8 +143,113 @@ function updateButton(button, active) {
     button.classList.add(...(active ? activeClasses : inactiveClasses));
 }
 
+function filterStorageKey(root) {
+    return `network-map-filters:${root.dataset.networkFilterScope || root.dataset.networkMapId || 'default'}`;
+}
+
+function readStoredFilters(root) {
+    try {
+        return JSON.parse(sessionStorage.getItem(filterStorageKey(root)) || '{}') || {};
+    } catch {
+        return {};
+    }
+}
+
+function writeStoredFilters(root, state) {
+    sessionStorage.setItem(filterStorageKey(root), JSON.stringify({
+        showPublic: state.showPublic,
+        showInferred: state.showInferred,
+        showTracked: state.showTracked,
+        minDegree: state.minDegree,
+    }));
+}
+
 function visibleConnectedEdges(node) {
     return node.connectedEdges().not('.network-filtered');
+}
+
+function visibleDegree(node) {
+    return visibleConnectedEdges(node).length;
+}
+
+function arrangeVisibleGraph(root, cy, animate = true) {
+    const visibleNodes = cy.nodes().not('.network-filtered');
+
+    if (!visibleNodes.length) {
+        return;
+    }
+
+    const width = Math.max(1200, visibleNodes.length * 22);
+    const height = Math.max(820, visibleNodes.length * 16);
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const nodes = visibleNodes.toArray();
+    const primary = nodes.find((node) => Boolean(node.data('isPrimary'))) || nodes.find((node) => node.data('type') === 'person') || nodes[0];
+    const buckets = {
+        person: [],
+        high: [],
+        medium: [],
+        low: [],
+    };
+
+    nodes.forEach((node) => {
+        if (node.id() === primary.id()) {
+            return;
+        }
+
+        if (node.data('type') === 'person') {
+            buckets.person.push(node);
+            return;
+        }
+
+        const degree = visibleDegree(node);
+
+        if (degree >= 8) {
+            buckets.high.push(node);
+        } else if (degree >= 4) {
+            buckets.medium.push(node);
+        } else {
+            buckets.low.push(node);
+        }
+    });
+
+    Object.values(buckets).forEach((bucket) => {
+        bucket.sort((a, b) => visibleDegree(b) - visibleDegree(a) || String(a.data('username') || a.id()).localeCompare(String(b.data('username') || b.id())));
+    });
+
+    const updates = [{ node: primary, position: { x: centerX, y: centerY } }];
+    const placeBucket = (bucket, baseRadius, perRing, offset) => {
+        bucket.forEach((node, index) => {
+            const ring = Math.floor(index / perRing);
+            const ringIndex = index - (ring * perRing);
+            const ringCount = Math.min(perRing, bucket.length - (ring * perRing));
+            const angle = ((Math.PI * 2) * (ringIndex / Math.max(1, ringCount))) + offset + (ring * 0.17);
+            const radius = baseRadius + (ring * 125);
+
+            updates.push({
+                node,
+                position: {
+                    x: centerX + Math.cos(angle) * radius,
+                    y: centerY + Math.sin(angle) * radius,
+                },
+            });
+        });
+    };
+
+    placeBucket(buckets.person, 160, 18, -Math.PI / 2);
+    placeBucket(buckets.high, 255, 24, -Math.PI / 2.5);
+    placeBucket(buckets.medium, 410, 34, -Math.PI / 3);
+    placeBucket(buckets.low, 590, 46, -Math.PI / 4);
+
+    updates.forEach(({ node, position }) => {
+        if (animate) {
+            node.animate({ position }, { duration: 320 });
+        } else {
+            node.position(position);
+        }
+    });
+
+    window.setTimeout(() => fitGraph(cy), animate ? 360 : 30);
 }
 
 function setSelected(root, cy, nodeId) {
@@ -294,9 +399,9 @@ function applyFilters(root, cy) {
 
     cy.nodes().forEach((node) => {
         const isPerson = node.data('type') === 'person';
-        const hasVisibleEdge = visibleConnectedEdges(node).length > 0;
+        const degree = visibleDegree(node);
 
-        if (!isPerson && !hasVisibleEdge) {
+        if (!isPerson && degree < state.minDegree) {
             node.addClass('network-filtered');
         }
     });
@@ -312,6 +417,14 @@ function applyFilters(root, cy) {
         updateButton(button, active);
     });
 
+    const minDegreeControl = root.querySelector('[data-network-filter-min-degree]');
+
+    if (minDegreeControl) {
+        minDegreeControl.value = String(state.minDegree);
+    }
+
+    writeStoredFilters(root, state);
+    arrangeVisibleGraph(root, cy, true);
     updateSelectionPanel(root, cy);
 }
 
@@ -352,6 +465,11 @@ function bindControls(root, cy) {
 
             applyFilters(root, cy);
         });
+    });
+
+    root.querySelector('[data-network-filter-min-degree]')?.addEventListener('change', (event) => {
+        state.minDegree = Math.max(1, Number(event.target.value) || 1);
+        applyFilters(root, cy);
     });
 
     root.querySelectorAll('[data-network-action]').forEach((button) => {
@@ -554,11 +672,13 @@ async function initNetworkMap(root) {
 
         const resizeHandler = () => fitGraph(cy);
 
+        const storedFilters = readStoredFilters(root);
         const state = {
             cy,
-            showPublic: true,
-            showInferred: true,
-            showTracked: true,
+            showPublic: storedFilters.showPublic ?? true,
+            showInferred: storedFilters.showInferred ?? true,
+            showTracked: storedFilters.showTracked ?? true,
+            minDegree: Math.max(1, Number(storedFilters.minDegree ?? 2) || 2),
             selectedId: null,
             resizeHandler,
             loadGeneration: 0,
@@ -612,7 +732,7 @@ async function initNetworkMap(root) {
         });
 
         if (initialElements.length) {
-            window.setTimeout(() => fitGraph(cy), 150);
+            window.setTimeout(() => arrangeVisibleGraph(root, cy, false), 150);
         } else {
             updateBuildStatus(root, {
                 visible: true,
@@ -811,7 +931,7 @@ async function loadPreparedGraph(root, detail) {
     });
 
     window.requestAnimationFrame(() => {
-        fitGraph(cy);
+        arrangeVisibleGraph(root, cy, false);
         window.setTimeout(() => updateBuildStatus(root, { visible: false, state: 'done' }), 900);
     });
 }

@@ -2,6 +2,7 @@
     class="{{ $embedded ? 'bg-transparent' : 'min-h-screen bg-[#fafafa] pb-16' }}"
     data-network-map-root
     data-network-map-id="{{ $mapId }}"
+    data-network-filter-scope="{{ $contextTrackedPersonId ? 'person-'.$contextTrackedPersonId : 'global' }}"
     data-network-lazy="true"
     wire:init="prepareGraph"
     wire:loading.class="cursor-wait"
@@ -108,6 +109,17 @@
                         <button type="button" data-network-filter="tracked" data-active-classes="border-emerald-300 bg-emerald-50 text-emerald-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="true">
                             Follower/Gefolgt
                         </button>
+                        <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-slate-600">
+                            <span>Min. Verbindungen</span>
+                            <select data-network-filter-min-degree class="border-0 bg-transparent p-0 text-xs font-bold text-slate-900 focus:ring-0">
+                                <option value="1">1</option>
+                                <option value="2" selected>2</option>
+                                <option value="3">3</option>
+                                <option value="4">4</option>
+                                <option value="5">5</option>
+                                <option value="8">8</option>
+                            </select>
+                        </label>
                     </div>
                     <div class="flex items-center gap-2 text-xs font-semibold text-slate-600">
                         <button type="button" data-network-action="zoom-out" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">-</button>

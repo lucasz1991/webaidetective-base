@@ -96,7 +96,7 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 3;
+        $data['graph_version'] = 4;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
 
         // Also include primary person flag
@@ -447,8 +447,6 @@ class NetworkMap extends Component
         $this->addTrackedRelationshipListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addObservedTrackedPersonConnectionsToPrimary($trackedPeople, $primaryPerson, $nodesByInstagram, $nodes, $edges);
         $this->addTrackedPersonProfileRelationships($trackedPeople, $nodesByInstagram, $nodes, $edges);
-
-        [$nodes, $edges] = $this->pruneLowSignalListNodes($nodes, $edges);
 
         return $this->applyLayout(array_values($nodes), array_values($edges));
     }
@@ -1309,40 +1307,6 @@ class NetworkMap extends Component
                 'to' => $targetId,
             ]],
         };
-    }
-
-    private function pruneLowSignalListNodes(array $nodes, array $edges): array
-    {
-        $connectionCounts = $this->calculateConnectionCounts(array_values($nodes), array_values($edges));
-        $removeNodeIds = [];
-
-        foreach ($nodes as $nodeId => $node) {
-            $isPureListEntry = ($node['type'] ?? null) === 'profile'
-                && ($node['role'] ?? null) === 'Listeneintrag'
-                && ! (bool) ($node['isKnownProfile'] ?? false);
-
-            if ($isPureListEntry && ($connectionCounts[$nodeId] ?? 0) < 2) {
-                $removeNodeIds[$nodeId] = true;
-            }
-        }
-
-        if ($removeNodeIds === []) {
-            return [$nodes, $edges];
-        }
-
-        $nodes = array_filter(
-            $nodes,
-            fn (array $node, string $nodeId): bool => ! isset($removeNodeIds[$nodeId]),
-            ARRAY_FILTER_USE_BOTH,
-        );
-
-        $edges = array_filter(
-            $edges,
-            fn (array $edge): bool => ! isset($removeNodeIds[$edge['from'] ?? null])
-                && ! isset($removeNodeIds[$edge['to'] ?? null]),
-        );
-
-        return [$nodes, $edges];
     }
 
     private function applyLayout(array $nodes, array $edges): array
