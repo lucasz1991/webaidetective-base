@@ -374,19 +374,52 @@
             </div>
 
             <div class="flex flex-wrap justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:px-5">
-            <button type="button" wire:click="closeProfilePreview" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                Schliessen
-            </button>
-            @if($profilePreview && ! ($profilePreview['is_known_profile'] ?? false))
-                <button type="button" wire:click="addPreviewProfileAsKnown" wire:loading.attr="disabled" class="ml-3 rounded-lg border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-100 disabled:opacity-50">
-                    Als bekannt speichern
+                <button type="button" wire:click="closeProfilePreview" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Schliessen
                 </button>
-            @endif
-            @if($profilePreview)
-                <button type="button" wire:click="scanPreviewProfile" wire:loading.attr="disabled" class="ml-3 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">
-                    Scan starten
-                </button>
-            @endif
+                @if($profilePreview && ! ($profilePreview['is_known_profile'] ?? false))
+                    <button type="button" wire:click="addPreviewProfileAsKnown" wire:loading.attr="disabled" class="rounded-lg border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-100 disabled:opacity-50">
+                        Als bekannt speichern
+                    </button>
+                @endif
+                @if($profilePreview)
+                    <div x-data="{ scanMenuOpen: false }" class="relative inline-flex">
+                        <button
+                            type="button"
+                            wire:click="scanPreviewProfile"
+                            wire:loading.attr="disabled"
+                            wire:target="scanPreviewProfile,scanPreviewProfileInBackground"
+                            class="rounded-l-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                        >
+                            <span wire:loading.remove wire:target="scanPreviewProfile">Scan starten</span>
+                            <span wire:loading wire:target="scanPreviewProfile">Scan laeuft...</span>
+                        </button>
+                        <button
+                            type="button"
+                            x-on:click="scanMenuOpen = ! scanMenuOpen"
+                            class="rounded-r-lg border-l border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                            aria-label="Scan-Optionen"
+                        >
+                            ▾
+                        </button>
+                        <div
+                            x-cloak
+                            x-show="scanMenuOpen"
+                            x-on:click.outside="scanMenuOpen = false"
+                            class="absolute bottom-full right-0 z-50 mb-2 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white text-sm shadow-xl"
+                        >
+                            <button
+                                type="button"
+                                wire:click="scanPreviewProfileInBackground"
+                                wire:loading.attr="disabled"
+                                x-on:click="scanMenuOpen = false"
+                                class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                            >
+                                Im Hintergrund starten
+                            </button>
+                        </div>
+                    </div>
+                @endif
             </div>
         </div>
     </x-modal>

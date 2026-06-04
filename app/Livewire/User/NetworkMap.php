@@ -8,6 +8,7 @@ use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\User;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
+use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -1721,8 +1722,61 @@ class NetworkMap extends Component
             return;
         }
 
+        $this->scanProfileInGui($this->previewNodeId);
+        $this->openProfilePreview($this->previewNodeId);
+    }
+
+    public function scanPreviewProfileInBackground(): void
+    {
+        if (! $this->previewNodeId) {
+            return;
+        }
+
         $this->scanProfile($this->previewNodeId);
         $this->openProfilePreview($this->previewNodeId);
+    }
+
+    public function scanProfileInGui(string $nodeId): void
+    {
+        @set_time_limit(0);
+        @ignore_user_abort(false);
+
+        $user = Auth::user();
+
+        if (! $user) {
+            return;
+        }
+
+        [$profile, $username] = $this->resolveInstagramProfileFromNodeId($nodeId);
+
+        if (! $profile && filled($username)) {
+            $profile = app(InstagramProfileRelationshipStore::class)->ensureProfile($username);
+        }
+
+        if (! $profile) {
+            $this->dispatch('notification', type: 'error', message: 'Profil konnte nicht gefunden werden');
+
+            return;
+        }
+
+        try {
+            $trackedPerson = $this->getPrimaryTrackedPerson($user);
+
+            if (! $trackedPerson) {
+                $this->dispatch('notification', type: 'error', message: 'Keine Hauptperson ausgewaehlt');
+
+                return;
+            }
+
+            $publicProfile = $this->firstOrCreateKnownProfile($trackedPerson, $profile);
+            app(TrackedPersonInstagramPublicProfileScanService::class)->scan($trackedPerson, null, $publicProfile->id);
+            $this->forgetGraphCache((int) $user->id);
+            $this->graphToken = null;
+            $this->prepareGraph();
+            $this->dispatch('notification', type: 'success', message: 'Profil-Scan wurde ausgefuehrt');
+        } catch (\Throwable $e) {
+            $this->dispatch('notification', type: 'error', message: 'Profil-Scan fehlgeschlagen: '.$e->getMessage());
+        }
     }
 
     /**
