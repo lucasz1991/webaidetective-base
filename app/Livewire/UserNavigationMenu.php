@@ -16,6 +16,8 @@ class UserNavigationMenu extends Component
 
     public $message;
 
+    public array $subscriptionSummary = [];
+
     protected $listeners = [
         'refreshComponent' => 'refreshNavigationData',
         'refresh-user-navigation-menu' => 'refreshNavigationData',
@@ -34,11 +36,15 @@ class UserNavigationMenu extends Component
             $this->receivedMessages = collect();
             $this->unreadMessagesCount = 0;
             $this->previousUnreadMessagesCount = null;
+            $this->subscriptionSummary = [];
 
             return;
         }
 
-        $user = auth()->user();
+        $user = auth()->user()->loadMissing([
+            'activeSubscription.plan',
+            'creditWallet',
+        ]);
 
         $this->receivedMessages = $user
             ->receivedMessages()
@@ -58,6 +64,7 @@ class UserNavigationMenu extends Component
 
         $this->unreadMessagesCount = $newUnreadMessagesCount;
         $this->previousUnreadMessagesCount = $newUnreadMessagesCount;
+        $this->subscriptionSummary = $this->buildSubscriptionSummary($user);
     }
 
     public function setMessageStatus($messageId): void
@@ -82,5 +89,52 @@ class UserNavigationMenu extends Component
     public function render()
     {
         return view('livewire.user-navigation-menu');
+    }
+
+    private function buildSubscriptionSummary($user): array
+    {
+        $subscription = $user->activeSubscription;
+        $plan = $subscription?->plan;
+        $wallet = $user->creditWallet;
+        $status = $subscription?->status;
+
+        $statusLabel = match ($status) {
+            'active' => 'Abo aktiv',
+            'trialing' => 'Testphase',
+            'paused' => 'Pausiert',
+            'cancelled' => 'Gekuendigt',
+            default => $subscription ? 'Abo inaktiv' : 'Kein Abo',
+        };
+
+        $statusClasses = match ($status) {
+            'active' => 'bg-emerald-100 text-emerald-700 ring-emerald-200',
+            'trialing' => 'bg-sky-100 text-sky-700 ring-sky-200',
+            'paused' => 'bg-amber-100 text-amber-700 ring-amber-200',
+            'cancelled' => 'bg-rose-100 text-rose-700 ring-rose-200',
+            default => 'bg-slate-100 text-slate-600 ring-slate-200',
+        };
+
+        $iconClasses = match ($status) {
+            'active' => 'text-emerald-600',
+            'trialing' => 'text-sky-600',
+            'paused' => 'text-amber-600',
+            'cancelled' => 'text-rose-600',
+            default => 'text-slate-400',
+        };
+
+        return [
+            'has_subscription' => (bool) $subscription,
+            'status' => $status,
+            'status_label' => $statusLabel,
+            'status_classes' => $statusClasses,
+            'icon_classes' => $iconClasses,
+            'plan_name' => $plan?->name ?: 'Free',
+            'ends_at' => $subscription?->ends_at?->format('d.m.Y'),
+            'monthly_credits' => (int) ($plan?->monthly_credits ?? 0),
+            'available_credits' => (int) ($wallet?->available_credits ?? 0),
+            'reserved_credits' => (int) ($wallet?->reserved_credits ?? 0),
+            'used_credits' => (int) ($wallet?->used_credits ?? 0),
+            'bonus_credits' => (int) ($wallet?->bonus_credits ?? 0),
+        ];
     }
 }

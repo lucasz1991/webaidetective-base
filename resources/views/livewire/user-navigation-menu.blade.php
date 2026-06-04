@@ -197,6 +197,84 @@
                                      </div>
                                 </div>
                                 @endif
+
+                                @if (Auth::check())
+                                <div
+                                    class="relative hidden md:block"
+                                    x-data="{ open: false, closeTimer: null }"
+                                    @mouseenter="if (closeTimer) clearTimeout(closeTimer); open = true"
+                                    @mouseleave="closeTimer = setTimeout(() => open = false, 120)"
+                                >
+                                    <button
+                                        type="button"
+                                        class="block rounded-full p-1 transition hover:bg-slate-100"
+                                        @focus="open = true"
+                                        @blur="closeTimer = setTimeout(() => open = false, 120)"
+                                    >
+                                        <span class="relative flex items-center justify-center">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" class="{{ $subscriptionSummary['icon_classes'] ?? 'text-slate-400' }}">
+                                                <path d="M12 3l2.35 4.76 5.25.76-3.8 3.7.9 5.23L12 15.9l-4.7 2.55.9-5.23-3.8-3.7 5.25-.76L12 3Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                                            </svg>
+                                            <span class="absolute -bottom-1 -right-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 {{ $subscriptionSummary['status_classes'] ?? 'bg-slate-100 text-slate-600 ring-slate-200' }}">
+                                                {{ $subscriptionSummary['has_subscription'] ? 'Pro' : 'Free' }}
+                                            </span>
+                                        </span>
+                                    </button>
+
+                                    <div
+                                        x-show="open"
+                                        x-cloak
+                                        x-transition
+                                        class="absolute right-0 mt-2 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+                                    >
+                                        <div class="border-b border-slate-100 bg-slate-50 px-4 py-3">
+                                            <div class="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <div class="text-sm font-bold text-slate-900">{{ $subscriptionSummary['plan_name'] ?? 'Free' }}</div>
+                                                    <div class="mt-1 text-xs text-slate-500">Abo und Credits</div>
+                                                </div>
+                                                <span class="rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 {{ $subscriptionSummary['status_classes'] ?? 'bg-slate-100 text-slate-600 ring-slate-200' }}">
+                                                    {{ $subscriptionSummary['status_label'] ?? 'Kein Abo' }}
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <div class="space-y-3 p-4 text-sm text-slate-700">
+                                            <div class="grid grid-cols-2 gap-3">
+                                                <div class="rounded-lg border border-slate-200 bg-white p-3">
+                                                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Verfuegbar</div>
+                                                    <div class="mt-1 text-lg font-bold text-slate-950">{{ number_format($subscriptionSummary['available_credits'] ?? 0, 0, ',', '.') }}</div>
+                                                </div>
+                                                <div class="rounded-lg border border-slate-200 bg-white p-3">
+                                                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Monatlich</div>
+                                                    <div class="mt-1 text-lg font-bold text-slate-950">{{ number_format($subscriptionSummary['monthly_credits'] ?? 0, 0, ',', '.') }}</div>
+                                                </div>
+                                            </div>
+
+                                            <div class="space-y-2 text-xs text-slate-600">
+                                                <div class="flex items-center justify-between">
+                                                    <span>Bonus-Credits</span>
+                                                    <span class="font-semibold text-slate-900">{{ number_format($subscriptionSummary['bonus_credits'] ?? 0, 0, ',', '.') }}</span>
+                                                </div>
+                                                <div class="flex items-center justify-between">
+                                                    <span>Reserviert</span>
+                                                    <span class="font-semibold text-slate-900">{{ number_format($subscriptionSummary['reserved_credits'] ?? 0, 0, ',', '.') }}</span>
+                                                </div>
+                                                <div class="flex items-center justify-between">
+                                                    <span>Verbraucht</span>
+                                                    <span class="font-semibold text-slate-900">{{ number_format($subscriptionSummary['used_credits'] ?? 0, 0, ',', '.') }}</span>
+                                                </div>
+                                                @if(!empty($subscriptionSummary['ends_at']))
+                                                <div class="flex items-center justify-between">
+                                                    <span>Laeuft bis</span>
+                                                    <span class="font-semibold text-slate-900">{{ $subscriptionSummary['ends_at'] }}</span>
+                                                </div>
+                                                @endif
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                @endif
                             </div>
 
 
@@ -312,6 +390,27 @@
                                             <div class="md:hidden block mt-6">
                                                 <div class="border-t border-gray-200 mb-6"></div>
                                                 @auth
+                                                    <div class="mx-4 mb-5 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                                                        <div class="flex items-center justify-between gap-3">
+                                                            <div>
+                                                                <div class="text-sm font-bold text-slate-900">{{ $subscriptionSummary['plan_name'] ?? 'Free' }}</div>
+                                                                <div class="mt-1 text-xs text-slate-500">Abo und Credits</div>
+                                                            </div>
+                                                            <span class="rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1 {{ $subscriptionSummary['status_classes'] ?? 'bg-slate-100 text-slate-600 ring-slate-200' }}">
+                                                                {{ $subscriptionSummary['status_label'] ?? 'Kein Abo' }}
+                                                            </span>
+                                                        </div>
+                                                        <div class="mt-4 grid grid-cols-2 gap-3 text-xs text-slate-600">
+                                                            <div class="rounded-lg bg-white p-3">
+                                                                <div class="font-semibold uppercase tracking-wide text-slate-500">Verfuegbar</div>
+                                                                <div class="mt-1 text-base font-bold text-slate-950">{{ number_format($subscriptionSummary['available_credits'] ?? 0, 0, ',', '.') }}</div>
+                                                            </div>
+                                                            <div class="rounded-lg bg-white p-3">
+                                                                <div class="font-semibold uppercase tracking-wide text-slate-500">Monatlich</div>
+                                                                <div class="mt-1 text-base font-bold text-slate-950">{{ number_format($subscriptionSummary['monthly_credits'] ?? 0, 0, ',', '.') }}</div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                     <div class="block px-4 py-2 text-xs text-gray-400">
                                                         {{ __('Konto verwalten') }}
                                                     </div>
