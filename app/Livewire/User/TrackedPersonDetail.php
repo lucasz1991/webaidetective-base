@@ -8,6 +8,7 @@ use App\Models\InstagramProfile;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
 use App\Models\TrackedPersonInstagramSnapshot;
+use App\Support\PublicAssetUrl;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
@@ -1208,11 +1209,7 @@ class TrackedPersonDetail extends Component
 
     private function profileImageUrlForInstagramProfile(InstagramProfile $profile): ?string
     {
-        if (filled($profile->profile_image_path)) {
-            return Storage::disk('public')->url($profile->profile_image_path);
-        }
-
-        return null;
+        return PublicAssetUrl::fromStorageOrRemote($profile->profile_image_path, $profile->profile_image_url);
     }
 
     private function nullableTrim(?string $value): ?string

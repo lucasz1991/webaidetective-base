@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\PublicAssetUrl;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -66,11 +67,7 @@ class TrackedPersonInstagramSnapshot extends Model
 
     public function getProfileImageStorageUrlAttribute(): ?string
     {
-        if (! $this->profile_image_path) {
-            return null;
-        }
-
-        return Storage::disk('public')->url($this->profile_image_path);
+        return PublicAssetUrl::fromStorageOrRemote($this->profile_image_path, $this->profile_image_url);
     }
 
     public function getScreenshotUrlAttribute(): ?string

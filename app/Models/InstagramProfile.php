@@ -2,11 +2,11 @@
 
 namespace App\Models;
 
+use App\Support\PublicAssetUrl;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Support\Facades\Storage;
 
 class InstagramProfile extends Model
 {
@@ -74,10 +74,6 @@ class InstagramProfile extends Model
 
     public function getProfileImageStorageUrlAttribute(): ?string
     {
-        if (! $this->profile_image_path) {
-            return null;
-        }
-
-        return Storage::disk('public')->url($this->profile_image_path);
+        return PublicAssetUrl::fromStorageOrRemote($this->profile_image_path, $this->profile_image_url);
     }
 }

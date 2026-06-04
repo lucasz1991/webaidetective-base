@@ -172,6 +172,98 @@ function visibleDegree(node) {
     return visibleConnectedEdges(node).length;
 }
 
+function edgeVisibleForState(edge, state) {
+    const type = edge.data('networkType');
+
+    if (type === 'public-profile') {
+        return state.showPublic;
+    }
+
+    if (type === 'inferred') {
+        return state.showInferred;
+    }
+
+    if (type === 'tracked-list' || type === 'tracked-profile-rel') {
+        return state.showTracked;
+    }
+
+    return true;
+}
+
+function visibleDegreeForState(node, state) {
+    return node.connectedEdges().filter((edge) => edgeVisibleForState(edge, state)).length;
+}
+
+function networkMaxVisibleProfiles(root) {
+    const limit = Number(root.dataset.networkMaxVisibleProfiles || 100);
+
+    return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 100;
+}
+
+function ensureMinDegreeOption(root, value) {
+    const control = root.querySelector('[data-network-filter-min-degree]');
+
+    if (!control) {
+        return;
+    }
+
+    const normalized = String(Math.max(0, Number(value) || 0));
+    const exists = Array.from(control.options).some((option) => option.value === normalized);
+
+    if (exists) {
+        return;
+    }
+
+    const option = document.createElement('option');
+    option.value = normalized;
+    option.textContent = normalized;
+    control.append(option);
+    Array.from(control.options)
+        .sort((left, right) => Number(left.value) - Number(right.value))
+        .forEach((sortedOption) => control.append(sortedOption));
+}
+
+function recommendedMinDegree(root, cy, state) {
+    const nonPersonNodes = cy.nodes().filter((node) => node.data('type') !== 'person');
+    const limit = networkMaxVisibleProfiles(root);
+
+    if (nonPersonNodes.length <= limit) {
+        return 0;
+    }
+
+    const degrees = nonPersonNodes.map((node) => visibleDegreeForState(node, state)).sort((left, right) => right - left);
+
+    if (!degrees.length) {
+        return 0;
+    }
+
+    let threshold = Math.max(0, Number(degrees[Math.min(limit - 1, degrees.length - 1)]) || 0);
+
+    while (degrees.filter((degree) => degree >= threshold).length > limit) {
+        threshold += 1;
+    }
+
+    return threshold;
+}
+
+function applyAutoMinDegreeIfNeeded(root, cy) {
+    const state = instances.get(root);
+
+    if (!state || state.hasStoredMinDegree) {
+        return;
+    }
+
+    const nextMinDegree = recommendedMinDegree(root, cy, state);
+
+    if (state.minDegree === nextMinDegree && state.autoMinDegreeApplied) {
+        return;
+    }
+
+    state.minDegree = nextMinDegree;
+    state.autoMinDegreeApplied = true;
+    ensureMinDegreeOption(root, nextMinDegree);
+}
+
 function nodeActionDetail(root, node, extra = {}) {
     return {
         mapId: root.dataset.networkMapId || null,
@@ -464,6 +556,7 @@ function applyFilters(root, cy) {
     const minDegreeControl = root.querySelector('[data-network-filter-min-degree]');
 
     if (minDegreeControl) {
+        ensureMinDegreeOption(root, state.minDegree);
         minDegreeControl.value = String(state.minDegree);
     }
 
@@ -512,7 +605,8 @@ function bindControls(root, cy) {
     });
 
     root.querySelector('[data-network-filter-min-degree]')?.addEventListener('change', (event) => {
-        state.minDegree = Math.max(1, Number(event.target.value) || 1);
+        state.minDegree = Math.max(0, Number(event.target.value) || 0);
+        state.hasStoredMinDegree = true;
         applyFilters(root, cy);
     });
 
@@ -717,12 +811,17 @@ async function initNetworkMap(root) {
         const resizeHandler = () => fitGraph(cy);
 
         const storedFilters = readStoredFilters(root);
+        const storedMinDegree = Number.isFinite(Number(storedFilters.minDegree))
+            ? Math.max(0, Number(storedFilters.minDegree))
+            : null;
         const state = {
             cy,
             showPublic: storedFilters.showPublic ?? true,
             showInferred: storedFilters.showInferred ?? true,
             showTracked: storedFilters.showTracked ?? true,
-            minDegree: Math.max(1, Number(storedFilters.minDegree ?? 2) || 2),
+            minDegree: storedMinDegree ?? 0,
+            hasStoredMinDegree: storedMinDegree !== null,
+            autoMinDegreeApplied: false,
             selectedId: null,
             resizeHandler,
             loadGeneration: 0,
@@ -736,6 +835,7 @@ async function initNetworkMap(root) {
         activeRoots.add(root);
 
         bindControls(root, cy);
+        applyAutoMinDegreeIfNeeded(root, cy);
         applyFilters(root, cy);
 
         cy.on('tap', 'node', (event) => {
@@ -785,6 +885,7 @@ async function initNetworkMap(root) {
         });
 
         if (initialElements.length) {
+            updateBuildStatus(root, { visible: false, state: 'done' });
             window.setTimeout(() => arrangeVisibleGraph(root, cy, false), 150);
         } else {
             updateBuildStatus(root, {
@@ -974,6 +1075,8 @@ async function loadPreparedGraph(root, detail) {
         return;
     }
 
+    applyAutoMinDegreeIfNeeded(root, cy);
+    applyFilters(root, cy);
     updateBuildStatus(root, {
         visible: true,
         label: 'Netzwerk geladen',

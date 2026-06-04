@@ -3,6 +3,7 @@
     data-network-map-root
     data-network-map-id="{{ $mapId }}"
     data-network-filter-scope="{{ $contextTrackedPersonId ? 'person-'.$contextTrackedPersonId : 'global' }}"
+    data-network-max-visible-profiles="100"
     data-network-lazy="true"
     wire:init="prepareGraph"
     wire:loading.class="cursor-wait"
@@ -186,6 +187,7 @@
                         <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-slate-600">
                             <span>Min. Verbindungen</span>
                             <select data-network-filter-min-degree class="border-0 bg-transparent p-0 text-xs font-bold text-slate-900 focus:ring-0">
+                                <option value="0">0</option>
                                 <option value="1">1</option>
                                 <option value="2" selected>2</option>
                                 <option value="3">3</option>

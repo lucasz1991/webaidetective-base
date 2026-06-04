@@ -6,6 +6,7 @@ use App\Models\InstagramProfile;
 use App\Models\InstagramProfileRelationship;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
+use App\Support\PublicAssetUrl;
 use App\Models\User;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
@@ -1229,7 +1230,7 @@ class NetworkMap extends Component
     private function profileImageUrlForPerson(TrackedPerson $person): ?string
     {
         if (filled($person->instagram_profile_image_path)) {
-            return Storage::disk('public')->url($person->instagram_profile_image_path);
+            return PublicAssetUrl::storage($person->instagram_profile_image_path);
         }
 
         if (filled($person->latestInstagramSnapshot?->profile_image_storage_url)) {
@@ -1245,11 +1246,7 @@ class NetworkMap extends Component
             return null;
         }
 
-        if (filled($profile->profile_image_path)) {
-            return Storage::disk('public')->url($profile->profile_image_path);
-        }
-
-        return null;
+        return PublicAssetUrl::fromStorageOrRemote($profile->profile_image_path, $profile->profile_image_url);
     }
 
     private function loadSnapshotRelationshipItems(?TrackedPersonInstagramSnapshot $snapshot, string $payloadKey): array
