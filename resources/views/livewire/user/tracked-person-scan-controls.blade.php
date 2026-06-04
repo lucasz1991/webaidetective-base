@@ -6,6 +6,19 @@
             'error' => 'border-rose-200 bg-rose-50 text-rose-900',
             default => 'border-slate-200 bg-slate-50 text-slate-800',
         };
+        $profileVisibility = $trackedPerson->latestInstagramSnapshot?->profile_visibility ?? 'unknown';
+        $profileIsPublic = $profileVisibility === 'public';
+        $profileIsPrivate = $profileVisibility === 'private';
+        $profileVisibilityLabel = match ($profileVisibility) {
+            'public' => 'Oeffentlich',
+            'private' => 'Privat',
+            default => 'Unbekannt',
+        };
+        $profileVisibilityClass = match ($profileVisibility) {
+            'public' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+            'private' => 'bg-slate-100 text-slate-700 ring-slate-200',
+            default => 'bg-amber-50 text-amber-800 ring-amber-200',
+        };
     @endphp
 
     <div
@@ -78,7 +91,10 @@
     @endif
 
     <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
-        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Scan starten</div>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Scan starten</div>
+            <span class="rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 {{ $profileVisibilityClass }}">{{ $profileVisibilityLabel }}</span>
+        </div>
         <div class="mt-3 grid gap-2 sm:grid-cols-2">
             <button
                 type="button"
@@ -95,6 +111,7 @@
                 wire:click="analyzeInstagram"
                 wire:loading.attr="disabled"
                 wire:target="analyzeInstagram"
+                @disabled(! $trackedPerson->instagram_username || ! $profileIsPublic)
                 class="inline-flex justify-center rounded-lg bg-pink-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pink-700 disabled:cursor-wait disabled:opacity-60"
             >
                 <span wire:loading.remove wire:target="analyzeInstagram">Vollanalyse</span>
@@ -125,7 +142,7 @@
                 wire:click="scanInstagramSuggestions"
                 wire:loading.attr="disabled"
                 wire:target="scanInstagramSuggestions"
-                @disabled(! $trackedPerson->instagram_username)
+                @disabled(! $trackedPerson->instagram_username || ! $profileIsPrivate)
                 class="inline-flex justify-center rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-3 py-2 text-sm font-semibold text-fuchsia-700 shadow-sm hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
                 <span wire:loading.remove wire:target="scanInstagramSuggestions">Vorschlaege scannen</span>

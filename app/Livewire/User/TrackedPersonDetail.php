@@ -199,6 +199,14 @@ class TrackedPersonDetail extends Component
 
     public function analyzeInstagram(): void
     {
+        $trackedPerson = $this->resolveTrackedPerson()->loadMissing('latestInstagramSnapshot');
+
+        if (! $this->trackedPersonInstagramProfileIsPublic($trackedPerson)) {
+            $this->setDetailStatus('Die Vollanalyse ist nur fuer als oeffentlich erkannte Instagram-Profile verfuegbar.', 'partial');
+
+            return;
+        }
+
         $this->runInstagramAnalysis(true);
     }
 
@@ -282,10 +290,16 @@ class TrackedPersonDetail extends Component
         @set_time_limit(0);
         @ignore_user_abort(false);
 
-        $trackedPerson = $this->resolveTrackedPerson();
+        $trackedPerson = $this->resolveTrackedPerson()->loadMissing('latestInstagramSnapshot');
 
         if (! $trackedPerson->instagram_username) {
             $this->setDetailStatus('Fuer diese Person ist kein Instagram-Name hinterlegt.', 'error');
+
+            return;
+        }
+
+        if (! $this->trackedPersonInstagramProfileIsPrivate($trackedPerson)) {
+            $this->setDetailStatus('Vorschlag-Scans sind nur fuer als privat erkannte Instagram-Profile verfuegbar.', 'partial');
 
             return;
         }
@@ -349,6 +363,12 @@ class TrackedPersonDetail extends Component
             return;
         }
 
+        if ($fullScan && ! $this->trackedPersonInstagramProfileIsPublic($trackedPerson->loadMissing('latestInstagramSnapshot'))) {
+            $this->setDetailStatus('Die Vollanalyse ist nur fuer als oeffentlich erkannte Instagram-Profile verfuegbar.', 'partial');
+
+            return;
+        }
+
         $progress = fn (array $state) => $this->streamInstagramProgress($state);
         $this->cancelInstagramScanWhenClientDisconnects($trackedPerson->id);
 
@@ -405,7 +425,7 @@ class TrackedPersonDetail extends Component
             if (! $queuedFullScan) {
                 $trackedPerson->forceFill([
                     'last_instagram_status_level' => 'partial',
-                    'last_instagram_status_message' => 'Follower-/Gefolgt-Aenderung erkannt; Instagram-Vollanalyse ist bereits eingereiht oder laeuft.',
+                    'last_instagram_status_message' => 'Instagram-Profil-/Listen-Aenderung erkannt; Instagram-Vollanalyse ist bereits eingereiht oder laeuft.',
                 ])->save();
             }
         }
@@ -485,6 +505,9 @@ class TrackedPersonDetail extends Component
         $stoppedByUser = (bool) data_get($relationshipList, 'gracefullyStopped', false)
             || (bool) data_get($snapshot->raw_payload, 'gracefullyStopped', false);
         $available = (bool) data_get($relationshipList, 'available', false);
+        $queuedFullScan = MonitorTrackedPersonInstagram::shouldRunFullScanAfterSnapshot($snapshot)
+            ? MonitorTrackedPersonInstagram::dispatchFullScanIfNotQueued($trackedPerson->id, true)
+            : false;
 
         $this->setDetailStatus(
             ($stoppedByUser ? $label.'-Scan wurde beendet und gespeichert: ' : $label.'-Scan abgeschlossen: ')
@@ -493,7 +516,8 @@ class TrackedPersonDetail extends Component
             .number_format($observedCount, 0, ',', '.')
             .' zuletzt gesehen.'
             .($stoppedByUser ? ' Der Scan kann spaeter erneut gestartet werden.' : '')
-            .($rateLimited ? ' Instagram hat diese Liste per Rate-Limit blockiert; bisherige Eintraege bleiben erhalten.' : ''),
+            .($rateLimited ? ' Instagram hat diese Liste per Rate-Limit blockiert; bisherige Eintraege bleiben erhalten.' : '')
+            .($queuedFullScan ? ' Eine Vollanalyse wurde als Hintergrund-Job eingereiht.' : ''),
             $snapshot->status_level === 'success' && $available && ! $rateLimited && ! $stoppedByUser ? 'success' : 'partial',
         );
         $this->dispatch('tracked-person-refresh');
@@ -853,7 +877,7 @@ class TrackedPersonDetail extends Component
     {
         if ($this->compact) {
             return view('livewire.user.tracked-person-scan-controls', [
-                'trackedPerson' => $this->resolveTrackedPerson(),
+                'trackedPerson' => $this->resolveTrackedPerson()->load('latestInstagramSnapshot'),
             ]);
         }
 
@@ -956,6 +980,27 @@ class TrackedPersonDetail extends Component
         $this->notify_x_changes = (bool) $trackedPerson->notify_x_changes;
         $this->notify_youtube_changes = (bool) $trackedPerson->notify_youtube_changes;
         $this->notify_snapchat_changes = (bool) $trackedPerson->notify_snapchat_changes;
+    }
+
+    private function trackedPersonInstagramProfileIsPublic(TrackedPerson $trackedPerson): bool
+    {
+        return $this->trackedPersonInstagramProfileVisibility($trackedPerson) === 'public';
+    }
+
+    private function trackedPersonInstagramProfileIsPrivate(TrackedPerson $trackedPerson): bool
+    {
+        return $this->trackedPersonInstagramProfileVisibility($trackedPerson) === 'private';
+    }
+
+    private function trackedPersonInstagramProfileVisibility(TrackedPerson $trackedPerson): string
+    {
+        $snapshot = $trackedPerson->latestInstagramSnapshot;
+
+        if ($snapshot) {
+            return $snapshot->profile_visibility;
+        }
+
+        return 'unknown';
     }
 
     private function setDetailStatus(string $message, string $level): void

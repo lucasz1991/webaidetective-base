@@ -44,7 +44,7 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
                 ->whereKey($trackedPersonId)
                 ->update([
                     'last_instagram_status_level' => 'partial',
-                    'last_instagram_status_message' => 'Follower-/Gefolgt-Aenderung erkannt; Instagram-Vollanalyse wurde als Hintergrund-Job eingereiht.',
+                    'last_instagram_status_message' => 'Instagram-Profil-/Listen-Aenderung erkannt; Instagram-Vollanalyse wurde als Hintergrund-Job eingereiht.',
                 ]);
 
             self::dispatch($trackedPersonId, true, $sendNotifications, true);
@@ -59,20 +59,32 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
 
     public static function shouldRunFullScanAfterSnapshot($snapshot): bool
     {
-        if (data_get($snapshot?->raw_payload, 'analysisPolicy.scanMode') !== 'mini') {
+        if (data_get($snapshot?->raw_payload, 'analysisPolicy.scanMode') === 'full') {
             return false;
         }
 
         return collect($snapshot?->detected_changes ?? [])
-            ->pluck('field')
-            ->contains(fn ($field) => in_array($field, [
-                'followers_count',
-                'following_count',
-                'followers_list_added',
-                'followers_list_removed',
-                'following_list_added',
-                'following_list_removed',
-            ], true));
+            ->contains(function ($change): bool {
+                if (! is_array($change)) {
+                    return false;
+                }
+
+                $field = $change['field'] ?? null;
+
+                if ($field === 'profile_visibility') {
+                    return ($change['before'] ?? null) === 'private'
+                        && ($change['after'] ?? null) === 'public';
+                }
+
+                return in_array($field, [
+                    'followers_count',
+                    'following_count',
+                    'followers_list_added',
+                    'followers_list_removed',
+                    'following_list_added',
+                    'following_list_removed',
+                ], true);
+            });
     }
 
     public function handle(): void
@@ -150,11 +162,11 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             if (! $queued) {
                 $trackedPerson->forceFill([
                     'last_instagram_status_level' => 'partial',
-                    'last_instagram_status_message' => 'Follower-/Gefolgt-Aenderung erkannt; Instagram-Vollanalyse ist bereits eingereiht oder laeuft.',
+                    'last_instagram_status_message' => 'Instagram-Profil-/Listen-Aenderung erkannt; Instagram-Vollanalyse ist bereits eingereiht oder laeuft.',
                 ])->save();
             }
 
-            Log::info('Follower-/Gefolgt-Aenderung erkannt; Vollanalyse wurde nach Mini-Scan behandelt.', [
+            Log::info('Instagram-Profil-/Listen-Aenderung erkannt; Vollanalyse wurde nach Mini-Scan behandelt.', [
                 'tracked_person_id' => $trackedPerson->id,
                 'instagram_username' => $trackedPerson->instagram_username,
                 'queued' => $queued,

@@ -98,6 +98,17 @@
         @forelse($trackedPeople as $trackedPerson)
             @php
                 $isSelected = $selectedTrackedPersonId === $trackedPerson->id;
+                $profileVisibility = $trackedPerson->latestInstagramSnapshot?->profile_visibility ?? 'unknown';
+                $profileVisibilityLabel = match ($profileVisibility) {
+                    'public' => 'Oeffentlich',
+                    'private' => 'Privat',
+                    default => 'Unbekannt',
+                };
+                $profileVisibilityClass = match ($profileVisibility) {
+                    'public' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+                    'private' => 'bg-slate-100 text-slate-700 ring-slate-200',
+                    default => 'bg-amber-50 text-amber-800 ring-amber-200',
+                };
             @endphp
 
             <article
@@ -132,7 +143,10 @@
                             </div>
                         </div>
                         <div class="min-w-0">
-                            <div class="truncate text-base font-bold text-slate-950">{{ $trackedPerson->display_name }}</div>
+                            <div class="flex min-w-0 flex-wrap items-center gap-2">
+                                <div class="truncate text-base font-bold text-slate-950">{{ $trackedPerson->display_name }}</div>
+                                <span class="rounded-lg px-2 py-0.5 text-[11px] font-semibold ring-1 {{ $profileVisibilityClass }}">{{ $profileVisibilityLabel }}</span>
+                            </div>
                             <div class="mt-0.5 truncate text-sm text-slate-600">
                                 {{ $trackedPerson->instagram_username ? '@'.$trackedPerson->instagram_username : 'Instagram-Handle fehlt' }}
                             </div>
@@ -186,7 +200,18 @@
                 $selectedLastInstagramAnalyzedAt = $selectedTrackedPerson?->last_instagram_analyzed_at
                     ? $selectedTrackedPerson->last_instagram_analyzed_at->copy()->timezone(config('app.timezone'))
                     : null;
-                $selectedProfileChangeFields = ['profile_image_hash', 'followers_count', 'following_count', 'posts_count'];
+                $selectedProfileVisibility = $selectedTrackedPerson?->latestInstagramSnapshot?->profile_visibility ?? 'unknown';
+                $selectedProfileVisibilityLabel = match ($selectedProfileVisibility) {
+                    'public' => 'Oeffentlich',
+                    'private' => 'Privat',
+                    default => 'Unbekannt',
+                };
+                $selectedProfileVisibilityClass = match ($selectedProfileVisibility) {
+                    'public' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+                    'private' => 'bg-slate-100 text-slate-700 ring-slate-200',
+                    default => 'bg-amber-50 text-amber-800 ring-amber-200',
+                };
+                $selectedProfileChangeFields = ['profile_image_hash', 'followers_count', 'following_count', 'posts_count', 'profile_visibility'];
                 $selectedRecentChangeSnapshots = $selectedTrackedPerson && $selectedTrackedPerson->relationLoaded('instagramSnapshots')
                     ? $selectedTrackedPerson->instagramSnapshots
                     : collect();
@@ -236,6 +261,7 @@
                                     <div class="flex flex-wrap items-center gap-2">
                                         <h4 class="truncate text-xl font-bold text-slate-950">{{ $selectedTrackedPerson->display_name }}</h4>
                                         <span class="rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 {{ $selectedStatusBadgeClass }}">{{ $selectedStatusLabel }}</span>
+                                        <span class="rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 {{ $selectedProfileVisibilityClass }}">{{ $selectedProfileVisibilityLabel }}</span>
                                     </div>
 
                                     <div class="mt-1 text-sm text-slate-600">
@@ -283,6 +309,10 @@
                                     <span class="font-semibold">{{ $selectedLatestChange['label'] ?? $selectedLatestChange['field'] ?? 'Aenderung' }}:</span>
                                     @if(($selectedLatestChange['field'] ?? null) === 'profile_image_hash')
                                         <span>Profilbild wurde aktualisiert.</span>
+                                    @elseif(($selectedLatestChange['field'] ?? null) === 'profile_visibility')
+                                        <span>{{ match ($selectedLatestChange['before'] ?? null) { 'public' => 'Oeffentlich', 'private' => 'Privat', default => 'Unbekannt' } }}</span>
+                                        <span class="mx-1">-&gt;</span>
+                                        <span>{{ match ($selectedLatestChange['after'] ?? null) { 'public' => 'Oeffentlich', 'private' => 'Privat', default => 'Unbekannt' } }}</span>
                                     @else
                                         <span>{{ filled($selectedLatestChange['before'] ?? null) ? number_format((int) $selectedLatestChange['before']) : '-' }}</span>
                                         <span class="mx-1">-&gt;</span>

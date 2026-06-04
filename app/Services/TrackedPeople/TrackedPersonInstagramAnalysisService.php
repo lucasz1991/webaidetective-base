@@ -1152,6 +1152,21 @@ class TrackedPersonInstagramAnalysisService
             'following_count' => 'Gefolgt',
         ];
         $changes = [];
+        $previousVisibility = $this->snapshotProfileVisibility($previousSnapshot);
+        $currentVisibility = $this->extractedProfileVisibility($extracted);
+
+        if (
+            $currentVisibility !== 'unknown'
+            && $previousVisibility !== 'unknown'
+            && $this->valuesDiffer($previousVisibility, $currentVisibility)
+        ) {
+            $changes[] = [
+                'field' => 'profile_visibility',
+                'label' => 'Profilstatus',
+                'before' => $previousVisibility,
+                'after' => $currentVisibility,
+            ];
+        }
 
         foreach ($labels as $field => $label) {
             $before = $previousSnapshot->{$field};
@@ -1217,6 +1232,50 @@ class TrackedPersonInstagramAnalysisService
         }
 
         return $changes;
+    }
+
+    private function snapshotProfileVisibility(?TrackedPersonInstagramSnapshot $snapshot): string
+    {
+        if (! $snapshot) {
+            return 'unknown';
+        }
+
+        $visibility = data_get($snapshot->raw_payload, 'extractedProfile.profileVisibility');
+
+        if (in_array($visibility, ['public', 'private'], true)) {
+            return $visibility;
+        }
+
+        $isPrivate = data_get($snapshot->raw_payload, 'extractedProfile.isPrivate');
+
+        if ($isPrivate === true) {
+            return 'private';
+        }
+
+        if ($isPrivate === false) {
+            return 'public';
+        }
+
+        return 'unknown';
+    }
+
+    private function extractedProfileVisibility(array $extracted): string
+    {
+        $visibility = $extracted['profile_visibility'] ?? null;
+
+        if (in_array($visibility, ['public', 'private'], true)) {
+            return $visibility;
+        }
+
+        if (($extracted['is_private'] ?? null) === true) {
+            return 'private';
+        }
+
+        if (($extracted['is_private'] ?? null) === false) {
+            return 'public';
+        }
+
+        return 'unknown';
     }
 
     private function valuesDiffer(mixed $before, mixed $after): bool

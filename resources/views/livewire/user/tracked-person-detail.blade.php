@@ -19,7 +19,7 @@
             'error' => 'bg-rose-50 text-rose-700 ring-rose-200',
             default => 'bg-slate-100 text-slate-600 ring-slate-200',
         };
-        $isStandaloneDetailPage = request()->routeIs('tracked-people.show');
+        $isStandaloneDetailPage = ! ($compact ?? false);
         $latestSnapshot = $trackedPerson->latestInstagramSnapshot;
         $latestCountSources = data_get($latestSnapshot?->raw_payload, 'extractedProfile.countSources', []);
         $latestCountWarnings = data_get($latestSnapshot?->raw_payload, 'extractedProfile.countWarnings', []);
@@ -161,6 +161,13 @@
             'private' => 'Privat',
             default => 'Unbekannt',
         };
+        $latestProfileVisibilityBadgeClass = match ($latestProfileVisibility) {
+            'public' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+            'private' => 'bg-slate-100 text-slate-700 ring-slate-200',
+            default => 'bg-amber-50 text-amber-800 ring-amber-200',
+        };
+        $latestProfileIsPublic = $latestProfileVisibility === 'public';
+        $latestProfileIsPrivate = $latestProfileVisibility === 'private';
         $countSourceLabels = [
             'body_text_preview' => 'sichtbarer Profiltext',
             'profile_dom' => 'sichtbarer Profil-DOM',
@@ -373,6 +380,7 @@
                 <div class="min-w-0 flex-1">
                     <div class="flex flex-wrap items-center gap-2">
                         <span class="rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 {{ $instagramStatusBadgeClass }}">{{ $instagramStatusLabel }}</span>
+                        <span class="rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 {{ $latestProfileVisibilityBadgeClass }}">{{ $latestProfileVisibilityLabel }}</span>
                         @if($trackedPerson->monitoring_enabled)
                             <span class="rounded-lg bg-slate-950 px-2.5 py-1 text-xs font-semibold text-white">Live</span>
                         @endif
@@ -434,7 +442,7 @@
                     wire:click="analyzeInstagram"
                     wire:loading.attr="disabled"
                     wire:target="analyzeInstagram"
-                    @disabled(! $trackedPerson->instagram_username)
+                    @disabled(! $trackedPerson->instagram_username || ! $latestProfileIsPublic)
                     class="inline-flex justify-center rounded-lg bg-gradient-to-r from-rose-500 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow hover:from-rose-600 hover:to-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     <span wire:loading.remove wire:target="analyzeInstagram">Instagram voll analysieren</span>
@@ -445,7 +453,7 @@
                     wire:click="scanInstagramSuggestions"
                     wire:loading.attr="disabled"
                     wire:target="scanInstagramSuggestions"
-                    @disabled(! $trackedPerson->instagram_username)
+                    @disabled(! $trackedPerson->instagram_username || ! $latestProfileIsPrivate)
                     class="inline-flex justify-center rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-4 py-2 text-sm font-semibold text-fuchsia-700 shadow-sm hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                     <span wire:loading.remove wire:target="scanInstagramSuggestions">Vorschlaege scannen</span>
@@ -1775,11 +1783,24 @@
                             <h4 class="font-semibold">Erkannte Aenderungen</h4>
                             <ul class="mt-2 space-y-2">
                                 @foreach($latestSnapshot->detected_changes as $change)
+                                    @php
+                                        $formatChangeValue = function ($value) use ($change) {
+                                            if (($change['field'] ?? null) === 'profile_visibility') {
+                                                return match ($value) {
+                                                    'public' => 'Oeffentlich',
+                                                    'private' => 'Privat',
+                                                    default => 'Unbekannt',
+                                                };
+                                            }
+
+                                            return filled($value) ? $value : '-';
+                                        };
+                                    @endphp
                                     <li>
                                         <span class="font-semibold">{{ $change['label'] ?? $change['field'] }}:</span>
-                                        <span>{{ filled($change['before'] ?? null) ? $change['before'] : '—' }}</span>
-                                        <span>→</span>
-                                        <span>{{ filled($change['after'] ?? null) ? $change['after'] : '—' }}</span>
+                                        <span>{{ $formatChangeValue($change['before'] ?? null) }}</span>
+                                        <span>-&gt;</span>
+                                        <span>{{ $formatChangeValue($change['after'] ?? null) }}</span>
                                     </li>
                                 @endforeach
                             </ul>

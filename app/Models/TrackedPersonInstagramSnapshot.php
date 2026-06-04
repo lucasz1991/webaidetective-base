@@ -45,6 +45,8 @@ class TrackedPersonInstagramSnapshot extends Model
     protected $appends = [
         'profile_image_storage_url',
         'screenshot_url',
+        'profile_visibility',
+        'is_private',
     ];
 
     public function trackedPerson(): BelongsTo
@@ -78,6 +80,36 @@ class TrackedPersonInstagramSnapshot extends Model
         }
 
         return Storage::disk('public')->url($this->screenshot_path);
+    }
+
+    public function getProfileVisibilityAttribute(): string
+    {
+        $visibility = data_get($this->raw_payload, 'extractedProfile.profileVisibility');
+
+        if (in_array($visibility, ['public', 'private'], true)) {
+            return $visibility;
+        }
+
+        $isPrivate = data_get($this->raw_payload, 'extractedProfile.isPrivate');
+
+        if ($isPrivate === true) {
+            return 'private';
+        }
+
+        if ($isPrivate === false) {
+            return 'public';
+        }
+
+        return 'unknown';
+    }
+
+    public function getIsPrivateAttribute(): ?bool
+    {
+        return match ($this->profile_visibility) {
+            'private' => true,
+            'public' => false,
+            default => null,
+        };
     }
 
     public function getAnalyzedAtAttribute($value): ?Carbon
