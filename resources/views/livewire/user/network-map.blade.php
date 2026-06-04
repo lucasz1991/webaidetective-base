@@ -54,6 +54,64 @@
     x-on:network-map-open-node.window="openNode($event)"
     x-on:click.outside="closeNodeMenu()"
 >
+    <div
+        wire:loading.flex
+        wire:target="scanPreviewProfile,scanProfileInGui"
+        class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
+    >
+        <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
+            <div class="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-pink-200 border-t-pink-600"></div>
+            <div class="mt-4 text-xs font-semibold uppercase tracking-wide text-pink-700" wire:stream="network-map-scan-phase">Start</div>
+            <h3 class="mt-2 text-lg font-bold text-slate-950">Instagram-Scan laeuft</h3>
+            <p class="mt-2 text-sm leading-6 text-slate-600" wire:stream="network-map-scan-message">
+                Das ausgewaehlte Profil wird direkt in der Oberflaeche gescannt.
+            </p>
+            <div wire:stream="network-map-scan-live-preview"></div>
+            <div class="mt-2 text-xs font-semibold text-slate-500" wire:stream="network-map-scan-live-counts"></div>
+            <div class="mt-5">
+                <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
+                    <span>Fortschritt</span>
+                    <span wire:stream="network-map-scan-percent">0%</span>
+                </div>
+                <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200" wire:stream="network-map-scan-bar">
+                    <div class="h-full rounded-full bg-pink-600" style="width: 0%"></div>
+                </div>
+            </div>
+            @if($primaryTrackedPersonId)
+                <div class="mt-5 flex justify-center">
+                    <button
+                        type="button"
+                        data-instagram-stop-url="{{ route('tracked-people.instagram.stop-scan', ['trackedPerson' => $primaryTrackedPersonId]) }}"
+                        onclick="
+                            const button = this;
+                            if (button.dataset.stopping === '1') return;
+                            button.dataset.stopping = '1';
+                            button.disabled = true;
+                            button.querySelector('[data-stop-label]').textContent = 'Stop wird angefordert...';
+                            fetch(button.dataset.instagramStopUrl, {
+                                method: 'POST',
+                                credentials: 'same-origin',
+                                headers: {
+                                    'Accept': 'application/json',
+                                    'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]')?.getAttribute('content') || '',
+                                },
+                            }).then(() => {
+                                button.querySelector('[data-stop-label]').textContent = 'Stop angefordert. Speichert...';
+                            }).catch(() => {
+                                button.dataset.stopping = '0';
+                                button.disabled = false;
+                                button.querySelector('[data-stop-label]').textContent = 'Stop erneut versuchen';
+                            });
+                        "
+                        class="inline-flex items-center justify-center rounded-lg border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-100 disabled:cursor-wait disabled:opacity-70"
+                    >
+                        <span data-stop-label>Scan beenden und speichern</span>
+                    </button>
+                </div>
+            @endif
+        </div>
+    </div>
+
     @unless($embedded)
     <div class="border-b border-slate-200 bg-white">
         <div class="container mx-auto px-5 py-5">

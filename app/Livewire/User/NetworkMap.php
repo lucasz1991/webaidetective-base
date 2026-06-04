@@ -1769,13 +1769,81 @@ class NetworkMap extends Component
             }
 
             $publicProfile = $this->firstOrCreateKnownProfile($trackedPerson, $profile);
-            app(TrackedPersonInstagramPublicProfileScanService::class)->scan($trackedPerson, null, $publicProfile->id);
+            $progress = fn (array $state) => $this->streamNetworkMapScanProgress($state);
+
+            $this->streamNetworkMapScanProgress([
+                'phase' => 'public-connections',
+                'percent' => 1,
+                'message' => 'Profil-Scan wird vorbereitet.',
+                'foundFollowers' => 0,
+                'foundFollowing' => 0,
+            ]);
+
+            app(TrackedPersonInstagramPublicProfileScanService::class)->scan($trackedPerson, $progress, $publicProfile->id);
             $this->forgetGraphCache((int) $user->id);
             $this->graphToken = null;
             $this->prepareGraph();
             $this->dispatch('notification', type: 'success', message: 'Profil-Scan wurde ausgefuehrt');
         } catch (\Throwable $e) {
+            $this->streamNetworkMapScanProgress([
+                'phase' => 'error',
+                'percent' => 100,
+                'message' => 'Profil-Scan fehlgeschlagen.',
+            ]);
             $this->dispatch('notification', type: 'error', message: 'Profil-Scan fehlgeschlagen: '.$e->getMessage());
+        }
+    }
+
+    private function streamNetworkMapScanProgress(array $state): void
+    {
+        $phase = match ($state['phase'] ?? 'analysis') {
+            'public-connections' => 'Verbindungen',
+            'done' => 'Fertig',
+            'error' => 'Fehler',
+            default => 'Scan',
+        };
+        $percent = max(0, min(100, (int) ($state['percent'] ?? 0)));
+        $message = (string) ($state['message'] ?? 'Instagram-Scan laeuft.');
+        $loaded = $state['loaded'] ?? null;
+        $expected = $state['expected'] ?? null;
+        $foundFollowers = $state['foundFollowers'] ?? null;
+        $foundFollowing = $state['foundFollowing'] ?? null;
+        $liveCounts = [];
+
+        if ($loaded !== null && $expected !== null) {
+            $liveCounts[] = 'Geprueft: '.number_format((int) $loaded, 0, ',', '.').' / '.number_format((int) $expected, 0, ',', '.');
+        }
+
+        if ($foundFollowers !== null || $foundFollowing !== null) {
+            $liveCounts[] = 'Gefunden: '
+                .number_format((int) $foundFollowers, 0, ',', '.').' Follower / '
+                .number_format((int) $foundFollowing, 0, ',', '.').' Gefolgt';
+        }
+
+        $this->stream('network-map-scan-phase', e($phase), true);
+        $this->stream('network-map-scan-message', e($message), true);
+        $this->stream('network-map-scan-live-counts', e(implode(' | ', $liveCounts)), true);
+        $this->stream('network-map-scan-percent', $percent.'%', true);
+        $this->stream(
+            'network-map-scan-bar',
+            '<div class="h-full rounded-full bg-pink-600 transition-all duration-300" style="width: '.$percent.'%"></div>',
+            true,
+        );
+
+        $screenshotUrl = is_scalar($state['liveScreenshotUrl'] ?? null)
+            ? trim((string) $state['liveScreenshotUrl'])
+            : '';
+
+        if ($screenshotUrl !== '') {
+            $this->stream(
+                'network-map-scan-live-preview',
+                '<div class="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-100 text-left">'
+                .'<div class="flex items-center justify-between border-b border-slate-200 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">'
+                .'<span>Browser-Vorschau</span><span>Live-Screenshot</span></div>'
+                .'<img src="'.e($screenshotUrl).'" alt="Aktuelle Browser-Vorschau des Instagram-Scans" class="block aspect-video w-full bg-slate-100 object-contain">'
+                .'</div>',
+                true,
+            );
         }
     }
 
