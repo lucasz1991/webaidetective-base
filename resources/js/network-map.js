@@ -172,6 +172,54 @@ function visibleDegree(node) {
     return visibleConnectedEdges(node).length;
 }
 
+function nodeActionDetail(root, node, extra = {}) {
+    return {
+        mapId: root.dataset.networkMapId || null,
+        id: node.id(),
+        type: node.data('type') || 'unknown',
+        isKnownProfile: Boolean(node.data('isKnownProfile')),
+        detailUrl: node.data('detailUrl') || null,
+        ...extra,
+    };
+}
+
+function dispatchOpenNode(root, node) {
+    window.dispatchEvent(new CustomEvent('network-map-open-node', {
+        detail: nodeActionDetail(root, node),
+    }));
+}
+
+function dispatchNodeMenu(root, node, x, y) {
+    window.dispatchEvent(new CustomEvent('network-map-node-menu', {
+        detail: nodeActionDetail(root, node, { x, y }),
+    }));
+}
+
+function bindOpenGestures(element, openCallback) {
+    let pressTimer = null;
+
+    element.addEventListener('dblclick', (event) => {
+        event.preventDefault();
+        openCallback(event);
+    });
+
+    element.addEventListener('touchstart', (event) => {
+        pressTimer = window.setTimeout(() => {
+            event.preventDefault();
+            openCallback(event);
+        }, 560);
+    }, { passive: false });
+
+    ['touchend', 'touchcancel', 'pointercancel', 'mouseup', 'mouseleave'].forEach((eventName) => {
+        element.addEventListener(eventName, () => {
+            if (pressTimer) {
+                window.clearTimeout(pressTimer);
+                pressTimer = null;
+            }
+        });
+    });
+}
+
 function arrangeVisibleGraph(root, cy, animate = true) {
     const visibleNodes = cy.nodes().not('.network-filtered');
 
@@ -323,12 +371,7 @@ function updateSelectionPanel(root, cy) {
     root.querySelector('[data-network-detail-edge-count]').textContent = edges.length;
 
     window.dispatchEvent(new CustomEvent('network-map-node-selected', {
-        detail: {
-            mapId: root.dataset.networkMapId || null,
-            id: node.id(),
-            type: node.data('type') || 'unknown',
-            isKnownProfile: Boolean(node.data('isKnownProfile')),
-        },
+        detail: nodeActionDetail(root, node),
     }));
 
     const connectedNodes = edges.connectedNodes().not(node);
@@ -357,6 +400,7 @@ function updateSelectionPanel(root, cy) {
         button.type = 'button';
         button.className = 'flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm transition hover:bg-white';
         button.addEventListener('click', () => setSelected(root, cy, connectedNode.id()));
+        bindOpenGestures(button, () => dispatchOpenNode(root, connectedNode));
 
         text.className = 'min-w-0 flex-1';
 
@@ -708,22 +752,31 @@ async function initNetworkMap(root) {
                 const containerRect = cy.container().getBoundingClientRect();
                 const rendered = event.renderedPosition || { x: cy.width() / 2, y: cy.height() / 2 };
 
-                window.dispatchEvent(new CustomEvent('network-map-node-menu', {
-                    detail: {
-                        mapId: root.dataset.networkMapId || null,
-                        id: node.id(),
-                        type: node.data('type') || 'unknown',
-                        isKnownProfile: Boolean(node.data('isKnownProfile')),
-                        x: Math.min(window.innerWidth - 240, Math.max(8, containerRect.left + rendered.x + 12)),
-                        y: Math.min(window.innerHeight - 150, Math.max(8, containerRect.top + rendered.y + 12)),
-                    },
-                }));
+                dispatchNodeMenu(
+                    root,
+                    node,
+                    Math.min(window.innerWidth - 240, Math.max(8, containerRect.left + rendered.x + 12)),
+                    Math.min(window.innerHeight - 150, Math.max(8, containerRect.top + rendered.y + 12)),
+                );
                 state.lastNodeTap = null;
 
                 return;
             }
 
             state.lastNodeTap = { id: node.id(), at: now };
+        });
+        cy.on('taphold', 'node', (event) => {
+            const node = event.target;
+            const containerRect = cy.container().getBoundingClientRect();
+            const rendered = event.renderedPosition || { x: cy.width() / 2, y: cy.height() / 2 };
+
+            setSelected(root, cy, node.id());
+            dispatchNodeMenu(
+                root,
+                node,
+                Math.min(window.innerWidth - 240, Math.max(8, containerRect.left + rendered.x + 12)),
+                Math.min(window.innerHeight - 150, Math.max(8, containerRect.top + rendered.y + 12)),
+            );
         });
         cy.on('tap', (event) => {
             if (event.target === cy) {

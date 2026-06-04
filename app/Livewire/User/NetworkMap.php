@@ -474,6 +474,7 @@ class NetworkMap extends Component
             'status' => $person->last_instagram_status_level ?: 'neutral',
             'detail' => $person->last_instagram_status_message ?: null,
             'isKnownProfile' => false,
+            'detailUrl' => route('tracked-people.show', ['trackedPersonId' => $person->id]),
         ];
 
         return $nodeId;

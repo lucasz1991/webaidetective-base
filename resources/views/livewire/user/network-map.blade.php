@@ -8,7 +8,7 @@
     wire:loading.class="cursor-wait"
     x-data="{
         networkNode: { id: null, type: null, isKnownProfile: false },
-        nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, x: 0, y: 0 },
+        nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, detailUrl: null, x: 0, y: 0 },
         setNetworkNode(event) {
             if (event.detail?.mapId && event.detail.mapId !== '{{ $mapId }}') {
                 return;
@@ -26,16 +26,32 @@
                 id: event.detail.id,
                 type: event.detail.type,
                 isKnownProfile: event.detail.isKnownProfile,
+                detailUrl: event.detail.detailUrl,
                 x: event.detail.x,
                 y: event.detail.y,
             };
         },
         closeNodeMenu() {
             this.nodeMenu.open = false;
+        },
+        openNode(event) {
+            if (event.detail?.mapId && event.detail.mapId !== '{{ $mapId }}') {
+                return;
+            }
+
+            if (event.detail?.type === 'person' && event.detail?.detailUrl) {
+                window.location.href = event.detail.detailUrl;
+                return;
+            }
+
+            if (event.detail?.id) {
+                this.$wire.openProfilePreview(event.detail.id);
+            }
         }
     }"
     x-on:network-map-node-selected.window="setNetworkNode($event)"
     x-on:network-map-node-menu.window="openNodeMenu($event)"
+    x-on:network-map-open-node.window="openNode($event)"
     x-on:click.outside="closeNodeMenu()"
 >
     @unless($embedded)
@@ -226,27 +242,37 @@
 
     <div
         x-cloak
-        x-show="nodeMenu.open && nodeMenu.type !== 'person'"
+        x-show="nodeMenu.open"
         x-bind:style="`left: ${nodeMenu.x}px; top: ${nodeMenu.y}px`"
         class="fixed z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white text-sm shadow-xl"
     >
-        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-on:click="$wire.openProfilePreview(nodeMenu.id); closeNodeMenu()">
+        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-show="nodeMenu.type === 'person' && nodeMenu.detailUrl" x-on:click="window.location.href = nodeMenu.detailUrl; closeNodeMenu()">
+            Person öffnen
+        </button>
+        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-show="nodeMenu.type !== 'person'" x-on:click="$wire.openProfilePreview(nodeMenu.id); closeNodeMenu()">
             Profil öffnen
         </button>
-        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-pink-700 hover:bg-pink-50" x-show="!nodeMenu.isKnownProfile" x-on:click="$wire.addProfileAsKnown(nodeMenu.id); closeNodeMenu()">
+        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-pink-700 hover:bg-pink-50" x-show="nodeMenu.type !== 'person' && !nodeMenu.isKnownProfile" x-on:click="$wire.addProfileAsKnown(nodeMenu.id); closeNodeMenu()">
             Als bekannt speichern
         </button>
-        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-sky-700 hover:bg-sky-50" x-on:click="$wire.scanProfile(nodeMenu.id); closeNodeMenu()">
+        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-sky-700 hover:bg-sky-50" x-show="nodeMenu.type !== 'person'" x-on:click="$wire.scanProfile(nodeMenu.id); closeNodeMenu()">
             Scan im Hintergrund starten
         </button>
     </div>
 
     <x-modal wire:model="showProfilePreviewModal" maxWidth="3xl">
-        <x-slot name="title">
-            Instagram-Profil
-        </x-slot>
+        <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
+            <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
+                <div>
+                    <h3 class="text-lg font-bold text-slate-900">Instagram-Profil</h3>
+                    <p class="mt-1 text-sm text-slate-500">Profilvorschau und Scan-Aktionen aus der Network Map.</p>
+                </div>
+                <button type="button" wire:click="closeProfilePreview" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                    Schliessen
+                </button>
+            </div>
 
-        <x-slot name="content">
+            <div class="overflow-y-auto px-4 py-4 sm:px-5">
             @if($profilePreview)
                 <div class="space-y-4">
                     <div class="flex items-start gap-4">
@@ -345,9 +371,9 @@
                     </div>
                 </div>
             @endif
-        </x-slot>
+            </div>
 
-        <x-slot name="footer">
+            <div class="flex flex-wrap justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:px-5">
             <button type="button" wire:click="closeProfilePreview" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
                 Schliessen
             </button>
@@ -361,6 +387,7 @@
                     Scan starten
                 </button>
             @endif
-        </x-slot>
+            </div>
+        </div>
     </x-modal>
 </div>
