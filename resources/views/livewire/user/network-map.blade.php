@@ -7,15 +7,35 @@
     wire:loading.class="cursor-wait"
     x-data="{
         networkNode: { id: null, type: null, isKnownProfile: false },
+        nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, x: 0, y: 0 },
         setNetworkNode(event) {
             if (event.detail?.mapId && event.detail.mapId !== '{{ $mapId }}') {
                 return;
             }
 
             this.networkNode = event.detail || { id: null, type: null, isKnownProfile: false };
+        },
+        openNodeMenu(event) {
+            if (event.detail?.mapId && event.detail.mapId !== '{{ $mapId }}') {
+                return;
+            }
+
+            this.nodeMenu = {
+                open: true,
+                id: event.detail.id,
+                type: event.detail.type,
+                isKnownProfile: event.detail.isKnownProfile,
+                x: event.detail.x,
+                y: event.detail.y,
+            };
+        },
+        closeNodeMenu() {
+            this.nodeMenu.open = false;
         }
     }"
     x-on:network-map-node-selected.window="setNetworkNode($event)"
+    x-on:network-map-node-menu.window="openNodeMenu($event)"
+    x-on:click.outside="closeNodeMenu()"
 >
     @unless($embedded)
     <div class="border-b border-slate-200 bg-white">
@@ -191,6 +211,23 @@
             </aside>
         </div>
     </main>
+
+    <div
+        x-cloak
+        x-show="nodeMenu.open && nodeMenu.type !== 'person'"
+        x-bind:style="`left: ${nodeMenu.x}px; top: ${nodeMenu.y}px`"
+        class="fixed z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white text-sm shadow-xl"
+    >
+        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-on:click="$wire.openProfilePreview(nodeMenu.id); closeNodeMenu()">
+            Profil öffnen
+        </button>
+        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-pink-700 hover:bg-pink-50" x-show="!nodeMenu.isKnownProfile" x-on:click="$wire.addProfileAsKnown(nodeMenu.id); closeNodeMenu()">
+            Als bekannt speichern
+        </button>
+        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-sky-700 hover:bg-sky-50" x-on:click="$wire.scanProfile(nodeMenu.id); closeNodeMenu()">
+            Scan im Hintergrund starten
+        </button>
+    </div>
 
     <x-modal wire:model="showProfilePreviewModal" maxWidth="3xl">
         <x-slot name="title">

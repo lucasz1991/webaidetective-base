@@ -96,7 +96,7 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 2;
+        $data['graph_version'] = 3;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
 
         // Also include primary person flag
@@ -447,6 +447,8 @@ class NetworkMap extends Component
         $this->addTrackedRelationshipListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addObservedTrackedPersonConnectionsToPrimary($trackedPeople, $primaryPerson, $nodesByInstagram, $nodes, $edges);
         $this->addTrackedPersonProfileRelationships($trackedPeople, $nodesByInstagram, $nodes, $edges);
+
+        [$nodes, $edges] = $this->pruneLowSignalListNodes($nodes, $edges);
 
         return $this->applyLayout(array_values($nodes), array_values($edges));
     }
@@ -1309,10 +1311,44 @@ class NetworkMap extends Component
         };
     }
 
+    private function pruneLowSignalListNodes(array $nodes, array $edges): array
+    {
+        $connectionCounts = $this->calculateConnectionCounts(array_values($nodes), array_values($edges));
+        $removeNodeIds = [];
+
+        foreach ($nodes as $nodeId => $node) {
+            $isPureListEntry = ($node['type'] ?? null) === 'profile'
+                && ($node['role'] ?? null) === 'Listeneintrag'
+                && ! (bool) ($node['isKnownProfile'] ?? false);
+
+            if ($isPureListEntry && ($connectionCounts[$nodeId] ?? 0) < 2) {
+                $removeNodeIds[$nodeId] = true;
+            }
+        }
+
+        if ($removeNodeIds === []) {
+            return [$nodes, $edges];
+        }
+
+        $nodes = array_filter(
+            $nodes,
+            fn (array $node, string $nodeId): bool => ! isset($removeNodeIds[$nodeId]),
+            ARRAY_FILTER_USE_BOTH,
+        );
+
+        $edges = array_filter(
+            $edges,
+            fn (array $edge): bool => ! isset($removeNodeIds[$edge['from'] ?? null])
+                && ! isset($removeNodeIds[$edge['to'] ?? null]),
+        );
+
+        return [$nodes, $edges];
+    }
+
     private function applyLayout(array $nodes, array $edges): array
     {
-        $width = 1200;
-        $height = 760;
+        $width = 1800;
+        $height = 1200;
         $centerX = $width / 2;
         $centerY = $height / 2;
         $positions = [];
@@ -1345,7 +1381,7 @@ class NetworkMap extends Component
         // Place people in first ring (closely connected)
         foreach ($people as $index => $node) {
             $angle = $this->angle($index, max(1, count($people)), -90);
-            $radius = count($people) <= 1 ? 0 : min(260, 130 + count($people) * 16);
+            $radius = count($people) <= 1 ? 0 : 160 + (int) floor($index / 18) * 95;
             $positions[$node['id']] = [
                 'x' => $centerX + cos($angle) * $radius,
                 'y' => $centerY + sin($angle) * $radius,
@@ -1355,12 +1391,13 @@ class NetworkMap extends Component
         // Place profiles with adaptive radius based on connection density
         foreach ($profiles as $index => $node) {
             $connectionCount = $connectionCounts[$node['id']] ?? 0;
-            // Nodes with more connections get placed closer
-            $angle = $this->angle($index, max(1, count($profiles)), -75);
-            $max_radius = min(340, 210 + count($profiles) * 4);
-            // Adaptive radius: more connections = smaller radius
             $maxConnections = max(1, max(array_values($connectionCounts) ?: [1]));
-            $radius = $max_radius * (1 - min(0.6, $connectionCount / $maxConnections));
+            $ring = (int) floor($index / 36);
+            $ringStart = $ring * 36;
+            $ringCount = min(36, count($profiles) - $ringStart);
+            $angle = $this->angle($index - $ringStart, max(1, $ringCount), -75 + ($ring * 11));
+            $connectionPull = min(85, (int) round(($connectionCount / $maxConnections) * 85));
+            $radius = 230 + ($ring * 120) - $connectionPull;
             $positions[$node['id']] = [
                 'x' => $centerX + cos($angle) * $radius,
                 'y' => $centerY + sin($angle) * $radius,
@@ -1369,8 +1406,11 @@ class NetworkMap extends Component
 
         // Place candidates in outer ring
         foreach ($candidates as $index => $node) {
-            $angle = $this->angle($index, max(1, count($candidates)), -120);
-            $radius = min(380, 300 + count($candidates) * 3);
+            $ring = (int) floor($index / 44);
+            $ringStart = $ring * 44;
+            $ringCount = min(44, count($candidates) - $ringStart);
+            $angle = $this->angle($index - $ringStart, max(1, $ringCount), -120 + ($ring * 9));
+            $radius = 430 + ($ring * 120);
             $positions[$node['id']] = [
                 'x' => $centerX + cos($angle) * $radius,
                 'y' => $centerY + sin($angle) * $radius,

@@ -564,6 +564,7 @@ async function initNetworkMap(root) {
             loadGeneration: 0,
             loadedNodes: initialElements.filter((element) => element.group === 'nodes').length,
             loadedEdges: initialElements.filter((element) => element.group === 'edges').length,
+            lastNodeTap: null,
         };
 
         instances.set(root, state);
@@ -573,7 +574,37 @@ async function initNetworkMap(root) {
         bindControls(root, cy);
         applyFilters(root, cy);
 
-        cy.on('tap', 'node', (event) => setSelected(root, cy, event.target.id()));
+        cy.on('tap', 'node', (event) => {
+            const node = event.target;
+            const now = Date.now();
+            const lastTap = state.lastNodeTap;
+            const isDoubleTap = lastTap
+                && lastTap.id === node.id()
+                && now - lastTap.at <= 360;
+
+            setSelected(root, cy, node.id());
+
+            if (isDoubleTap) {
+                const containerRect = cy.container().getBoundingClientRect();
+                const rendered = event.renderedPosition || { x: cy.width() / 2, y: cy.height() / 2 };
+
+                window.dispatchEvent(new CustomEvent('network-map-node-menu', {
+                    detail: {
+                        mapId: root.dataset.networkMapId || null,
+                        id: node.id(),
+                        type: node.data('type') || 'unknown',
+                        isKnownProfile: Boolean(node.data('isKnownProfile')),
+                        x: Math.min(window.innerWidth - 240, Math.max(8, containerRect.left + rendered.x + 12)),
+                        y: Math.min(window.innerHeight - 150, Math.max(8, containerRect.top + rendered.y + 12)),
+                    },
+                }));
+                state.lastNodeTap = null;
+
+                return;
+            }
+
+            state.lastNodeTap = { id: node.id(), at: now };
+        });
         cy.on('tap', (event) => {
             if (event.target === cy) {
                 setSelected(root, cy, null);
@@ -772,30 +803,17 @@ async function loadPreparedGraph(root, detail) {
 
     updateBuildStatus(root, {
         visible: true,
-        label: 'Layout wird berechnet',
-        text: `${state.loadedNodes.toLocaleString('de-DE')} Knoten und ${state.loadedEdges.toLocaleString('de-DE')} Kanten sind geladen.`,
-        count: 'Grafik wird angeordnet',
+        label: 'Netzwerk geladen',
+        text: `${state.loadedNodes.toLocaleString('de-DE')} Knoten und ${state.loadedEdges.toLocaleString('de-DE')} Kanten sichtbar.`,
+        count: 'Fertig',
         progress: 100,
+        state: 'done',
     });
 
-    const layout = cy.layout(finalLayoutOptions(cy));
-
-    layout.one('layoutstop', () => {
-        window.requestAnimationFrame(() => {
-            fitGraph(cy);
-            updateBuildStatus(root, {
-                visible: true,
-                label: 'Netzwerk geladen',
-                text: `${state.loadedNodes.toLocaleString('de-DE')} Knoten und ${state.loadedEdges.toLocaleString('de-DE')} Kanten sichtbar.`,
-                count: 'Fertig',
-                progress: 100,
-                state: 'done',
-            });
-            window.setTimeout(() => updateBuildStatus(root, { visible: false, state: 'done' }), 1200);
-        });
+    window.requestAnimationFrame(() => {
+        fitGraph(cy);
+        window.setTimeout(() => updateBuildStatus(root, { visible: false, state: 'done' }), 900);
     });
-
-    layout.run();
 }
 
 async function handlePreparedGraph(event) {
