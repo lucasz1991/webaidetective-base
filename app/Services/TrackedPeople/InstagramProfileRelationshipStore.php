@@ -217,6 +217,71 @@ class InstagramProfileRelationshipStore
         return max(0, $after - $before);
     }
 
+    public function storeDirectRelationshipListScan(
+        InstagramProfile $sourceProfile,
+        ?TrackedPerson $trackedPerson,
+        string $listType,
+        array $relationshipList,
+        array $payload = [],
+        string $scanMode = 'profile_list',
+    ): ?InstagramProfileListScan {
+        if (! $this->isReady() || ! in_array($listType, ['followers', 'following'], true)) {
+            return null;
+        }
+
+        $scannedAt = $this->parseTimestamp($payload['analyzedAt'] ?? null) ?: now('UTC');
+        $scan = InstagramProfileListScan::create([
+            'instagram_profile_id' => $sourceProfile->id,
+            'tracked_person_id' => $trackedPerson?->id,
+            'snapshot_id' => null,
+            'user_id' => $trackedPerson?->user_id,
+            'list_type' => $listType,
+            'scan_mode' => $scanMode,
+            'status_level' => $this->directRelationshipListStatusLevel($relationshipList, $payload),
+            'status_message' => $this->directRelationshipListStatusMessage($relationshipList, $payload, $listType),
+            'attempted' => (bool) ($relationshipList['attempted'] ?? false),
+            'available' => (bool) ($relationshipList['available'] ?? false),
+            'complete' => (bool) ($relationshipList['complete'] ?? false),
+            'rate_limited' => (bool) ($relationshipList['rateLimited'] ?? false),
+            'gracefully_stopped' => (bool) ($relationshipList['gracefullyStopped'] ?? data_get($payload, 'gracefullyStopped', false)),
+            'expected_count' => $this->nullableInteger($relationshipList['expectedCount'] ?? null),
+            'observed_count' => (int) ($relationshipList['observedCount'] ?? count($relationshipList['observedItems'] ?? [])),
+            'active_count' => (int) ($relationshipList['activeCount'] ?? count($relationshipList['items'] ?? [])),
+            'known_count' => (int) ($relationshipList['knownCount'] ?? count($relationshipList['items'] ?? [])),
+            'added_count' => (int) ($relationshipList['addedCount'] ?? count($relationshipList['addedItems'] ?? [])),
+            'removed_count' => (int) ($relationshipList['removedCount'] ?? count($relationshipList['removedItems'] ?? [])),
+            'search_attempted' => (bool) ($relationshipList['searchAttempted'] ?? false),
+            'search_rounds' => (int) ($relationshipList['searchRounds'] ?? 0),
+            'raw_payload' => [
+                ...$this->relationshipListScanPayload($relationshipList),
+                'operation_mode' => $payload['operationMode'] ?? null,
+                'screenshot_path' => $payload['screenshotPath'] ?? null,
+                'html_path' => $payload['htmlPath'] ?? null,
+                'status_level' => $payload['statusLevel'] ?? null,
+                'status_message' => $payload['statusMessage'] ?? null,
+            ],
+            'scanned_at' => $scannedAt,
+        ]);
+
+        $addedUsernames = $this->usernameLookup($relationshipList['addedItems'] ?? []);
+
+        foreach ($this->normalizeRelationshipItems($relationshipList['observedItems'] ?? $relationshipList['items'] ?? []) as $item) {
+            $this->upsertObservedRelationship(
+                $scan,
+                $sourceProfile,
+                $listType,
+                $item,
+                isset($addedUsernames[$item['username'] ?? '']) ? 'added' : 'observed',
+            );
+        }
+
+        foreach ($this->normalizeRelationshipItems($relationshipList['removedItems'] ?? []) as $item) {
+            $this->markRemovedRelationship($scan, $sourceProfile, $listType, $item);
+        }
+
+        return $scan;
+    }
+
     public function ensureProfile(mixed $username, array $attributes = []): ?InstagramProfile
     {
         if (! $this->isReady()) {
@@ -438,6 +503,11 @@ class InstagramProfileRelationshipStore
             'display_name' => $item['displayName'] ?? null,
             'profile_url' => $item['profileUrl'] ?? null,
             'profile_image_url' => $item['profileImageUrl'] ?? $item['profile_image_url'] ?? null,
+            'is_private' => $item['isPrivate'] ?? null,
+            'profile_visibility' => $item['profileVisibility'] ?? null,
+            'followers_count' => $item['followersCount'] ?? null,
+            'following_count' => $item['followingCount'] ?? null,
+            'posts_count' => $item['postsCount'] ?? null,
         ]);
 
         if (! $relatedProfile) {
@@ -495,6 +565,11 @@ class InstagramProfileRelationshipStore
             'display_name' => $item['displayName'] ?? null,
             'profile_url' => $item['profileUrl'] ?? null,
             'profile_image_url' => $item['profileImageUrl'] ?? $item['profile_image_url'] ?? null,
+            'is_private' => $item['isPrivate'] ?? null,
+            'profile_visibility' => $item['profileVisibility'] ?? null,
+            'followers_count' => $item['followersCount'] ?? null,
+            'following_count' => $item['followingCount'] ?? null,
+            'posts_count' => $item['postsCount'] ?? null,
         ]);
 
         if (! $relatedProfile) {
@@ -699,6 +774,44 @@ class InstagramProfileRelationshipStore
         return $snapshot->status_message ?: $label.' konnte nicht geladen werden.';
     }
 
+    private function directRelationshipListStatusLevel(array $relationshipList, array $payload): string
+    {
+        if ((bool) ($relationshipList['rateLimited'] ?? false)) {
+            return 'rate_limited';
+        }
+
+        if ((bool) ($relationshipList['gracefullyStopped'] ?? data_get($payload, 'gracefullyStopped', false))) {
+            return 'partial';
+        }
+
+        if ((bool) ($relationshipList['available'] ?? false) || (int) ($relationshipList['observedCount'] ?? 0) > 0) {
+            return (bool) ($relationshipList['complete'] ?? false) ? 'success' : 'partial';
+        }
+
+        $payloadStatus = $this->nullableTrim($payload['statusLevel'] ?? null);
+
+        return $payloadStatus ?: 'unknown';
+    }
+
+    private function directRelationshipListStatusMessage(array $relationshipList, array $payload, string $listType): string
+    {
+        $label = $listType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste';
+
+        if ((bool) ($relationshipList['rateLimited'] ?? false)) {
+            return $label.' durch Instagram Rate-Limit pausiert.';
+        }
+
+        if ((bool) ($relationshipList['gracefullyStopped'] ?? data_get($payload, 'gracefullyStopped', false))) {
+            return $label.' wurde beendet; bisherige Eintraege wurden gespeichert.';
+        }
+
+        if ((bool) ($relationshipList['available'] ?? false)) {
+            return $label.' gespeichert: '.number_format((int) ($relationshipList['observedCount'] ?? 0), 0, ',', '.').' direkt beobachtete Eintraege.';
+        }
+
+        return $this->nullableTrim($payload['statusMessage'] ?? null) ?: $label.' konnte nicht geladen werden.';
+    }
+
     private function normalizeRelationshipItems(mixed $items): array
     {
         if (! is_array($items)) {
@@ -715,6 +828,14 @@ class InstagramProfileRelationshipStore
                     'displayName' => $this->nullableTrim($item['displayName'] ?? null),
                     'profileUrl' => $this->nullableTrim($item['profileUrl'] ?? null) ?: ($username ? 'https://www.instagram.com/'.$username.'/' : null),
                     'profileImageUrl' => $this->nullableTrim($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null),
+                    'profileVisibility' => in_array(($item['profileVisibility'] ?? null), ['public', 'private', 'unknown'], true)
+                        ? $item['profileVisibility']
+                        : null,
+                    'isPrivate' => is_bool($item['isPrivate'] ?? null) ? $item['isPrivate'] : null,
+                    'postsCount' => $this->nullableInteger($item['postsCount'] ?? null),
+                    'followersCount' => $this->nullableInteger($item['followersCount'] ?? null),
+                    'followingCount' => $this->nullableInteger($item['followingCount'] ?? null),
+                    'hoverCard' => is_array($item['hoverCard'] ?? null) ? $item['hoverCard'] : null,
                     'firstSeenAt' => $this->parseTimestamp($item['firstSeenAt'] ?? null)?->toIso8601String(),
                     'lastSeenAt' => $this->parseTimestamp($item['lastSeenAt'] ?? null)?->toIso8601String(),
                     'removedAt' => $this->parseTimestamp($item['removedAt'] ?? null)?->toIso8601String(),

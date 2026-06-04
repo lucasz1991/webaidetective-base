@@ -8,7 +8,7 @@ use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\User;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
-use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -61,6 +61,18 @@ class NetworkMap extends Component
         }
 
         return 'network-map-hash:'.$userId.$scope.':'.$token;
+    }
+
+    public static function forgetGraphCacheForUser(int $userId, ?int $contextTrackedPersonId = null): void
+    {
+        $token = Cache::get(self::graphHashCacheKey($userId, contextTrackedPersonId: $contextTrackedPersonId));
+
+        if (is_string($token) && $token !== '') {
+            Cache::forget(self::graphCacheKey($userId, $token));
+            Cache::forget(self::graphHashCacheKey($userId, $token, $contextTrackedPersonId));
+        }
+
+        Cache::forget(self::graphHashCacheKey($userId, contextTrackedPersonId: $contextTrackedPersonId));
     }
 
     public function mount(?int $trackedPersonId = null, bool $embedded = false): void
@@ -448,6 +460,7 @@ class NetworkMap extends Component
         $this->addTrackedRelationshipListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addObservedTrackedPersonConnectionsToPrimary($trackedPeople, $primaryPerson, $nodesByInstagram, $nodes, $edges);
         $this->addTrackedPersonProfileRelationships($trackedPeople, $nodesByInstagram, $nodes, $edges);
+        $this->addVisibleInstagramProfileListEdges($peopleByInstagram, $nodesByInstagram, $nodes, $edges);
 
         return $this->applyLayout(array_values($nodes), array_values($edges));
     }
@@ -627,6 +640,59 @@ class NetworkMap extends Component
                     sprintf('%s folgt %s laut gespeicherter Gefolgt-Liste.', $sourceHandle, $targetHandle),
                 );
             }
+        }
+    }
+
+    private function addVisibleInstagramProfileListEdges(
+        Collection $peopleByInstagram,
+        Collection $nodesByInstagram,
+        array &$nodes,
+        array &$edges,
+    ): void {
+        $usernames = collect($nodes)
+            ->filter(fn (array $node): bool => ($node['type'] ?? null) !== 'person')
+            ->map(fn (array $node): string => $this->normalizeUsername($node['username'] ?? $node['handle'] ?? ''))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($usernames->isEmpty()) {
+            return;
+        }
+
+        $profiles = InstagramProfile::query()
+            ->whereIn('username', $usernames->all())
+            ->with([
+                'sourceRelationships' => fn ($query) => $query
+                    ->where('status', 'active')
+                    ->whereIn('list_type', ['followers', 'following'])
+                    ->whereNull('removed_at')
+                    ->with('relatedInstagramProfile'),
+            ])
+            ->get();
+        $processedSources = [];
+
+        foreach ($profiles as $profile) {
+            if ($profile->sourceRelationships->isEmpty()) {
+                continue;
+            }
+
+            $sourceNode = $nodesByInstagram->get($this->normalizeUsername($profile->username));
+            $sourceId = $sourceNode['id'] ?? null;
+
+            if (! $sourceId || ! isset($nodes[$sourceId])) {
+                continue;
+            }
+
+            $this->addInstagramProfileListRelationshipEdges(
+                $profile,
+                $sourceId,
+                $peopleByInstagram,
+                $nodesByInstagram,
+                $nodes,
+                $edges,
+                $processedSources,
+            );
         }
     }
 
@@ -1560,10 +1626,13 @@ class NetworkMap extends Component
                 return;
             }
 
-            $publicProfile = $this->firstOrCreateKnownProfile($trackedPerson, $profile);
+            $profile->forceFill([
+                'last_status_level' => 'partial',
+                'last_status_message' => 'Profil-Listen-Scan wurde als Hintergrund-Job eingereiht.',
+            ])->save();
 
-            \App\Jobs\ScanInstagramProfileJob::dispatch($trackedPerson->id, $publicProfile->id, (int) $user->id);
-            $this->dispatch('notification', type: 'success', message: 'Profil-Scan wurde als Hintergrund-Job gestartet');
+            \App\Jobs\ScanInstagramProfileJob::dispatch($trackedPerson->id, $profile->id, (int) $user->id);
+            $this->dispatch('notification', type: 'success', message: 'Profil-Listen-Scan wurde als Hintergrund-Job gestartet');
         } catch (\Throwable $e) {
             $this->dispatch('notification', type: 'error', message: 'Fehler beim Starten des Scans: '.$e->getMessage());
         }
@@ -1768,29 +1837,28 @@ class NetworkMap extends Component
                 return;
             }
 
-            $publicProfile = $this->firstOrCreateKnownProfile($trackedPerson, $profile);
             $progress = fn (array $state) => $this->streamNetworkMapScanProgress($state);
 
             $this->streamNetworkMapScanProgress([
-                'phase' => 'public-connections',
+                'phase' => 'profile-list',
                 'percent' => 1,
-                'message' => 'Profil-Scan wird vorbereitet.',
+                'message' => 'Profil-Listen-Scan wird vorbereitet.',
                 'foundFollowers' => 0,
                 'foundFollowing' => 0,
             ]);
 
-            app(TrackedPersonInstagramPublicProfileScanService::class)->scan($trackedPerson, $progress, $publicProfile->id);
+            app(TrackedPersonInstagramProfileListScanService::class)->scan($trackedPerson, $profile, $progress);
             $this->forgetGraphCache((int) $user->id);
             $this->graphToken = null;
             $this->prepareGraph();
-            $this->dispatch('notification', type: 'success', message: 'Profil-Scan wurde ausgefuehrt');
+            $this->dispatch('notification', type: 'success', message: 'Profil-Listen-Scan wurde ausgefuehrt');
         } catch (\Throwable $e) {
             $this->streamNetworkMapScanProgress([
                 'phase' => 'error',
                 'percent' => 100,
-                'message' => 'Profil-Scan fehlgeschlagen.',
+                'message' => 'Profil-Listen-Scan fehlgeschlagen.',
             ]);
-            $this->dispatch('notification', type: 'error', message: 'Profil-Scan fehlgeschlagen: '.$e->getMessage());
+            $this->dispatch('notification', type: 'error', message: 'Profil-Listen-Scan fehlgeschlagen: '.$e->getMessage());
         }
     }
 
@@ -1798,6 +1866,10 @@ class NetworkMap extends Component
     {
         $phase = match ($state['phase'] ?? 'analysis') {
             'public-connections' => 'Verbindungen',
+            'profile-list' => 'Profil-Listen',
+            'followers' => 'Followerliste',
+            'following' => 'Gefolgt-Liste',
+            'saving' => 'Speichern',
             'done' => 'Fertig',
             'error' => 'Fehler',
             default => 'Scan',
@@ -1899,14 +1971,7 @@ class NetworkMap extends Component
 
     private function forgetGraphCache(int $userId): void
     {
-        $token = Cache::get(self::graphHashCacheKey($userId, contextTrackedPersonId: $this->contextTrackedPersonId));
-
-        if (is_string($token) && $token !== '') {
-            Cache::forget(self::graphCacheKey($userId, $token));
-            Cache::forget(self::graphHashCacheKey($userId, $token, $this->contextTrackedPersonId));
-        }
-
-        Cache::forget(self::graphHashCacheKey($userId, contextTrackedPersonId: $this->contextTrackedPersonId));
+        self::forgetGraphCacheForUser($userId, $this->contextTrackedPersonId);
     }
 
     /**

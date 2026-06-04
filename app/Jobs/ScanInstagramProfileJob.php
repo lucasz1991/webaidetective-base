@@ -2,9 +2,12 @@
 
 namespace App\Jobs;
 
+use App\Livewire\User\NetworkMap;
+use App\Models\InstagramProfile;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonPublicProfile;
-use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
+use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
+use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -20,64 +23,104 @@ class ScanInstagramProfileJob implements ShouldQueue
 
     public int $tries = 1;
 
-    public function __construct(
-        public readonly int $trackedPersonId,
-        public readonly int $publicProfileId,
-        public readonly int $userId,
-    ) {
+    public int $trackedPersonId;
+
+    public int $instagramProfileId;
+
+    public int $userId;
+
+    public ?int $publicProfileId = null;
+
+    public function __construct(int $trackedPersonId, int $instagramProfileId, int $userId)
+    {
+        $this->trackedPersonId = $trackedPersonId;
+        $this->instagramProfileId = $instagramProfileId;
+        $this->userId = $userId;
     }
 
-    public function handle(TrackedPersonInstagramPublicProfileScanService $scanService): void
+    public function handle(
+        TrackedPersonInstagramProfileListScanService $scanService,
+        InstagramProfileRelationshipStore $profileRelationshipStore,
+    ): void
     {
         $trackedPerson = TrackedPerson::query()
             ->whereKey($this->trackedPersonId)
             ->where('user_id', $this->userId)
             ->first();
 
-        $publicProfile = TrackedPersonPublicProfile::query()
-            ->whereKey($this->publicProfileId)
-            ->where('tracked_person_id', $this->trackedPersonId)
-            ->where('user_id', $this->userId)
-            ->first();
+        $instagramProfileId = isset($this->instagramProfileId) ? (int) $this->instagramProfileId : 0;
+        $profile = $instagramProfileId > 0
+            ? InstagramProfile::query()->whereKey($instagramProfileId)->first()
+            : null;
 
-        if (! $trackedPerson || ! $publicProfile) {
+        if (! $profile && isset($this->publicProfileId)) {
+            $publicProfile = TrackedPersonPublicProfile::query()
+                ->with('instagramProfile')
+                ->whereKey((int) $this->publicProfileId)
+                ->where('tracked_person_id', $this->trackedPersonId)
+                ->where('user_id', $this->userId)
+                ->first();
+            $profile = $publicProfile?->instagramProfile ?: ($publicProfile ? $profileRelationshipStore->syncPublicProfile($publicProfile) : null);
+        }
+
+        if (! $trackedPerson || ! $profile) {
             Log::warning('Network-map profile scan skipped because the target was not found.', [
                 'tracked_person_id' => $this->trackedPersonId,
-                'public_profile_id' => $this->publicProfileId,
+                'instagram_profile_id' => $instagramProfileId ?: null,
+                'legacy_public_profile_id' => isset($this->publicProfileId) ? (int) $this->publicProfileId : null,
                 'user_id' => $this->userId,
             ]);
 
             return;
         }
 
-        $publicProfile->forceFill([
-            'is_public' => true,
+        $profile->forceFill([
+            'last_status_level' => 'partial',
+            'last_status_message' => 'Profil-Listen-Scan laeuft im Hintergrund.',
         ])->save();
 
         $trackedPerson->forceFill([
             'last_instagram_status_level' => 'partial',
-            'last_instagram_status_message' => 'Public-Profile-Verbindungsscan laeuft im Hintergrund.',
+            'last_instagram_status_message' => 'Profil-Listen-Scan aus der Network Map laeuft im Hintergrund.',
         ])->save();
 
         try {
-            $scanService->scan($trackedPerson, null, $publicProfile->id);
+            $scanService->scan($trackedPerson, $profile);
+
+            $freshProfile = $profile->fresh();
+
+            if ($freshProfile) {
+                $freshProfile->forceFill([
+                    'last_status_level' => 'success',
+                    'last_status_message' => 'Profil-Listen-Scan aus der Network Map abgeschlossen.',
+                ])->save();
+            }
 
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'success',
-                'last_instagram_status_message' => 'Public-Profile-Verbindungsscan aus der Network Map abgeschlossen.',
+                'last_instagram_status_message' => 'Profil-Listen-Scan aus der Network Map abgeschlossen.',
             ])->save();
+            NetworkMap::forgetGraphCacheForUser($this->userId);
+            NetworkMap::forgetGraphCacheForUser($this->userId, $trackedPerson->id);
         } catch (\Throwable $exception) {
             Log::warning('Network-map profile scan failed.', [
                 'tracked_person_id' => $this->trackedPersonId,
-                'public_profile_id' => $this->publicProfileId,
+                'instagram_profile_id' => $profile->id,
+                'legacy_public_profile_id' => isset($this->publicProfileId) ? (int) $this->publicProfileId : null,
                 'user_id' => $this->userId,
                 'error' => $exception->getMessage(),
             ]);
 
+            $profile->forceFill([
+                'last_status_level' => 'error',
+                'last_status_message' => 'Profil-Listen-Scan fehlgeschlagen: '.$exception->getMessage(),
+            ])->save();
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => 'Public-Profile-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(),
+                'last_instagram_status_message' => 'Profil-Listen-Scan fehlgeschlagen: '.$exception->getMessage(),
             ])->save();
+            NetworkMap::forgetGraphCacheForUser($this->userId);
+            NetworkMap::forgetGraphCacheForUser($this->userId, $trackedPerson->id);
 
             throw $exception;
         }
