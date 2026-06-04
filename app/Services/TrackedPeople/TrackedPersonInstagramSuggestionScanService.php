@@ -21,9 +21,15 @@ class TrackedPersonInstagramSuggestionScanService
 
     private ?array $activeScanControl = null;
 
-    public function scan(TrackedPerson $trackedPerson, ?callable $progress = null): TrackedPersonInstagramSuggestionScan
+    public function scan(
+        TrackedPerson $trackedPerson,
+        ?callable $progress = null,
+        ?string $targetUsernameOverride = null,
+    ): TrackedPersonInstagramSuggestionScan
     {
-        $targetUsername = $this->scraper->normalizeInstagramUsername($trackedPerson->instagram_username);
+        $targetUsername = $this->scraper->normalizeInstagramUsername(
+            $targetUsernameOverride ?: $trackedPerson->instagram_username,
+        );
 
         if ($targetUsername === null) {
             throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');

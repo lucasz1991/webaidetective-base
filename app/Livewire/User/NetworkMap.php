@@ -10,6 +10,7 @@ use App\Support\PublicAssetUrl;
 use App\Models\User;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -1871,10 +1872,6 @@ class NetworkMap extends Component
         return Str::lower(ltrim(trim((string) $username), '@'));
     }
 
-    /**
-     * Scan a profile in the background and fetch its followers/following.
-     * Dispatches a background job to avoid blocking the UI.
-     */
     public function scanProfile(string $nodeId): void
     {
         $user = Auth::user();
@@ -1903,11 +1900,11 @@ class NetworkMap extends Component
 
             $profile->forceFill([
                 'last_status_level' => 'partial',
-                'last_status_message' => 'Profil-Listen-Scan wurde als Hintergrund-Job eingereiht.',
+                'last_status_message' => 'Profil-Vollanalyse wurde als Hintergrund-Job eingereiht.',
             ])->save();
 
             \App\Jobs\ScanInstagramProfileJob::dispatch($trackedPerson->id, $profile->id, (int) $user->id);
-            $this->dispatch('notification', type: 'success', message: 'Profil-Listen-Scan wurde als Hintergrund-Job gestartet');
+            $this->dispatch('notification', type: 'success', message: 'Profil-Vollanalyse wurde als Hintergrund-Job gestartet');
         } catch (\Throwable $e) {
             $this->dispatch('notification', type: 'error', message: 'Fehler beim Starten des Scans: '.$e->getMessage());
         }
@@ -2117,24 +2114,44 @@ class NetworkMap extends Component
             $this->streamNetworkMapScanProgress([
                 'phase' => 'profile-list',
                 'percent' => 1,
-                'message' => 'Profil-Listen-Scan wird vorbereitet.',
+                'message' => 'Profil-Vollanalyse wird vorbereitet.',
                 'foundFollowers' => 0,
                 'foundFollowing' => 0,
             ]);
 
-            app(TrackedPersonInstagramProfileListScanService::class)->scan($trackedPerson, $profile, $progress);
+            $this->runNetworkMapProfileFullAnalysis($trackedPerson, $profile, $progress);
             $this->forgetGraphCache((int) $user->id);
             $this->graphToken = null;
             $this->prepareGraph();
-            $this->dispatch('notification', type: 'success', message: 'Profil-Listen-Scan wurde ausgefuehrt');
+            $this->dispatch('notification', type: 'success', message: 'Profil-Vollanalyse wurde ausgefuehrt');
         } catch (\Throwable $e) {
             $this->streamNetworkMapScanProgress([
                 'phase' => 'error',
                 'percent' => 100,
-                'message' => 'Profil-Listen-Scan fehlgeschlagen.',
+                'message' => 'Profil-Vollanalyse fehlgeschlagen.',
             ]);
-            $this->dispatch('notification', type: 'error', message: 'Profil-Listen-Scan fehlgeschlagen: '.$e->getMessage());
+            $this->dispatch('notification', type: 'error', message: 'Profil-Vollanalyse fehlgeschlagen: '.$e->getMessage());
         }
+    }
+
+    private function runNetworkMapProfileFullAnalysis(
+        TrackedPerson $trackedPerson,
+        InstagramProfile $profile,
+        ?callable $progress = null,
+    ): void {
+        app(TrackedPersonInstagramProfileListScanService::class)->scan($trackedPerson, $profile, $progress);
+
+        $profile = $profile->fresh() ?: $profile;
+
+        if (! $this->instagramProfileIsPrivate($profile)) {
+            return;
+        }
+
+        app(TrackedPersonInstagramSuggestionScanService::class)->scan(
+            $trackedPerson,
+            $progress,
+            $profile->username,
+        );
     }
 
     private function streamNetworkMapScanProgress(array $state): void
@@ -2144,6 +2161,7 @@ class NetworkMap extends Component
             'profile-list' => 'Profil-Listen',
             'followers' => 'Followerliste',
             'following' => 'Gefolgt-Liste',
+            'suggestions' => 'Vorschlaege',
             'saving' => 'Speichern',
             'done' => 'Fertig',
             'error' => 'Fehler',

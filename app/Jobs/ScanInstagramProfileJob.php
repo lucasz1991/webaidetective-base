@@ -8,6 +8,7 @@ use App\Models\TrackedPerson;
 use App\Models\TrackedPersonPublicProfile;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -41,6 +42,7 @@ class ScanInstagramProfileJob implements ShouldQueue
     public function handle(
         TrackedPersonInstagramProfileListScanService $scanService,
         InstagramProfileRelationshipStore $profileRelationshipStore,
+        TrackedPersonInstagramSuggestionScanService $suggestionScanService,
     ): void
     {
         $trackedPerson = TrackedPerson::query()
@@ -76,29 +78,34 @@ class ScanInstagramProfileJob implements ShouldQueue
 
         $profile->forceFill([
             'last_status_level' => 'partial',
-            'last_status_message' => 'Profil-Listen-Scan laeuft im Hintergrund.',
+            'last_status_message' => 'Profil-Vollanalyse laeuft im Hintergrund.',
         ])->save();
 
         $trackedPerson->forceFill([
             'last_instagram_status_level' => 'partial',
-            'last_instagram_status_message' => 'Profil-Listen-Scan aus der Network Map laeuft im Hintergrund.',
+            'last_instagram_status_message' => 'Profil-Vollanalyse aus der Network Map laeuft im Hintergrund.',
         ])->save();
 
         try {
             $scanService->scan($trackedPerson, $profile);
+            $profile = $profile->fresh() ?: $profile;
+
+            if ($profile->is_private === true || $profile->profile_visibility === 'private') {
+                $suggestionScanService->scan($trackedPerson, null, $profile->username);
+            }
 
             $freshProfile = $profile->fresh();
 
             if ($freshProfile) {
                 $freshProfile->forceFill([
                     'last_status_level' => 'success',
-                    'last_status_message' => 'Profil-Listen-Scan aus der Network Map abgeschlossen.',
+                    'last_status_message' => 'Profil-Vollanalyse aus der Network Map abgeschlossen.',
                 ])->save();
             }
 
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'success',
-                'last_instagram_status_message' => 'Profil-Listen-Scan aus der Network Map abgeschlossen.',
+                'last_instagram_status_message' => 'Profil-Vollanalyse aus der Network Map abgeschlossen.',
             ])->save();
             NetworkMap::forgetGraphCacheForUser($this->userId);
             NetworkMap::forgetGraphCacheForUser($this->userId, $trackedPerson->id);
@@ -113,11 +120,11 @@ class ScanInstagramProfileJob implements ShouldQueue
 
             $profile->forceFill([
                 'last_status_level' => 'error',
-                'last_status_message' => 'Profil-Listen-Scan fehlgeschlagen: '.$exception->getMessage(),
+                'last_status_message' => 'Profil-Vollanalyse fehlgeschlagen: '.$exception->getMessage(),
             ])->save();
             $trackedPerson->forceFill([
                 'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => 'Profil-Listen-Scan fehlgeschlagen: '.$exception->getMessage(),
+                'last_instagram_status_message' => 'Profil-Vollanalyse fehlgeschlagen: '.$exception->getMessage(),
             ])->save();
             NetworkMap::forgetGraphCacheForUser($this->userId);
             NetworkMap::forgetGraphCacheForUser($this->userId, $trackedPerson->id);
