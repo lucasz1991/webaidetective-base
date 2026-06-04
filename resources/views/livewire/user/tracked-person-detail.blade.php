@@ -1534,6 +1534,35 @@
                                         </div>
                                     </div>
                                 </div>
+                                @if($connectionScan->logs->isNotEmpty())
+                                    <details class="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-700">
+                                        <summary class="cursor-pointer font-semibold text-slate-600">
+                                            Scan-Logs anzeigen ({{ $connectionScan->logs->count() }})
+                                        </summary>
+                                        <div class="mt-2 space-y-2">
+                                            @foreach($connectionScan->logs as $scanLog)
+                                                <div class="rounded-md border border-slate-200 bg-white p-2">
+                                                    <div class="font-semibold text-slate-800">
+                                                        {{ $scanLog->message ?: 'Technischer Eintrag' }}
+                                                    </div>
+                                                    @if($scanLog->logged_at)
+                                                        <div class="mt-0.5 text-slate-500">
+                                                            {{ $scanLog->logged_at->timezone(config('app.timezone'))->format('d.m.Y H:i:s') }}
+                                                            @if($scanLog->stage)
+                                                                / {{ $scanLog->stage }}
+                                                            @endif
+                                                        </div>
+                                                    @endif
+                                                    @if($scanLog->detail)
+                                                        <div class="mt-1 whitespace-pre-wrap break-words text-slate-600">
+                                                            {{ \Illuminate\Support\Str::limit($scanLog->detail, 1200) }}
+                                                        </div>
+                                                    @endif
+                                                </div>
+                                            @endforeach
+                                        </div>
+                                    </details>
+                                @endif
                                 @if($scanScreenshots->isNotEmpty())
                                     <details class="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-2 text-left">
                                         <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-600">

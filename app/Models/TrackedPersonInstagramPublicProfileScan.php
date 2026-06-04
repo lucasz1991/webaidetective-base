@@ -77,6 +77,11 @@ class TrackedPersonInstagramPublicProfileScan extends Model
         return $this->hasMany(TrackedPersonInstagramInferredConnection::class, 'scan_id');
     }
 
+    public function logs(): HasMany
+    {
+        return $this->hasMany(TrackedPersonInstagramPublicProfileScanLog::class, 'scan_id');
+    }
+
     public function getRelationLabelAttribute(): string
     {
         return match ($this->relation_type) {

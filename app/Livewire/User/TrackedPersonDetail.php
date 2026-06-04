@@ -895,7 +895,10 @@ class TrackedPersonDetail extends Component
                     ->with('latestInstagramConnectionScan')
                     ->latest(),
                 'instagramPublicProfileScans' => fn ($query) => $query
-                    ->with('publicProfile')
+                    ->with([
+                        'publicProfile',
+                        'logs' => fn ($logQuery) => $logQuery->latest('logged_at')->limit(3),
+                    ])
                     ->latest('analyzed_at')
                     ->limit(20),
                 'instagramSuggestionScans' => fn ($query) => $query

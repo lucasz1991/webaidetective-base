@@ -7,6 +7,7 @@ use App\Models\InstagramProfileRelationship;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramPublicProfileScan;
+use App\Models\TrackedPersonInstagramPublicProfileScanLog;
 use App\Models\TrackedPersonPublicProfile;
 use App\Services\Social\InstagramScraper;
 use Illuminate\Support\Collection;
@@ -18,6 +19,8 @@ use Illuminate\Support\Str;
 
 class TrackedPersonInstagramPublicProfileScanService
 {
+    private const STATUS_MESSAGE_MAX_LENGTH = 240;
+
     public function __construct(
         private readonly InstagramScraper $scraper,
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
@@ -562,6 +565,7 @@ class TrackedPersonInstagramPublicProfileScanService
             : ($stoppedForRateLimit
                 ? 'Verbindungsscan wegen Instagram-Rate-Limit pausiert. Er kann spaeter fortgesetzt werden.'
                 : (string) ($state['message'] ?? 'Verbindungsscan laeuft; Kandidatenfortschritt wird gespeichert.'));
+        $statusInfo = $this->buildStoredStatusMessage($statusMessage, includeDetailNotice: false);
 
         $payload = [
             ...$payload,
@@ -581,7 +585,7 @@ class TrackedPersonInstagramPublicProfileScanService
             'foundFollowers' => count($inferredFollowers),
             'foundFollowing' => count($inferredFollowing),
             'lastProgressStage' => $stage,
-            'lastProgressMessage' => (string) ($state['message'] ?? ''),
+            'lastProgressMessage' => $statusInfo['summary'],
             'lastProgressAt' => now('UTC')->toISOString(),
             'stoppedForRateLimit' => $stoppedForRateLimit,
             'gracefullyStopped' => $gracefullyStopped,
@@ -592,7 +596,7 @@ class TrackedPersonInstagramPublicProfileScanService
 
         $scan->forceFill([
             'status_level' => 'partial',
-            'status_message' => $statusMessage,
+            'status_message' => $statusInfo['inline'],
             'raw_payload' => $payload,
             'analyzed_at' => now('UTC'),
         ])->save();
@@ -886,6 +890,12 @@ class TrackedPersonInstagramPublicProfileScanService
             $analyzedAt,
             $existingScan,
         ) {
+            $statusInfo = $this->buildStoredStatusMessage(
+                (string) ($payload['statusMessage'] ?? 'Verbindungsscan abgeschlossen.'),
+            );
+            $payload['statusMessage'] = $statusInfo['summary'];
+            $payload['statusMessageHasLog'] = $statusInfo['detail'] !== null;
+
             $scanData = [
                 'tracked_person_id' => $trackedPerson->id,
                 'public_profile_id' => $publicProfile->id,
@@ -908,13 +918,30 @@ class TrackedPersonInstagramPublicProfileScanService
                 'following_expected_count' => $this->nullableInteger($following['expectedCount'] ?? null),
                 'following_match' => $this->nullableArray($following['targetItem'] ?? null),
                 'status_level' => (string) ($payload['statusLevel'] ?? 'unknown'),
-                'status_message' => (string) ($payload['statusMessage'] ?? 'Verbindungsscan abgeschlossen.'),
+                'status_message' => $statusInfo['inline'],
                 'raw_payload' => $payload,
                 'analyzed_at' => $analyzedAt,
             ];
 
             $scan = $existingScan ?: new TrackedPersonInstagramPublicProfileScan();
             $scan->forceFill($scanData)->save();
+
+            if ($statusInfo['detail'] !== null) {
+                $this->storeScanLog(
+                    $scan,
+                    'status_detail',
+                    (string) ($payload['statusLevel'] ?? 'unknown'),
+                    (string) ($payload['lastProgressStage'] ?? $payload['stage'] ?? null),
+                    $statusInfo['summary'],
+                    $statusInfo['detail'],
+                    [
+                        'targetUsername' => $payload['targetUsername'] ?? null,
+                        'publicUsername' => $payload['publicUsername'] ?? null,
+                        'progressStatus' => $payload['progressStatus'] ?? null,
+                    ],
+                    $analyzedAt,
+                );
+            }
 
             $this->storeInferredConnections($trackedPerson, $publicProfile, $scan, $payload, $analyzedAt);
 
@@ -940,12 +967,17 @@ class TrackedPersonInstagramPublicProfileScanService
     ): TrackedPersonInstagramPublicProfileScan {
         $this->assertActiveScanCurrent();
 
+        $errorInfo = $this->buildStoredStatusMessage(
+            $errorMessage,
+            prefix: 'Verbindungsscan fehlgeschlagen: ',
+        );
         $payload = [
             ...($existingScan && is_array($existingScan->raw_payload ?? null) ? $existingScan->raw_payload : []),
             'ok' => false,
             'progressStatus' => 'failed',
             'isResumable' => false,
-            'error' => $errorMessage,
+            'error' => $errorInfo['summary'],
+            'errorHasLog' => true,
         ];
         $scanData = [
             'tracked_person_id' => $trackedPerson->id,
@@ -955,15 +987,108 @@ class TrackedPersonInstagramPublicProfileScanService
             'public_username' => Str::lower($publicUsername),
             'relation_type' => 'unknown',
             'status_level' => 'error',
-            'status_message' => 'Verbindungsscan fehlgeschlagen: '.$errorMessage,
+            'status_message' => $errorInfo['inline'],
             'raw_payload' => $payload,
             'analyzed_at' => now('UTC'),
         ];
 
         $scan = $existingScan ?: new TrackedPersonInstagramPublicProfileScan();
         $scan->forceFill($scanData)->save();
+        $this->storeScanLog(
+            $scan,
+            'failure',
+            'error',
+            (string) ($payload['lastProgressStage'] ?? null),
+            $errorInfo['summary'],
+            $errorMessage,
+            [
+                'targetUsername' => $targetUsername,
+                'publicUsername' => $publicUsername,
+                'progressStatus' => 'failed',
+            ],
+            now('UTC'),
+        );
 
         return $scan;
+    }
+
+    private function buildStoredStatusMessage(
+        string $message,
+        string $prefix = '',
+        bool $includeDetailNotice = true,
+    ): array {
+        $normalized = preg_replace("/\r\n?/", "\n", trim($message)) ?? trim($message);
+        $summary = $this->summarizeStatusMessage($normalized);
+        $hasDetail = $normalized !== $summary;
+        $inline = $prefix.$summary;
+
+        if ($hasDetail && $includeDetailNotice) {
+            $inline .= ' Details im Scan-Log gespeichert.';
+        }
+
+        return [
+            'inline' => $this->limitStatusMessage($inline),
+            'summary' => $summary,
+            'detail' => $hasDetail ? $normalized : null,
+        ];
+    }
+
+    private function summarizeStatusMessage(string $message): string
+    {
+        if ($message === '') {
+            return 'Unbekannter Status.';
+        }
+
+        $firstLine = trim(Str::before($message, "\n"));
+        $summary = preg_replace('/\s+/', ' ', $firstLine) ?? $firstLine;
+
+        foreach (['[SCRAPER PROGRESS]', '[SCRAPER DEBUG]', '[SCRAPER ERROR]'] as $marker) {
+            if (str_contains($summary, $marker)) {
+                $summary = trim(Str::before($summary, $marker));
+            }
+        }
+
+        if ($summary === '') {
+            $summary = 'Technische Scan-Details wurden gespeichert.';
+        }
+
+        return $this->limitStatusMessage($summary);
+    }
+
+    private function limitStatusMessage(string $message): string
+    {
+        return Str::limit(trim($message), self::STATUS_MESSAGE_MAX_LENGTH, '...');
+    }
+
+    private function storeScanLog(
+        TrackedPersonInstagramPublicProfileScan $scan,
+        string $eventType,
+        ?string $statusLevel,
+        ?string $stage,
+        ?string $message,
+        ?string $detail,
+        ?array $context,
+        \Illuminate\Support\Carbon $loggedAt,
+    ): void {
+        $detail = $this->nullableTrim($detail);
+
+        if ($detail === null) {
+            return;
+        }
+
+        TrackedPersonInstagramPublicProfileScanLog::create([
+            'scan_id' => $scan->id,
+            'tracked_person_id' => $scan->tracked_person_id,
+            'public_profile_id' => $scan->public_profile_id,
+            'user_id' => $scan->user_id,
+            'event_type' => $eventType,
+            'status_level' => $statusLevel ?: null,
+            'stage' => $this->nullableTrim($stage),
+            'message' => $this->nullableTrim($message),
+            'detail' => $detail,
+            'context' => $context ?: null,
+            'logged_at' => $loggedAt,
+        ]);
     }
 
     private function normalizePayloadScreenshotPaths(array $payload): array
