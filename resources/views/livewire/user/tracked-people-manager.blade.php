@@ -94,7 +94,7 @@
         @endif
     </section>
 
-    <section class="grid gap-3">
+    <section class="grid gap-4 xl:grid-cols-2">
         @forelse($trackedPeople as $trackedPerson)
             @php
                 $isSelected = $selectedTrackedPersonId === $trackedPerson->id;
@@ -121,8 +121,9 @@
                 role="button"
                 tabindex="0"
                 aria-label="Profil {{ $trackedPerson->display_name }} oeffnen"
-                class="relative cursor-pointer overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm transition focus:outline-none focus:ring-2 focus:ring-pink-300 {{ $isSelected && $showDetailModal ? 'ring-2 ring-pink-300' : 'hover:border-slate-300 hover:bg-slate-50' }}"
+                class="group relative cursor-pointer overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm transition focus:outline-none focus:ring-2 focus:ring-pink-300 {{ $isSelected && $showDetailModal ? 'border-pink-300 ring-2 ring-pink-200' : 'hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md' }}"
             >
+                <div class="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-amber-400 via-rose-500 to-fuchsia-600"></div>
                 <div
                     wire:loading.flex
                     wire:target="selectTrackedPerson({{ $trackedPerson->id }})"
@@ -131,10 +132,10 @@
                     <span class="h-5 w-5 animate-spin rounded-full border-2 border-pink-200 border-t-pink-600"></span>
                     <span>Profil wird geladen...</span>
                 </div>
-                <div class="grid gap-4 p-4 lg:grid-cols-[minmax(260px,1.1fr)_minmax(0,1fr)] lg:items-center">
+                <div class="grid gap-4 p-4 pl-5 lg:grid-cols-[minmax(230px,1fr)_minmax(0,0.9fr)] lg:items-center">
                     <div class="flex min-w-0 items-center gap-3">
-                        <div class="rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-0.5">
-                            <div class="h-14 w-14 overflow-hidden rounded-full border-2 border-white bg-slate-100">
+                        <div class="shrink-0 rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-0.5 shadow-sm">
+                            <div class="h-16 w-16 overflow-hidden rounded-full border-2 border-white bg-slate-100">
                                 @if($trackedPerson->profile_image_url)
                                     <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full object-cover">
                                 @else
@@ -142,16 +143,16 @@
                                 @endif
                             </div>
                         </div>
-                        <div class="min-w-0">
+                        <div class="min-w-0 flex-1">
                             <div class="flex min-w-0 flex-wrap items-center gap-2">
-                                <div class="truncate text-base font-bold text-slate-950">{{ $trackedPerson->display_name }}</div>
+                                <div class="truncate text-lg font-bold text-slate-950">{{ $trackedPerson->display_name }}</div>
                                 <span class="rounded-lg px-2 py-0.5 text-[11px] font-semibold ring-1 {{ $profileVisibilityClass }}">{{ $profileVisibilityLabel }}</span>
                             </div>
-                            <div class="mt-0.5 truncate text-sm text-slate-600">
+                            <div class="mt-1 truncate text-sm font-semibold text-slate-600">
                                 {{ $trackedPerson->instagram_username ? '@'.$trackedPerson->instagram_username : 'Instagram-Handle fehlt' }}
                             </div>
                             @if($trackedPerson->last_instagram_status_message)
-                                <div class="mt-1 truncate text-xs text-slate-500" title="{{ $trackedPerson->last_instagram_status_message }}">
+                                <div class="mt-2 max-h-10 overflow-hidden text-xs leading-5 text-slate-500" title="{{ $trackedPerson->last_instagram_status_message }}">
                                     {{ $trackedPerson->last_instagram_status_message }}
                                 </div>
                             @endif
@@ -159,17 +160,17 @@
                     </div>
 
                     <div class="grid grid-cols-3 gap-2 text-center">
-                        <div>
-                            <div class="text-sm font-bold text-slate-950">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-' }}</div>
-                            <div class="text-xs text-slate-500">Beitraege</div>
+                        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <div class="text-base font-bold text-slate-950">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-' }}</div>
+                            <div class="text-[11px] font-medium text-slate-500">Beitraege</div>
                         </div>
-                        <div>
-                            <div class="text-sm font-bold text-slate-950">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
-                            <div class="text-xs text-slate-500">Follower</div>
+                        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <div class="text-base font-bold text-slate-950">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
+                            <div class="text-[11px] font-medium text-slate-500">Follower</div>
                         </div>
-                        <div>
-                            <div class="text-sm font-bold text-slate-950">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
-                            <div class="text-xs text-slate-500">Gefolgt</div>
+                        <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                            <div class="text-base font-bold text-slate-950">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
+                            <div class="text-[11px] font-medium text-slate-500">Gefolgt</div>
                         </div>
                     </div>
                 </div>

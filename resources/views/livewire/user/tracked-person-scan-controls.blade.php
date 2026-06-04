@@ -106,48 +106,54 @@
                 <span wire:loading.remove wire:target="analyzeInstagramMini">Mini-Scan</span>
                 <span wire:loading wire:target="analyzeInstagramMini">Mini-Scan laeuft...</span>
             </button>
-            <button
-                type="button"
-                wire:click="analyzeInstagram"
-                wire:loading.attr="disabled"
-                wire:target="analyzeInstagram"
-                @disabled(! $trackedPerson->instagram_username || ! $profileIsPublic)
-                class="inline-flex justify-center rounded-lg bg-pink-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pink-700 disabled:cursor-wait disabled:opacity-60"
-            >
-                <span wire:loading.remove wire:target="analyzeInstagram">Vollanalyse</span>
-                <span wire:loading wire:target="analyzeInstagram">Vollanalyse laeuft...</span>
-            </button>
-            <button
-                type="button"
-                wire:click="scanInstagramFollowersList"
-                wire:loading.attr="disabled"
-                wire:target="scanInstagramFollowersList"
-                class="inline-flex justify-center rounded-lg border border-pink-200 bg-pink-50 px-3 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-100 disabled:cursor-wait disabled:opacity-60"
-            >
-                <span wire:loading.remove wire:target="scanInstagramFollowersList">Follower scannen</span>
-                <span wire:loading wire:target="scanInstagramFollowersList">Follower-Scan laeuft...</span>
-            </button>
-            <button
-                type="button"
-                wire:click="scanInstagramFollowingList"
-                wire:loading.attr="disabled"
-                wire:target="scanInstagramFollowingList"
-                class="inline-flex justify-center rounded-lg border border-pink-200 bg-pink-50 px-3 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-100 disabled:cursor-wait disabled:opacity-60"
-            >
-                <span wire:loading.remove wire:target="scanInstagramFollowingList">Gefolgt scannen</span>
-                <span wire:loading wire:target="scanInstagramFollowingList">Gefolgt-Scan laeuft...</span>
-            </button>
-            <button
-                type="button"
-                wire:click="scanInstagramSuggestions"
-                wire:loading.attr="disabled"
-                wire:target="scanInstagramSuggestions"
-                @disabled(! $trackedPerson->instagram_username || ! $profileIsPrivate)
-                class="inline-flex justify-center rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-3 py-2 text-sm font-semibold text-fuchsia-700 shadow-sm hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-                <span wire:loading.remove wire:target="scanInstagramSuggestions">Vorschlaege scannen</span>
-                <span wire:loading wire:target="scanInstagramSuggestions">Vorschlags-Scan laeuft...</span>
-            </button>
+            @if($profileIsPublic)
+                <button
+                    type="button"
+                    wire:click="analyzeInstagram"
+                    wire:loading.attr="disabled"
+                    wire:target="analyzeInstagram"
+                    @disabled(! $trackedPerson->instagram_username)
+                    class="inline-flex justify-center rounded-lg bg-pink-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-pink-700 disabled:cursor-wait disabled:opacity-60"
+                >
+                    <span wire:loading.remove wire:target="analyzeInstagram">Vollanalyse</span>
+                    <span wire:loading wire:target="analyzeInstagram">Vollanalyse laeuft...</span>
+                </button>
+                <button
+                    type="button"
+                    wire:click="scanInstagramFollowersList"
+                    wire:loading.attr="disabled"
+                    wire:target="scanInstagramFollowersList"
+                    @disabled(! $trackedPerson->instagram_username)
+                    class="inline-flex justify-center rounded-lg border border-pink-200 bg-pink-50 px-3 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <span wire:loading.remove wire:target="scanInstagramFollowersList">Follower scannen</span>
+                    <span wire:loading wire:target="scanInstagramFollowersList">Follower-Scan laeuft...</span>
+                </button>
+                <button
+                    type="button"
+                    wire:click="scanInstagramFollowingList"
+                    wire:loading.attr="disabled"
+                    wire:target="scanInstagramFollowingList"
+                    @disabled(! $trackedPerson->instagram_username)
+                    class="inline-flex justify-center rounded-lg border border-pink-200 bg-pink-50 px-3 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <span wire:loading.remove wire:target="scanInstagramFollowingList">Gefolgt scannen</span>
+                    <span wire:loading wire:target="scanInstagramFollowingList">Gefolgt-Scan laeuft...</span>
+                </button>
+            @endif
+            @if($profileIsPrivate)
+                <button
+                    type="button"
+                    wire:click="scanInstagramSuggestions"
+                    wire:loading.attr="disabled"
+                    wire:target="scanInstagramSuggestions"
+                    @disabled(! $trackedPerson->instagram_username)
+                    class="inline-flex justify-center rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-3 py-2 text-sm font-semibold text-fuchsia-700 shadow-sm hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <span wire:loading.remove wire:target="scanInstagramSuggestions">Vorschlaege scannen</span>
+                    <span wire:loading wire:target="scanInstagramSuggestions">Vorschlags-Scan laeuft...</span>
+                </button>
+            @endif
         </div>
     </div>
 </div>

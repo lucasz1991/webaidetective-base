@@ -443,12 +443,18 @@ class TrackedPersonDetail extends Component
         @set_time_limit(0);
         @ignore_user_abort(false);
 
-        $trackedPerson = $this->resolveTrackedPerson();
+        $trackedPerson = $this->resolveTrackedPerson()->loadMissing('latestInstagramSnapshot');
         $isFollowers = $relationship === 'followers';
         $label = $isFollowers ? 'Followerliste' : 'Gefolgt-Liste';
 
         if (! $trackedPerson->instagram_username) {
             $this->setDetailStatus('Fuer diese Person ist kein Instagram-Name hinterlegt.', 'error');
+
+            return;
+        }
+
+        if (! $this->trackedPersonInstagramProfileIsPublic($trackedPerson)) {
+            $this->setDetailStatus($label.'-Scans sind nur fuer als oeffentlich erkannte Instagram-Profile verfuegbar.', 'partial');
 
             return;
         }
