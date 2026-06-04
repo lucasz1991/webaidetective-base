@@ -656,6 +656,34 @@ function normalizeSuggestionCandidateHistory(value = {}) {
   return history;
 }
 
+function normalizeRelationshipSearchUsernameMap(value = {}) {
+  const input = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const normalized = {
+    followers: [],
+    following: [],
+  };
+
+  for (const relationship of ['followers', 'following']) {
+    const rawItems = Array.isArray(input[relationship]) ? input[relationship] : [];
+    const seen = new Set();
+
+    for (const rawItem of rawItems) {
+      const username = normalizeInstagramUsername(
+        typeof rawItem === 'string' ? rawItem : (rawItem?.username || rawItem?.handle || ''),
+      );
+
+      if (!username || seen.has(username)) {
+        continue;
+      }
+
+      seen.add(username);
+      normalized[relationship].push(username);
+    }
+  }
+
+  return normalized;
+}
+
 function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
   const input = config && typeof config === 'object' ? config : {};
   const merged = {
@@ -685,13 +713,18 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}) {
     ),
     expectedFollowerCount: normalizeOptionalPositiveInteger(input?.expectedFollowerCount, merged.expectedFollowerCount),
     expectedFollowingCount: normalizeOptionalPositiveInteger(input?.expectedFollowingCount, merged.expectedFollowingCount),
+    relationshipPrioritizedSearchUsernames: normalizeRelationshipSearchUsernameMap(
+      input?.relationshipPrioritizedSearchUsernames
+        || input?.relationship_prioritized_search_usernames
+        || merged.relationshipPrioritizedSearchUsernames,
+    ),
     relationshipSearchOnly: input?.relationshipSearchOnly === true || input?.relationship_search_only === true,
     relationshipSearchTargetUsername: normalizeInstagramUsername(input?.relationshipSearchTargetUsername || merged.relationshipSearchTargetUsername || ''),
     relationshipSearchTargetMaxItems: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxItems, merged.relationshipSearchTargetMaxItems),
     relationshipSearchTargetMaxScrollRounds: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxScrollRounds, merged.relationshipSearchTargetMaxScrollRounds),
     relationshipSearchInputMaxAttempts: Math.floor(normalizeNumberAtLeast(input?.relationshipSearchInputMaxAttempts, merged.relationshipSearchInputMaxAttempts || 3, 1)),
-    suggestionScanMaxItems: normalizeOptionalPositiveInteger(input?.suggestionScanMaxItems, merged.suggestionScanMaxItems || 12) || 12,
-    suggestionCandidateMaxItems: normalizeOptionalPositiveInteger(input?.suggestionCandidateMaxItems, merged.suggestionCandidateMaxItems || 8) || 8,
+    suggestionScanMaxItems: normalizeOptionalPositiveInteger(input?.suggestionScanMaxItems, merged.suggestionScanMaxItems || 60) || 60,
+    suggestionCandidateMaxItems: normalizeOptionalPositiveInteger(input?.suggestionCandidateMaxItems, merged.suggestionCandidateMaxItems || 40) || 40,
     suggestionPublicListSearchMaxScrollRounds: normalizeOptionalPositiveInteger(
       input?.suggestionPublicListSearchMaxScrollRounds,
       merged.suggestionPublicListSearchMaxScrollRounds || 60,
@@ -803,13 +836,17 @@ function loadRuntimeConfig(configPath) {
     relationshipListMaxScrollRounds: DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS,
     expectedFollowerCount: 0,
     expectedFollowingCount: 0,
+    relationshipPrioritizedSearchUsernames: {
+      followers: [],
+      following: [],
+    },
     relationshipSearchOnly: false,
     relationshipSearchTargetUsername: '',
     relationshipSearchTargetMaxItems: 0,
     relationshipSearchTargetMaxScrollRounds: 60,
     relationshipSearchInputMaxAttempts: 3,
-    suggestionScanMaxItems: 12,
-    suggestionCandidateMaxItems: 8,
+    suggestionScanMaxItems: 60,
+    suggestionCandidateMaxItems: 40,
     suggestionPublicListSearchMaxScrollRounds: 60,
     suggestionDismissChecked: false,
     suggestionCandidateHistory: {},
@@ -2120,6 +2157,27 @@ function buildSecondLevelRelationshipSearchQueries(queryStats, usersByUsername, 
     .map((entry) => entry.query);
 }
 
+function getMissingPrioritizedRelationshipSearchQueries(runtimeConfig = {}, relationship, usersByUsername = new Map()) {
+  const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
+  const configured = runtimeConfig.relationshipPrioritizedSearchUsernames || {};
+  const usernames = Array.isArray(configured[normalizedRelationship]) ? configured[normalizedRelationship] : [];
+  const queued = new Set();
+  const queries = [];
+
+  for (const rawUsername of usernames) {
+    const username = normalizeInstagramUsername(rawUsername);
+
+    if (!username || queued.has(username) || usersByUsername.has(username)) {
+      continue;
+    }
+
+    queued.add(username);
+    queries.push(username);
+  }
+
+  return queries;
+}
+
 async function collectRelationshipSearchPartitions(page, username, relationship, options, usersByUsername) {
   const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
   const runtimeConfig = options.runtimeConfig || {};
@@ -2136,6 +2194,11 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
   const searchTargetUsername = normalizeInstagramUsername(
     options.targetUsername || runtimeConfig.relationshipSearchTargetUsername || '',
   );
+  const prioritizedQueries = getMissingPrioritizedRelationshipSearchQueries(
+    runtimeConfig,
+    normalizedRelationship,
+    usersByUsername,
+  );
   const queries = getRelationshipSearchPartitionQueries(runtimeConfig);
   const maxSearchDepth = Math.min(
     2,
@@ -2150,8 +2213,11 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     3,
     1,
   ));
-  const queryQueue = queries.map((query) => ({ query, depth: 1 }));
-  const queuedQueries = new Set(queries);
+  const queryQueue = [
+    ...prioritizedQueries.map((query) => ({ query, depth: 0, source: 'missing-known-profile' })),
+    ...queries.map((query) => ({ query, depth: 1, source: 'alphabet-partition' })),
+  ];
+  const queuedQueries = new Set([...prioritizedQueries, ...queries]);
   const queryStats = [];
   const queriesRun = [];
   let searchRounds = 0;
@@ -2178,6 +2244,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     expectedCount,
     maxItems,
     maxScrollRounds,
+    prioritizedQueryCount: prioritizedQueries.length,
     queryCount: queries.length,
     targetUsername: searchTargetUsername || null,
   });
@@ -2283,7 +2350,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
   }
 
   for (let queryIndex = 0; queryIndex < queryQueue.length; queryIndex++) {
-    const { query, depth } = queryQueue[queryIndex];
+    const { query, depth, source } = queryQueue[queryIndex];
 
     if (targetReached() || searchRounds >= maxScrollRounds) {
       break;
@@ -2340,6 +2407,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       maxScrollRounds,
       searchRounds,
       depth,
+      source,
       queryIndex: queryIndex + 1,
       queryCount: queryQueue.length,
     });
@@ -2406,6 +2474,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
         atBottom: Boolean(lastScrollState?.atBottom),
         suggestionsVisible,
         depth,
+        source,
         queryIndex: queryIndex + 1,
         queryCount: queryQueue.length,
         ...livePreview,
@@ -2433,7 +2502,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       }
 
       if (entries.length === 0) {
-        if (searchTargetUsername && queryRounds < 3 && searchRounds < maxScrollRounds) {
+        if ((searchTargetUsername || source === 'missing-known-profile') && queryRounds < 3 && searchRounds < maxScrollRounds) {
           await sleep(searchWaitMs);
           continue;
         }
@@ -2480,6 +2549,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       reason: queryStopReason,
       complete: targetReached(),
       depth,
+      source,
       queryIndex: queryIndex + 1,
       queryCount: queryQueue.length,
       visibleCount: queryVisibleUsernames.size,
@@ -2488,6 +2558,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     queryStats.push({
       query,
       depth,
+      source,
       rounds: queryRounds,
       addedCount: queryAddedCount,
       visibleCount: queryVisibleUsernames.size,
@@ -2510,7 +2581,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
 
     if (
       depth === 1
-      && queryIndex === queries.length - 1
+      && queryIndex === prioritizedQueries.length + queries.length - 1
       && maxSearchDepth >= 2
       && !targetReached()
       && searchRounds < maxScrollRounds
@@ -2603,6 +2674,7 @@ async function collectPublicRelationshipSearchOnlyList(page, username, profile, 
     searchStopReason: null,
     searchMaxDepth: 0,
     searchExpandedQueryCount: 0,
+    listTemporarilyUnavailable: false,
   };
 
   if (profile?.isPrivate) {
@@ -2724,6 +2796,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     searchStopReason: null,
     searchMaxDepth: 0,
     searchExpandedQueryCount: 0,
+    listTemporarilyUnavailable: false,
   };
 
   if (profile?.isPrivate) {
@@ -2800,6 +2873,8 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     let unchangedRounds = 0;
     let previousCount = usersByUsername.size;
     let passRounds = 0;
+    let sawEntriesThisPass = false;
+    let emptyAfterEntriesRounds = 0;
 
     while (totalScrollRounds < maxScrollRounds && !targetReached()) {
       const collection = await collectFollowerEntriesFromDialog(page);
@@ -2827,6 +2902,30 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
           reason: stopReason,
         });
         break;
+      }
+
+      if (entries.length > 0) {
+        sawEntriesThisPass = true;
+        emptyAfterEntriesRounds = 0;
+      } else if (sawEntriesThisPass || usersByUsername.size > 0) {
+        emptyAfterEntriesRounds++;
+
+        if (emptyAfterEntriesRounds >= 2) {
+          stopReason = 'relationship-list-temporarily-unavailable';
+          result.listTemporarilyUnavailable = true;
+          progressLog('relationship-list-temporarily-unavailable', {
+            relationship: normalizedRelationship,
+            loaded: usersByUsername.size,
+            expectedCount,
+            openAttempt: openAttempts,
+            round: totalScrollRounds,
+            message: `${normalizedRelationship}-Liste zeigt ploetzlich keine Profile mehr; diese Liste wird fuer diesen Lauf beendet.`,
+          });
+          break;
+        }
+
+        await sleep(1200);
+        continue;
       }
 
       addRelationshipEntriesToMap(entries, usersByUsername, targetUsername);
@@ -2920,7 +3019,11 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
 
     await closeInstagramDialog(page);
 
-    if (stopReason === 'instagram-rate-limit' || stopReason === 'ui-stop-requested') {
+    if (
+      stopReason === 'instagram-rate-limit'
+      || stopReason === 'ui-stop-requested'
+      || stopReason === 'relationship-list-temporarily-unavailable'
+    ) {
       break;
     }
 
@@ -2950,6 +3053,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   if (
     stopReason !== 'instagram-rate-limit'
     && stopReason !== 'ui-stop-requested'
+    && stopReason !== 'relationship-list-temporarily-unavailable'
     && !targetReached()
     && expectedCount > 0
     && usersByUsername.size < expectedCount
@@ -3062,6 +3166,14 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
   const dismissedCandidates = [];
   const dismissedUsernames = new Set();
   const candidateHistory = normalizeSuggestionCandidateHistory(runtimeConfig.suggestionCandidateHistory || {});
+  const alreadyScannedSuggestionUsernames = new Set(Object.entries(candidateHistory)
+    .filter(([, history]) => (
+      Boolean(history?.hasMatch)
+      || Boolean(history?.permanentlyDismissed)
+      || Number(history?.noMatchChecks || 0) > 0
+    ))
+    .map(([username]) => normalizeInstagramUsername(username))
+    .filter(Boolean));
   let gracefullyStopped = false;
   let rateLimited = false;
   let rateLimitText = null;
@@ -3076,17 +3188,17 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
   });
 
   await scrollToProfileSuggestions(page, 6);
-  const targetSeeAllClicked = await clickProfileSuggestionsSeeAll(page);
 
-  if (targetSeeAllClicked) {
-    await sleep(1600);
-  }
-
-  const targetSuggestions = await collectProfileSuggestionItems(
+  const targetSuggestions = await collectProfileSuggestionItemsDeep(
     page,
     targetUsername,
     maxTargetSuggestions,
+    {
+      dismissUsernames: alreadyScannedSuggestionUsernames,
+      includeSeeAll: true,
+    },
   );
+  const targetSeeAllClicked = Boolean(targetSuggestions.seeAllClicked);
 
   if (targetSeeAllClicked) {
     await closeInstagramDialog(page);
@@ -3098,6 +3210,39 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
 
   rateLimited = Boolean(targetSuggestions.rateLimited);
   rateLimitText = targetSuggestions.rateLimitText || null;
+
+  for (const dismissedKnown of targetSuggestions.dismissedKnownItems || []) {
+    const candidateUsername = normalizeInstagramUsername(dismissedKnown.username || '');
+
+    if (!candidateUsername || dismissedUsernames.has(candidateUsername)) {
+      continue;
+    }
+
+    const history = candidateHistory[candidateUsername] || {
+      hasMatch: false,
+      noMatchChecks: 0,
+      permanentlyDismissed: false,
+    };
+
+    dismissedCount += 1;
+    dismissedUsernames.add(candidateUsername);
+    dismissedCandidates.push({
+      ...dismissedKnown,
+      previousNoMatchChecks: Number(history.noMatchChecks || 0),
+      previousTargetFoundAsSuggestion: Boolean(history.hasMatch),
+    });
+    skippedCandidates.push({
+      ...dismissedKnown,
+      checked: false,
+      skipped: true,
+      skippedReason: Boolean(history.hasMatch)
+        ? 'already-saved-match'
+        : (Boolean(history.permanentlyDismissed) ? 'already-dismissed-no-match' : 'already-scanned-suggestion'),
+      dismissedFromSuggestions: true,
+      previousNoMatchChecks: Number(history.noMatchChecks || 0),
+      previousTargetFoundAsSuggestion: Boolean(history.hasMatch),
+    });
+  }
 
   for (const candidate of candidates) {
     const candidateUsername = normalizeInstagramUsername(candidate.username);
@@ -3160,11 +3305,13 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
     loaded: 0,
     expectedCount: candidatesToCheck.length,
     suggestionsObserved: candidates.length,
+    suggestionCollectionRounds: targetSuggestions.rounds || 0,
+    suggestionKnownSeen: targetSuggestions.seenKnownCount || 0,
     dismissedSuggestions: dismissedCount,
     skippedSuggestions: skippedCandidates.length,
     message: rateLimited
       ? 'Instagram hat die Profilvorschlaege per Rate-Limit blockiert.'
-      : `${candidates.length} Profilvorschlaege gefunden. ${candidatesToCheck.length} Kandidaten werden geprueft.`,
+      : `${candidates.length} neue Profilvorschlaege gefunden. ${candidatesToCheck.length} Kandidaten werden geprueft.`,
     ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
   });
 
@@ -3347,10 +3494,13 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
           await sleep(1300);
         }
 
-        const candidateSuggestions = await collectProfileSuggestionItems(
+        const candidateSuggestions = await collectProfileSuggestionItemsDeep(
           page,
           candidate.username,
           maxCandidateSuggestions,
+          {
+            includeSeeAll: true,
+          },
         );
 
         if (candidateSuggestions.rateLimited) {
@@ -3505,6 +3655,9 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
     available: Boolean(targetSuggestions.available),
     seeAllClicked: targetSeeAllClicked,
     observedCount: candidates.length,
+    collectionRounds: targetSuggestions.rounds || 0,
+    dismissedKnownCount: targetSuggestions.dismissedKnownCount || 0,
+    seenKnownCount: targetSuggestions.seenKnownCount || 0,
     checkedCount: checkedCandidates.length,
     matchCount: matchedCandidates.length,
     dismissedCount,
@@ -3839,15 +3992,308 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
   }));
 }
 
-async function dismissVisibleSuggestion(page, username) {
+async function advanceProfileSuggestionsViewport(page) {
+  return page.evaluate(() => {
+    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const isVisible = (element) => {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none';
+    };
+    const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge|suggested|suggestions)/i;
+    const reservedPaths = new Set(['accounts', 'direct', 'explore', 'p', 'reel', 'reels', 'stories', 'tv']);
+    const profileAnchorsIn = (element) => Array.from(element.querySelectorAll('a[href]')).filter((anchor) => {
+      try {
+        const parts = new URL(anchor.getAttribute('href'), window.location.origin).pathname
+          .split('/')
+          .filter(Boolean);
+
+        return parts.length === 1 && !reservedPaths.has(parts[0]);
+      } catch (error) {
+        return false;
+      }
+    });
+    const dialog = document.querySelector('div[role="dialog"]');
+    const root = dialog || document.body;
+    const scrollables = Array.from(root.querySelectorAll('div, section, ul'))
+      .filter(isVisible)
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+        const profileAnchorCount = profileAnchorsIn(element).length;
+        const horizontalOverflow = element.scrollWidth > element.clientWidth + 30;
+        const verticalOverflow = element.scrollHeight > element.clientHeight + 30;
+        const suggestionText = suggestionPattern.test(text);
+        const score = (profileAnchorCount * 4)
+          + (horizontalOverflow ? 8 : 0)
+          + (verticalOverflow ? 3 : 0)
+          + (suggestionText ? 5 : 0)
+          - Math.max(0, Math.floor(text.length / 1200));
+
+        return {
+          element,
+          rect,
+          profileAnchorCount,
+          horizontalOverflow,
+          verticalOverflow,
+          suggestionText,
+          score,
+        };
+      })
+      .filter((entry) => entry.profileAnchorCount > 0 && (entry.horizontalOverflow || entry.verticalOverflow || entry.suggestionText))
+      .sort((left, right) => right.score - left.score);
+
+    const horizontalTarget = scrollables.find((entry) => entry.horizontalOverflow)?.element || null;
+
+    if (horizontalTarget) {
+      const before = horizontalTarget.scrollLeft;
+      const step = Math.max(260, horizontalTarget.clientWidth * 0.82);
+      horizontalTarget.scrollLeft = Math.min(horizontalTarget.scrollLeft + step, horizontalTarget.scrollWidth);
+      const after = horizontalTarget.scrollLeft;
+
+      if (after > before + 4) {
+        return {
+          advanced: true,
+          mode: 'horizontal-scroll',
+          atEnd: after + horizontalTarget.clientWidth >= horizontalTarget.scrollWidth - 8,
+        };
+      }
+    }
+
+    const nextPattern = /(?:weiter|n(?:a|\u00e4)chste|next)/i;
+    const nextControl = Array.from(root.querySelectorAll('button, [role="button"], [aria-label]'))
+      .filter(isVisible)
+      .find((element) => {
+        const label = normalizeElementText([
+          element.getAttribute?.('aria-label') || '',
+          element.getAttribute?.('title') || '',
+          element.innerText || '',
+          element.textContent || '',
+        ].join(' '));
+        const rect = element.getBoundingClientRect();
+
+        return nextPattern.test(label)
+          && rect.width <= 96
+          && rect.height <= 96
+          && rect.right > 0
+          && rect.left < window.innerWidth;
+      }) || null;
+
+    if (nextControl) {
+      nextControl.click();
+
+      return {
+        advanced: true,
+        mode: 'next-control',
+        atEnd: false,
+      };
+    }
+
+    const verticalTarget = scrollables.find((entry) => entry.verticalOverflow)?.element || null;
+
+    if (verticalTarget) {
+      const before = verticalTarget.scrollTop;
+      const step = Math.max(420, verticalTarget.clientHeight * 0.82);
+      verticalTarget.scrollTop = Math.min(verticalTarget.scrollTop + step, verticalTarget.scrollHeight);
+      const after = verticalTarget.scrollTop;
+
+      if (after > before + 4) {
+        return {
+          advanced: true,
+          mode: 'vertical-scroll',
+          atEnd: after + verticalTarget.clientHeight >= verticalTarget.scrollHeight - 8,
+        };
+      }
+    }
+
+    const before = window.scrollY;
+    window.scrollBy(0, Math.max(520, window.innerHeight * 0.72));
+    const after = window.scrollY;
+
+    return {
+      advanced: after > before + 4,
+      mode: 'window-scroll',
+      atEnd: after + window.innerHeight >= document.documentElement.scrollHeight - 12,
+    };
+  }).catch(() => ({
+    advanced: false,
+    mode: 'error',
+    atEnd: true,
+  }));
+}
+
+function mergeSuggestionItemsByUsername(targetMap, items = [], ignoredUsernames = new Set(), limit = 60) {
+  for (const item of items) {
+    const username = normalizeInstagramUsername(item?.username || '');
+
+    if (!username || ignoredUsernames.has(username) || targetMap.has(username)) {
+      continue;
+    }
+
+    targetMap.set(username, {
+      ...item,
+      username,
+    });
+
+    if (targetMap.size >= limit) {
+      break;
+    }
+  }
+}
+
+async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems = 60, options = {}) {
+  const limit = Math.max(1, Number(maxItems || 60));
+  const dismissUsernames = new Set(
+    Array.from(options.dismissUsernames || [])
+      .map((username) => normalizeInstagramUsername(username))
+      .filter(Boolean),
+  );
+  const itemsByUsername = new Map();
+  const dismissedKnownItems = [];
+  const dismissedKnownUsernames = new Set();
+  const seenKnownUsernames = new Set();
+  const maxInlineRounds = Math.max(4, Number(options.maxInlineRounds || 18));
+  const maxDialogRounds = Math.max(4, Number(options.maxDialogRounds || 24));
+  const collectLimit = Math.max(limit + dismissUsernames.size + 12, limit * 2);
+  let available = false;
+  let rateLimited = false;
+  let rateLimitText = null;
+  let headingText = null;
+  let seeAllClicked = false;
+  let rounds = 0;
+
+  const collectRound = async (phase) => {
+    const batch = await collectProfileSuggestionItems(page, currentUsername, collectLimit);
+
+    rounds += 1;
+    available = available || Boolean(batch.available);
+    rateLimited = rateLimited || Boolean(batch.rateLimited);
+    rateLimitText = batch.rateLimitText || rateLimitText;
+    headingText = batch.headingText || headingText;
+
+    if (batch.rateLimited) {
+      return {
+        stop: true,
+        newItems: 0,
+      };
+    }
+
+    let newItems = 0;
+
+    for (const item of batch.items || []) {
+      const username = normalizeInstagramUsername(item.username || '');
+
+      if (!username) {
+        continue;
+      }
+
+      if (dismissUsernames.has(username)) {
+        seenKnownUsernames.add(username);
+
+        if (!dismissedKnownUsernames.has(username)) {
+          const dismissed = await dismissVisibleSuggestion(page, username, { allowDialog: true });
+
+          if (dismissed) {
+            dismissedKnownUsernames.add(username);
+            dismissedKnownItems.push({
+              ...item,
+              username,
+              dismissed: true,
+              dismissedBeforeCheck: true,
+              dismissReason: 'already-scanned-suggestion',
+              collectionPhase: phase,
+            });
+            await sleep(500);
+          }
+        }
+
+        continue;
+      }
+
+      if (!itemsByUsername.has(username) && itemsByUsername.size < limit) {
+        newItems += 1;
+      }
+    }
+
+    mergeSuggestionItemsByUsername(itemsByUsername, batch.items || [], dismissUsernames, limit);
+
+    return {
+      stop: itemsByUsername.size >= limit,
+      newItems,
+    };
+  };
+
+  const scanScrollableSuggestions = async (phase, maxRounds) => {
+    let staleRounds = 0;
+
+    for (let round = 0; round < maxRounds; round += 1) {
+      const beforeSize = itemsByUsername.size;
+      const collection = await collectRound(phase);
+
+      if (collection.stop) {
+        return;
+      }
+
+      staleRounds = collection.newItems === 0 && itemsByUsername.size === beforeSize
+        ? staleRounds + 1
+        : 0;
+
+      const advanced = await advanceProfileSuggestionsViewport(page);
+      await sleep(advanced.advanced ? 1150 : 750);
+
+      if (!advanced.advanced && staleRounds >= 2) {
+        return;
+      }
+
+      if (advanced.atEnd && staleRounds >= 2) {
+        return;
+      }
+    }
+  };
+
+  await scanScrollableSuggestions('inline-carousel', maxInlineRounds);
+
+  if (options.includeSeeAll !== false && itemsByUsername.size < limit && !rateLimited) {
+    seeAllClicked = await clickProfileSuggestionsSeeAll(page);
+
+    if (seeAllClicked) {
+      await sleep(1700);
+      await scanScrollableSuggestions('see-all-dialog', maxDialogRounds);
+    }
+  }
+
+  return {
+    items: Array.from(itemsByUsername.values()).slice(0, limit),
+    available,
+    rateLimited,
+    rateLimitText,
+    headingText,
+    seeAllClicked,
+    rounds,
+    dismissedKnownItems,
+    dismissedKnownCount: dismissedKnownItems.length,
+    seenKnownCount: seenKnownUsernames.size,
+  };
+}
+
+async function dismissVisibleSuggestion(page, username, options = {}) {
   const normalizedUsername = normalizeInstagramUsername(username);
+  const allowDialog = options.allowDialog === true;
 
   if (!normalizedUsername) {
     return false;
   }
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
-    const result = await page.evaluate((username) => {
+    const result = await page.evaluate(({ username, allowDialog }) => {
       const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
       const normalizeUsername = (value = '') => String(value || '')
         .replace(/^@/, '')
@@ -3855,7 +4301,7 @@ async function dismissVisibleSuggestion(page, username) {
         .toLowerCase();
       const isInsideDialog = (element) => Boolean(element?.closest?.('div[role="dialog"]'));
       const isVisible = (element) => {
-        if (!element || isInsideDialog(element)) {
+        if (!element || (!allowDialog && isInsideDialog(element))) {
           return false;
         }
 
@@ -3879,7 +4325,7 @@ async function dismissVisibleSuggestion(page, username) {
         }
       };
       const findAnchor = () => Array.from(document.querySelectorAll('a[href]'))
-        .filter((anchorElement) => !isInsideDialog(anchorElement))
+        .filter((anchorElement) => allowDialog || !isInsideDialog(anchorElement))
         .find((anchorElement) => profileUsernameFromAnchor(anchorElement) === username) || null;
       const removePattern = /^(x|entfernen|remove|close|schliessen|schlie(?:ss|\u00df)en|dismiss)$/i;
       const removeTextPattern = /(?:entfernen|remove|close|schliessen|schlie(?:ss|\u00df)en|dismiss)/i;
@@ -3895,7 +4341,7 @@ async function dismissVisibleSuggestion(page, username) {
         let best = anchor;
 
         for (let element = anchor; element && element !== document.body; element = element.parentElement) {
-          if (isInsideDialog(element)) {
+          if (!allowDialog && isInsideDialog(element)) {
             return null;
           }
 
@@ -3920,7 +4366,7 @@ async function dismissVisibleSuggestion(page, username) {
       };
       const findDismissControl = (card, anchor) => {
         const controls = Array.from(card.querySelectorAll('button, [role="button"], [aria-label], svg[aria-label], svg[role="img"]'))
-          .filter((element) => !isInsideDialog(element));
+          .filter((element) => allowDialog || !isInsideDialog(element));
 
         for (const control of controls) {
           const label = elementLabel(control);
@@ -3964,7 +4410,8 @@ async function dismissVisibleSuggestion(page, username) {
       };
       const clickCarouselNext = () => {
         const nextPattern = /(?:weiter|n(?:a|\u00e4)chste|next)/i;
-        const controls = Array.from(document.querySelectorAll('button, [role="button"], [aria-label]'))
+        const root = allowDialog ? (document.querySelector('div[role="dialog"]') || document) : document;
+        const controls = Array.from(root.querySelectorAll('button, [role="button"], [aria-label]'))
           .filter(isVisible)
           .filter((element) => {
             const label = elementLabel(element);
@@ -4018,7 +4465,7 @@ async function dismissVisibleSuggestion(page, username) {
       control.click();
 
       return { status: 'dismissed' };
-    }, normalizedUsername).catch(() => ({ status: 'error' }));
+    }, { username: normalizedUsername, allowDialog }).catch(() => ({ status: 'error' }));
 
     if (result?.status === 'dismissed') {
       return true;
@@ -4860,6 +5307,7 @@ function mergeRelationshipLists(previousList, nextList) {
     rateLimitText: nextList.rateLimited ? (nextList.rateLimitText || previousList.rateLimitText || null) : null,
     rateLimitRecovered: recoveredFromRateLimit,
     previousRateLimitText: previousList.rateLimitText || previousList.previousRateLimitText || null,
+    listTemporarilyUnavailable: Boolean(previousList.listTemporarilyUnavailable || nextList.listTemporarilyUnavailable),
     searchAttempted: Boolean(previousList.searchAttempted || nextList.searchAttempted),
     searchInputAvailable: Boolean(previousList.searchInputAvailable || nextList.searchInputAvailable),
     searchQueries: [
@@ -6544,6 +6992,8 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       if (initialProfile.followersList?.rateLimited) {
         notes.push('Instagram hat die Followerliste per Rate-Limit-Meldung blockiert; die Listenphase wurde abgebrochen.');
         consoleMessages.push('rate-limit: instagram-rate-limit followers');
+      } else if (initialProfile.followersList?.listTemporarilyUnavailable) {
+        notes.push('Followerliste zeigte waehrend des Scans ploetzlich keine Profile mehr; mit der naechsten Listenphase wird fortgesetzt.');
       } else if (initialProfile.followersList?.gracefullyStopped) {
         gracefullyStopped = true;
         notes.push('Followerliste wurde ueber die Oberflaeche beendet; bisherige Eintraege werden gespeichert.');
@@ -6590,6 +7040,8 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       if (initialProfile.followingList?.rateLimited) {
         notes.push('Instagram hat die Gefolgt-Liste per Rate-Limit-Meldung blockiert; die Listenphase wurde abgebrochen.');
         consoleMessages.push('rate-limit: instagram-rate-limit following');
+      } else if (initialProfile.followingList?.listTemporarilyUnavailable) {
+        notes.push('Gefolgt-Liste zeigte waehrend des Scans ploetzlich keine Profile mehr; die Listenphase wurde beendet.');
       } else if (initialProfile.followingList?.gracefullyStopped) {
         gracefullyStopped = true;
         notes.push('Gefolgt-Liste wurde ueber die Oberflaeche beendet; bisherige Eintraege werden gespeichert.');

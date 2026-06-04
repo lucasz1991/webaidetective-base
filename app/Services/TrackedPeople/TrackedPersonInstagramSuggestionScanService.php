@@ -100,8 +100,8 @@ class TrackedPersonInstagramSuggestionScanService
                 ]);
             },
             $this->withActiveScanControl([
-                'suggestionScanMaxItems' => 12,
-                'suggestionCandidateMaxItems' => 8,
+                'suggestionScanMaxItems' => 60,
+                'suggestionCandidateMaxItems' => 40,
                 'suggestionPublicListSearchMaxScrollRounds' => 60,
                 'suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson),
             ]),

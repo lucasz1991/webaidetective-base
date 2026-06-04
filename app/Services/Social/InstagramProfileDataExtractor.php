@@ -115,6 +115,7 @@ class InstagramProfileDataExtractor
             'reason' => data_get($relationshipList, 'reason'),
             'rateLimited' => (bool) data_get($relationshipList, 'rateLimited', false),
             'rateLimitText' => data_get($relationshipList, 'rateLimitText'),
+            'listTemporarilyUnavailable' => (bool) data_get($relationshipList, 'listTemporarilyUnavailable', false),
             'gracefullyStopped' => (bool) data_get($relationshipList, 'gracefullyStopped', false),
             'searchAttempted' => (bool) data_get($relationshipList, 'searchAttempted', false),
             'searchInputAvailable' => (bool) data_get($relationshipList, 'searchInputAvailable', false),

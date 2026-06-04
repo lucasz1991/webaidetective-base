@@ -205,6 +205,15 @@ class TrackedPeopleManager extends Component
             $this->showDetailModal = false;
         }
 
+        if ($this->selectedTrackedPersonId && $selectedTrackedPerson = $trackedPeople->firstWhere('id', $this->selectedTrackedPersonId)) {
+            $selectedTrackedPerson->load([
+                'instagramSnapshots' => fn ($query) => $query
+                    ->where('has_changes', true)
+                    ->latest('analyzed_at')
+                    ->limit(10),
+            ]);
+        }
+
         return view('livewire.user.tracked-people-manager', [
             'trackedPeople' => $trackedPeople,
         ]);

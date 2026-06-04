@@ -186,8 +186,16 @@
                 $selectedLastInstagramAnalyzedAt = $selectedTrackedPerson?->last_instagram_analyzed_at
                     ? $selectedTrackedPerson->last_instagram_analyzed_at->copy()->timezone(config('app.timezone'))
                     : null;
-                $selectedLatestChangeSnapshot = $selectedTrackedPerson?->latestChangedInstagramSnapshot;
-                $selectedLatestChange = collect($selectedLatestChangeSnapshot?->detected_changes ?? [])->first();
+                $selectedProfileChangeFields = ['profile_image_hash', 'followers_count', 'following_count', 'posts_count'];
+                $selectedRecentChangeSnapshots = $selectedTrackedPerson && $selectedTrackedPerson->relationLoaded('instagramSnapshots')
+                    ? $selectedTrackedPerson->instagramSnapshots
+                    : collect();
+                $selectedLatestChangeSnapshot = $selectedRecentChangeSnapshots
+                    ->first(fn ($snapshot) => collect($snapshot->detected_changes ?? [])
+                        ->contains(fn ($change) => in_array($change['field'] ?? null, $selectedProfileChangeFields, true)))
+                    ?? $selectedTrackedPerson?->latestChangedInstagramSnapshot;
+                $selectedLatestChange = collect($selectedLatestChangeSnapshot?->detected_changes ?? [])
+                    ->first(fn ($change) => in_array($change['field'] ?? null, $selectedProfileChangeFields, true));
                 $selectedLatestChangeAnalyzedAt = $selectedLatestChangeSnapshot?->analyzed_at
                     ? $selectedLatestChangeSnapshot->analyzed_at->copy()->timezone(config('app.timezone'))
                     : null;
@@ -234,11 +242,6 @@
                                         {{ $selectedTrackedPerson->instagram_username ? '@'.$selectedTrackedPerson->instagram_username : 'Instagram-Handle fehlt' }}
                                     </div>
 
-                                    @if($selectedTrackedPerson->last_instagram_status_message)
-                                        <p class="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
-                                            {{ $selectedTrackedPerson->last_instagram_status_message }}
-                                        </p>
-                                    @endif
                                 </div>
                             </div>
 
@@ -278,9 +281,13 @@
                                 </div>
                                 <div class="mt-2">
                                     <span class="font-semibold">{{ $selectedLatestChange['label'] ?? $selectedLatestChange['field'] ?? 'Aenderung' }}:</span>
-                                    <span>{{ filled($selectedLatestChange['before'] ?? null) ? $selectedLatestChange['before'] : '-' }}</span>
-                                    <span class="mx-1">-&gt;</span>
-                                    <span>{{ filled($selectedLatestChange['after'] ?? null) ? $selectedLatestChange['after'] : '-' }}</span>
+                                    @if(($selectedLatestChange['field'] ?? null) === 'profile_image_hash')
+                                        <span>Profilbild wurde aktualisiert.</span>
+                                    @else
+                                        <span>{{ filled($selectedLatestChange['before'] ?? null) ? number_format((int) $selectedLatestChange['before']) : '-' }}</span>
+                                        <span class="mx-1">-&gt;</span>
+                                        <span>{{ filled($selectedLatestChange['after'] ?? null) ? number_format((int) $selectedLatestChange['after']) : '-' }}</span>
+                                    @endif
                                 </div>
                             </div>
                         @endif
