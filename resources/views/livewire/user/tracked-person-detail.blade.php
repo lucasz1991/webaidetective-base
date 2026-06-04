@@ -1161,7 +1161,7 @@
         </x-slot>
     </x-confirmation-modal>
 
-    <section id="profilinfos" x-data="{ activeProfileTab: 'notizen' }" class="scroll-mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
+    <section id="profilinfos" x-data="{ activeProfileTab: 'analyse' }" class="scroll-mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="border-b border-slate-200 px-4 py-3">
             <div class="flex gap-2 overflow-x-auto text-sm" role="tablist" aria-label="Profilinformationen">
                 <button
