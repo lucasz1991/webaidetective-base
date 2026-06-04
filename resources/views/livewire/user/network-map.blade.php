@@ -12,13 +12,19 @@
                     <div class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600 shadow-sm">
                         <span class="h-2 w-2 rounded-full bg-sky-500"></span>
                         Netzwerk
-                    </div>
-                    <h1 class="mt-4 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl">
-                        Personen-Netzwerk
-                    </h1>
-                    <p class="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                        Grafische Sicht auf beobachtete Personen, bekannte Profile und rekonstruierte Instagram-Verbindungen.
-                    </p>
+                    <div
+                        class="min-h-screen bg-[#fafafa] pb-16"
+                        data-network-map-root
+                        data-network-lazy="true"
+                        wire:init="prepareGraph"
+                        wire:loading.class="cursor-wait"
+                        x-data="{
+                            networkNode: { id: null, type: null },
+                            setNetworkNode(nodeId, nodeType) {
+                                this.networkNode = { id: nodeId, type: nodeType };
+                            }
+                        }"
+                    >
                     @if($trackedPeople->isNotEmpty())
                         <div class="mt-4 flex max-w-sm flex-col gap-1">
                             <label for="network-primary-person" class="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -159,6 +165,36 @@
                             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Direkte Kanten</div>
                             <div class="mt-1 text-2xl font-bold text-slate-950" data-network-detail-edge-count>0</div>
                         </div>
+                        <div class="mt-4 space-y-2" data-network-detail-actions>
+                            <button
+                                type="button"
+                                @click="$wire.addProfileAsKnown(networkNode.id || '')"
+                                wire:loading.attr="disabled"
+                                class="w-full rounded-lg border border-pink-200 bg-pink-50 px-3 py-2 text-sm font-semibold text-pink-700 transition hover:bg-pink-100 disabled:opacity-50"
+                                x-show="networkNode.type && networkNode.type !== 'person'"
+                            >
+                                <span wire:loading.remove>Als bekanntes Profil speichern</span>
+                                <span wire:loading class="inline-flex items-center gap-2">
+                                    <span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
+                                    Wird gespeichert...
+                                </span>
+                            </button>
+                            <button
+                                type="button"
+                                @click="$wire.scanProfile(networkNode.id || '')"
+                                wire:loading.attr="disabled"
+                                class="w-full rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100 disabled:opacity-50"
+                                x-show="networkNode.type !== 'person'"
+                            >
+                                <span wire:loading.remove>Profil scannen</span>
+                                <span wire:loading class="inline-flex items-center gap-2">
+                                    <span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-current border-t-transparent"></span>
+                                    Scan wird gestartet...
+                                </span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
                     </div>
                 </div>
 
@@ -175,6 +211,7 @@
                         <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-sky-600"></span> Bekannte Profil-Verknuepfung</div>
                         <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-pink-600"></span> Rekonstruierte Listenverbindung</div>
                         <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-emerald-600"></span> Gespeicherte Follower-/Gefolgt-Listen</div>
+                        <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-indigo-600"></span> Profil-Relationships</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-amber-400 ring-2 ring-amber-500"></span> Hauptperson</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-slate-950"></span> Beobachtete Person</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-pink-50 ring-1 ring-pink-300"></span> Rekonstruierter Kandidat</div>

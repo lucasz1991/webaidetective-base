@@ -37,6 +37,34 @@ class NetworkMap extends Component
         return 'network-map-graph:'.$userId.':'.$token;
     }
 
+    public static function graphHashCacheKey(int $userId, string $token = ''): string
+    {
+        if ($token === '') {
+            return 'network-map-hash:'.$userId;
+        }
+        return 'network-map-hash:'.$userId.':'.$token;
+    }
+
+    private function generateDataHash(Collection $trackedPeople): string
+    {
+        $data = $trackedPeople->map(function (TrackedPerson $person) {
+            return [
+                'id' => $person->id,
+                'instagram_username' => $person->instagram_username,
+                'updated_at' => $person->updated_at?->timestamp,
+                'current_instagram_profile_id' => $person->current_instagram_profile_id,
+                'public_profiles_count' => $person->publicProfiles()->count(),
+                'inferred_connections_count' => $person->instagramInferredConnections()->count(),
+                'latest_snapshot_updated' => $person->latestInstagramSnapshot?->updated_at?->timestamp,
+            ];
+        })->toArray();
+
+        // Also include primary person flag
+        $data['primary_person_id'] = $this->primaryTrackedPersonId;
+        
+        return hash('sha256', json_encode($data));
+    }
+
     public function setPrimaryTrackedPerson($trackedPersonId): void
     {
         $user = Auth::user();
@@ -50,6 +78,9 @@ class NetworkMap extends Component
             $user->trackedPeople()->update(['is_primary' => false]);
             $user->trackedPeople()->whereKey($trackedPersonId)->update(['is_primary' => true]);
         });
+
+        // Invalidate graph cache when primary person changes
+        Cache::forget(self::graphHashCacheKey((int) $user->id));
 
         $this->primaryTrackedPersonId = $trackedPersonId;
         $this->graphToken = null;
@@ -77,17 +108,53 @@ class NetworkMap extends Component
             return;
         }
 
+        // Generate data hash for cache validation
+        $dataHash = $this->generateDataHash($trackedPeople);
+        $cachedToken = Cache::get(self::graphHashCacheKey((int) $user->id));
+
+        // If we have a cached token with the same data hash, reuse it
+        if ($cachedToken && $dataHash === Cache::get(self::graphHashCacheKey((int) $user->id, $cachedToken))) {
+            $cachedData = Cache::get(self::graphCacheKey((int) $user->id, $cachedToken));
+            if ($cachedData) {
+                $this->graphToken = $cachedToken;
+                $this->graphStats = $cachedData['stats'] ?? $this->graphStats;
+                $this->dispatch(
+                    'network-map-graph-prepared',
+                    token: $cachedToken,
+                    chunkCount: count($cachedData['chunks'] ?? []),
+                    chunkUrl: route('network.graph-chunk', ['token' => $cachedToken, 'chunk' => '__CHUNK__']),
+                    stats: $this->graphStats,
+                );
+                return;
+            }
+        }
+
         $graph = $this->buildGraph($trackedPeople);
         $stats = $this->statsForGraph($trackedPeople, $graph);
         $chunks = $this->chunkGraph($graph);
         $token = (string) Str::uuid();
 
+        // Cache both the graph data and the hash
         Cache::put(
             self::graphCacheKey((int) $user->id, $token),
             [
                 'stats' => $stats,
                 'chunks' => $chunks,
             ],
+            now()->addMinutes(30),
+        );
+        
+        // Cache the hash mapping for future validation
+        Cache::put(
+            self::graphHashCacheKey((int) $user->id, $token),
+            $dataHash,
+            now()->addMinutes(30),
+        );
+        
+        // Store current token in primary cache key for quick lookup
+        Cache::put(
+            self::graphHashCacheKey((int) $user->id),
+            $token,
             now()->addMinutes(30),
         );
 
@@ -316,6 +383,7 @@ class NetworkMap extends Component
         $this->addStoredInstagramProfileListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addTrackedRelationshipListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addObservedTrackedPersonConnectionsToPrimary($trackedPeople, $primaryPerson, $nodesByInstagram, $nodes, $edges);
+        $this->addTrackedPersonProfileRelationships($trackedPeople, $nodesByInstagram, $nodes, $edges);
 
         return $this->applyLayout(array_values($nodes), array_values($edges));
     }
@@ -1156,20 +1224,35 @@ class NetworkMap extends Component
         $height = 760;
         $centerX = $width / 2;
         $centerY = $height / 2;
-        $people = array_values(array_filter($nodes, fn (array $node): bool => $node['type'] === 'person'));
-        $others = array_values(array_filter($nodes, fn (array $node): bool => $node['type'] !== 'person'));
         $positions = [];
 
+        // Calculate connection count for each node to determine proximity
+        $connectionCounts = $this->calculateConnectionCounts($nodes, $edges);
+
+        // Find primary person (center)
+        $primaryNode = collect($nodes)->firstWhere('isPrimary', true);
+        if ($primaryNode) {
+            $positions[$primaryNode['id']] = [
+                'x' => $centerX,
+                'y' => $centerY,
+            ];
+        }
+
+        // Separate nodes by type
+        $people = array_values(array_filter($nodes, fn (array $node): bool => $node['type'] === 'person' && !($node['isPrimary'] ?? false)));
+        $profiles = array_values(array_filter($nodes, fn (array $node): bool => $node['type'] === 'profile'));
+        $candidates = array_values(array_filter($nodes, fn (array $node): bool => $node['type'] === 'candidate'));
+
+        // Sort profiles and other nodes by connection count (descending)
+        usort($profiles, function (array $a, array $b) use ($connectionCounts) {
+            return ($connectionCounts[$b['id']] ?? 0) - ($connectionCounts[$a['id']] ?? 0);
+        });
+        usort($candidates, function (array $a, array $b) use ($connectionCounts) {
+            return ($connectionCounts[$b['id']] ?? 0) - ($connectionCounts[$a['id']] ?? 0);
+        });
+
+        // Place people in first ring (closely connected)
         foreach ($people as $index => $node) {
-            if ($node['isPrimary'] ?? false) {
-                $positions[$node['id']] = [
-                    'x' => $centerX,
-                    'y' => $centerY,
-                ];
-
-                continue;
-            }
-
             $angle = $this->angle($index, max(1, count($people)), -90);
             $radius = count($people) <= 1 ? 0 : min(260, 130 + count($people) * 16);
             $positions[$node['id']] = [
@@ -1178,9 +1261,24 @@ class NetworkMap extends Component
             ];
         }
 
-        foreach ($others as $index => $node) {
-            $angle = $this->angle($index, max(1, count($others)), -75);
-            $radius = min(340, 210 + count($others) * 4);
+        // Place profiles with adaptive radius based on connection density
+        foreach ($profiles as $index => $node) {
+            $connectionCount = $connectionCounts[$node['id']] ?? 0;
+            // Nodes with more connections get placed closer
+            $angle = $this->angle($index, max(1, count($profiles)), -75);
+            $max_radius = min(340, 210 + count($profiles) * 4);
+            // Adaptive radius: more connections = smaller radius
+            $radius = $max_radius * (1 - min(0.6, $connectionCount / max(1, array_max(array_values($connectionCounts)) ?: 1)));
+            $positions[$node['id']] = [
+                'x' => $centerX + cos($angle) * $radius,
+                'y' => $centerY + sin($angle) * $radius,
+            ];
+        }
+
+        // Place candidates in outer ring
+        foreach ($candidates as $index => $node) {
+            $angle = $this->angle($index, max(1, count($candidates)), -120);
+            $radius = min(380, 300 + count($candidates) * 3);
             $positions[$node['id']] = [
                 'x' => $centerX + cos($angle) * $radius,
                 'y' => $centerY + sin($angle) * $radius,
@@ -1224,13 +1322,227 @@ class NetworkMap extends Component
         ];
     }
 
+    private function calculateConnectionCounts(array $nodes, array $edges): array
+    {
+        $counts = [];
+        foreach ($nodes as $node) {
+            $counts[$node['id']] = 0;
+        }
+
+        foreach ($edges as $edge) {
+            $from = $edge['from'] ?? null;
+            $to = $edge['to'] ?? null;
+
+            if ($from && isset($counts[$from])) {
+                $counts[$from]++;
+            }
+            if ($to && isset($counts[$to])) {
+                $counts[$to]++;
+            }
+        }
+
+        return $counts;
+    }
+
     private function angle(int $index, int $count, float $offsetDegrees = 0): float
     {
         return deg2rad($offsetDegrees + (($index / max(1, $count)) * 360));
     }
 
+    private function addTrackedPersonProfileRelationships(
+        Collection $trackedPeople,
+        Collection $nodesByInstagram,
+        array &$nodes,
+        array &$edges,
+    ): void {
+        // Add inter-profile relationships from tracked people's Instagram profiles
+        $processedRelationships = [];
+
+        foreach ($trackedPeople as $person) {
+            if (! filled($person->instagram_username)) {
+                continue;
+            }
+
+            $sourceProfile = $person->currentInstagramProfile;
+            if (! $sourceProfile) {
+                continue;
+            }
+
+            // Process Instagram profile relationships (followers/following lists)
+            foreach ($sourceProfile->sourceRelationships as $relationship) {
+                if (! $this->isActiveListRelationship($relationship)) {
+                    continue;
+                }
+
+                $relatedProfile = $relationship->relatedInstagramProfile;
+                if (! $relatedProfile || ! filled($relatedProfile->username)) {
+                    continue;
+                }
+
+                $relatedUsername = $this->normalizeUsername($relatedProfile->username);
+                $existingNode = $nodesByInstagram->get($relatedUsername);
+
+                // Only create edge if both nodes exist in the graph
+                if (! $existingNode) {
+                    continue;
+                }
+
+                $sourceId = 'person-'.$person->id;
+                $targetId = $existingNode['id'];
+
+                // Avoid duplicate edges
+                $relationshipKey = min($sourceId, $targetId) . '|' . max($sourceId, $targetId);
+                if (isset($processedRelationships[$relationshipKey])) {
+                    continue;
+                }
+
+                $processedRelationships[$relationshipKey] = true;
+
+                // Determine direction based on list type
+                if ($relationship->list_type === 'followers') {
+                    $from = $targetId;
+                    $to = $sourceId;
+                    $direction = 'folgt';
+                } else {
+                    $from = $sourceId;
+                    $to = $targetId;
+                    $direction = 'folgt';
+                }
+
+                $edgeId = 'profile-rel-'.$from.'-'.$to;
+
+                // Merge or create edge
+                if (! isset($edges[$edgeId])) {
+                    $edges[$edgeId] = [
+                        'id' => $edgeId,
+                        'from' => $from,
+                        'to' => $to,
+                        'type' => 'tracked-profile-rel',
+                        'label' => $direction,
+                        'sourceHandle' => null,
+                        'evidence' => [],
+                    ];
+                }
+            }
+        }
+    }
+
     private function normalizeUsername(?string $username): string
     {
         return Str::lower(ltrim(trim((string) $username), '@'));
+    }
+
+    /**
+     * Scan a profile in the background and fetch its followers/following.
+     * Dispatches a background job to avoid blocking the UI.
+     */
+    public function scanProfile(string $nodeId): void
+    {
+        $user = Auth::user();
+        if (! $user) {
+            return;
+        }
+
+        $profile = $this->resolveInstagramProfileFromNodeId($nodeId);
+        if (! $profile) {
+            $this->dispatch('notification', type: 'error', message: 'Profil konnte nicht gefunden werden');
+            return;
+        }
+
+        try {
+            // Dispatch background job
+            \App\Jobs\ScanInstagramProfileJob::dispatch($profile->id, $user->id);
+            $this->dispatch('notification', type: 'success', message: 'Profil-Scan wurde gestartet');
+        } catch (\Throwable $e) {
+            $this->dispatch('notification', type: 'error', message: 'Fehler beim Starten des Scans: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Add a profile as a known profile to the current user.
+     * Creates a new public profile link if it doesn't already exist.
+     */
+    public function addProfileAsKnown(string $nodeId): void
+    {
+        $user = Auth::user();
+        if (! $user) {
+            return;
+        }
+
+        $profile = $this->resolveInstagramProfileFromNodeId($nodeId);
+        if (! $profile || ! filled($profile->username)) {
+            $this->dispatch('notification', type: 'error', message: 'Profil konnte nicht hinzugefügt werden');
+            return;
+        }
+
+        try {
+            $trackedPerson = $this->getPrimaryTrackedPerson($user);
+            if (! $trackedPerson) {
+                $this->dispatch('notification', type: 'error', message: 'Keine Hauptperson ausgewählt');
+                return;
+            }
+
+            // Check if profile already exists
+            $existingPublicProfile = $trackedPerson->publicProfiles()
+                ->where('platform', 'instagram')
+                ->where('username', $profile->username)
+                ->exists();
+
+            if ($existingPublicProfile) {
+                $this->dispatch('notification', type: 'warning', message: 'Profil ist bereits als bekannt gespeichert');
+                return;
+            }
+
+            // Create new public profile link
+            \DB::transaction(function () use ($trackedPerson, $profile): void {
+                $trackedPerson->publicProfiles()->create([
+                    'platform' => 'instagram',
+                    'username' => $profile->username,
+                    'instagram_profile_id' => $profile->id,
+                    'relationship_type' => 'known_profile',
+                    'verified_at' => now(),
+                ]);
+            });
+
+            // Invalidate graph cache when new profile is added
+            Cache::forget(self::graphHashCacheKey((int) $user->id));
+
+            // Reset graph to refresh UI
+            $this->graphToken = null;
+            $this->prepareGraph();
+            $this->dispatch('notification', type: 'success', message: 'Profil wurde als bekannt gespeichert');
+
+        } catch (\Throwable $e) {
+            $this->dispatch('notification', type: 'error', message: 'Fehler beim Speichern: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Resolve InstagramProfile from graph node ID.
+     * Node IDs format: 'profile-instagram-{username}' or 'candidate-{username}'
+     */
+    private function resolveInstagramProfileFromNodeId(string $nodeId): ?InstagramProfile
+    {
+        $parts = explode('-', $nodeId, 3);
+        if (count($parts) < 3) {
+            return null;
+        }
+
+        $username = $parts[2] ?? null;
+        if (! filled($username)) {
+            return null;
+        }
+
+        return InstagramProfile::where('username', $this->normalizeUsername($username))->first();
+    }
+
+    /**
+     * Get the primary tracked person for a user.
+     */
+    private function getPrimaryTrackedPerson(User $user): ?TrackedPerson
+    {
+        return $user->trackedPeople()
+            ->orderByDesc('is_primary')
+            ->first();
     }
 }

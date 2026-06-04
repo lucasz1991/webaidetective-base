@@ -336,10 +336,10 @@
     </div>
 
     <section id="profil" class="scroll-mt-4 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <div class="bg-slate-950 px-4 py-4 text-white sm:px-5">
+        <div class="bg-gradient-to-r from-rose-50 via-slate-50 to-slate-100 px-4 py-4 text-slate-950 sm:px-5">
             <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div class="flex items-center gap-4">
-                    <div class="h-20 w-20 shrink-0 rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-1 shadow-md">
+                    <div class="h-20 w-20 shrink-0 rounded-full bg-gradient-to-tr from-rose-200 via-slate-200 to-fuchsia-200 p-1 shadow-sm">
                         @if($trackedPerson->profile_image_url)
                             <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full rounded-full border-4 border-white object-cover">
                         @else
@@ -349,25 +349,25 @@
                         @endif
                     </div>
                     <div class="min-w-0">
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-400">Instagram-Profil</p>
-                        <h2 class="mt-2 text-2xl font-semibold tracking-tight text-white break-words">
+                        <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">Instagram-Profil</p>
+                        <h2 class="mt-2 text-2xl font-semibold tracking-tight text-slate-950 break-words">
                             {{ $trackedPerson->instagram_username ? '@'.$trackedPerson->instagram_username : $trackedPerson->display_name }}
                         </h2>
                     </div>
                 </div>
 
-                <div class="grid grid-cols-3 gap-3 text-center text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">
-                    <div class="rounded-3xl bg-white/10 px-3 py-2">
-                        <div class="text-base font-bold text-white">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
-                        <div class="mt-1">Follower</div>
+                <div class="grid grid-cols-3 gap-3 text-center text-xs font-semibold uppercase tracking-[0.18em] text-slate-600">
+                    <div class="rounded-3xl bg-white px-3 py-2 shadow-sm">
+                        <div class="text-base font-bold text-slate-950">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
+                        <div class="mt-1 text-slate-500">Follower</div>
                     </div>
-                    <div class="rounded-3xl bg-white/10 px-3 py-2">
-                        <div class="text-base font-bold text-white">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
-                        <div class="mt-1">Gefolgt</div>
+                    <div class="rounded-3xl bg-white px-3 py-2 shadow-sm">
+                        <div class="text-base font-bold text-slate-950">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
+                        <div class="mt-1 text-slate-500">Gefolgt</div>
                     </div>
-                    <div class="rounded-3xl bg-white/10 px-3 py-2">
-                        <div class="text-base font-bold text-white">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-' }}</div>
-                        <div class="mt-1">Beitraege</div>
+                    <div class="rounded-3xl bg-white px-3 py-2 shadow-sm">
+                        <div class="text-base font-bold text-slate-950">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-' }}</div>
+                        <div class="mt-1 text-slate-500">Beitraege</div>
                     </div>
                 </div>
 
@@ -376,17 +376,17 @@
                         <a
                             href="{{ route('dashboard') }}"
                             wire:navigate
-                            class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/20 bg-white/10 px-4 text-xs font-semibold text-white shadow-sm hover:bg-white/20"
+                            class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-4 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50"
                         >
                             Zurueck
                         </a>
                         <button
                             type="button"
                             @click="menuOpen = ! menuOpen"
-                            class="ml-2 inline-flex h-9 items-center justify-center rounded-3xl border border-white/20 bg-white/10 px-4 text-xs font-semibold text-white shadow-sm hover:bg-white/20"
+                            class="ml-2 inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-4 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50"
                         >
                             Aktionen
-                            <span class="ml-2 text-slate-300">▾</span>
+                            <span class="ml-2 text-slate-500">▾</span>
                         </button>
                         <div
                             x-show="menuOpen"
@@ -447,7 +447,7 @@
                         wire:loading.attr="disabled"
                         wire:target="scanInstagramFollowersList"
                         @disabled(! $trackedPerson->instagram_username)
-                        class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/20 bg-white/10 px-3 text-xs font-semibold text-white shadow-sm hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+                        class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         Follower scannen
                     </button>
@@ -455,7 +455,7 @@
                 <button
                     type="button"
                     wire:click="$set('showFollowersModal', true)"
-                    class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/20 bg-white/10 px-3 text-xs font-semibold text-white shadow-sm hover:bg-white/20"
+                    class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50"
                 >
                     Follower-Liste
                 </button>
@@ -466,7 +466,7 @@
                         wire:loading.attr="disabled"
                         wire:target="scanInstagramFollowingList"
                         @disabled(! $trackedPerson->instagram_username)
-                        class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/20 bg-white/10 px-3 text-xs font-semibold text-white shadow-sm hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+                        class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         Gefolgt scannen
                     </button>
@@ -474,20 +474,20 @@
                 <button
                     type="button"
                     wire:click="$set('showFollowingModal', true)"
-                    class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/20 bg-white/10 px-3 text-xs font-semibold text-white shadow-sm hover:bg-white/20"
+                    class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50"
                 >
                     Gefolgt-Liste
                 </button>
-                <span class="rounded-2xl bg-white/10 px-3 py-1 text-xs font-semibold text-white ring-1 ring-white/20">{{ $instagramStatusLabel }}</span>
-                <span class="rounded-2xl bg-white/10 px-3 py-1 text-xs font-semibold text-white ring-1 ring-white/20">{{ $latestProfileVisibilityLabel }}</span>
+                <span class="rounded-2xl bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">{{ $instagramStatusLabel }}</span>
+                <span class="rounded-2xl bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">{{ $latestProfileVisibilityLabel }}</span>
                 @if($trackedPerson->monitoring_enabled)
-                    <span class="rounded-2xl bg-emerald-400 px-3 py-1 text-xs font-semibold text-slate-950">Live</span>
+                    <span class="rounded-2xl bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Live</span>
                 @endif
             </div>
 
             <div class="mt-4 flex flex-wrap gap-2">
-                <a href="#profil" class="shrink-0 rounded-3xl bg-white/10 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-white/20">Profil</a>
-                <a href="#profilinfos" class="shrink-0 rounded-3xl border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-white/20">Informationen</a>
+                <a href="#profil" class="shrink-0 rounded-3xl bg-white px-3 py-2 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50">Profil</a>
+                <a href="#profilinfos" class="shrink-0 rounded-3xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50">Informationen</a>
             </div>
         </div>
 
