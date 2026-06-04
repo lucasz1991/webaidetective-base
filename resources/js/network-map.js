@@ -161,6 +161,7 @@ function writeStoredFilters(root, state) {
         showInferred: state.showInferred,
         showTracked: state.showTracked,
         minDegree: state.minDegree,
+        maxVisibleProfiles: state.maxVisibleProfiles,
     }));
 }
 
@@ -200,6 +201,45 @@ function networkMaxVisibleProfiles(root) {
     return Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 100;
 }
 
+function selectedMaxVisibleProfiles(root) {
+    const control = root.querySelector('[data-network-filter-max-profiles]');
+
+    if (!control) {
+        return networkMaxVisibleProfiles(root);
+    }
+
+    const value = Number(control.value || root.dataset.networkMaxVisibleProfiles || 100);
+
+    if (!Number.isFinite(value)) {
+        return networkMaxVisibleProfiles(root);
+    }
+
+    return Math.max(0, Math.floor(value));
+}
+
+function ensureMaxProfilesOption(root, value) {
+    const control = root.querySelector('[data-network-filter-max-profiles]');
+
+    if (!control) {
+        return;
+    }
+
+    const normalized = String(Math.max(0, Math.floor(Number(value) || 0)));
+    const exists = Array.from(control.options).some((option) => option.value === normalized);
+
+    if (exists) {
+        return;
+    }
+
+    const option = document.createElement('option');
+    option.value = normalized;
+    option.textContent = normalized === '0' ? 'Alle' : normalized;
+    control.append(option);
+    Array.from(control.options)
+        .sort((left, right) => Number(left.value) - Number(right.value))
+        .forEach((sortedOption) => control.append(sortedOption));
+}
+
 function ensureMinDegreeOption(root, value) {
     const control = root.querySelector('[data-network-filter-min-degree]');
 
@@ -225,9 +265,9 @@ function ensureMinDegreeOption(root, value) {
 
 function recommendedMinDegree(root, cy, state) {
     const nonPersonNodes = cy.nodes().filter((node) => node.data('type') !== 'person');
-    const limit = networkMaxVisibleProfiles(root);
+    const limit = Math.max(0, Number(state.maxVisibleProfiles ?? networkMaxVisibleProfiles(root)) || 0);
 
-    if (nonPersonNodes.length <= limit) {
+    if (limit === 0 || nonPersonNodes.length <= limit) {
         return 0;
     }
 
@@ -533,11 +573,14 @@ function applyFilters(root, cy) {
         cy.edges('[networkType = "tracked-profile-rel"]').addClass('network-filtered');
     }
 
+    const autoMinDegree = state.maxVisibleProfiles > 0 ? recommendedMinDegree(root, cy, state) : 0;
+    const effectiveMinDegree = Math.max(state.minDegree, autoMinDegree);
+
     cy.nodes().forEach((node) => {
         const isPerson = node.data('type') === 'person';
         const degree = visibleDegree(node);
 
-        if (!isPerson && degree < state.minDegree) {
+        if (!isPerson && degree < effectiveMinDegree) {
             node.addClass('network-filtered');
         }
     });
@@ -558,6 +601,26 @@ function applyFilters(root, cy) {
     if (minDegreeControl) {
         ensureMinDegreeOption(root, state.minDegree);
         minDegreeControl.value = String(state.minDegree);
+    }
+
+    const maxProfilesControl = root.querySelector('[data-network-filter-max-profiles]');
+
+    if (maxProfilesControl) {
+        ensureMaxProfilesOption(root, state.maxVisibleProfiles);
+        maxProfilesControl.value = String(state.maxVisibleProfiles);
+    }
+
+    const maxProfilesLabel = root.querySelector('[data-network-visible-profiles-count]');
+
+    if (maxProfilesLabel) {
+        const visibleProfiles = cy.nodes().filter((node) => node.data('type') !== 'person').not('.network-filtered').length;
+        maxProfilesLabel.textContent = `${visibleProfiles.toLocaleString('de-DE')} sichtbar`;
+    }
+
+    const debugMinDegree = root.querySelector('[data-network-effective-min-degree]');
+
+    if (debugMinDegree) {
+        debugMinDegree.textContent = String(effectiveMinDegree);
     }
 
     writeStoredFilters(root, state);
@@ -607,6 +670,11 @@ function bindControls(root, cy) {
     root.querySelector('[data-network-filter-min-degree]')?.addEventListener('change', (event) => {
         state.minDegree = Math.max(0, Number(event.target.value) || 0);
         state.hasStoredMinDegree = true;
+        applyFilters(root, cy);
+    });
+
+    root.querySelector('[data-network-filter-max-profiles]')?.addEventListener('change', (event) => {
+        state.maxVisibleProfiles = Math.max(0, Number(event.target.value) || 0);
         applyFilters(root, cy);
     });
 
@@ -814,12 +882,16 @@ async function initNetworkMap(root) {
         const storedMinDegree = Number.isFinite(Number(storedFilters.minDegree))
             ? Math.max(0, Number(storedFilters.minDegree))
             : null;
+        const storedMaxVisibleProfiles = Number.isFinite(Number(storedFilters.maxVisibleProfiles))
+            ? Math.max(0, Number(storedFilters.maxVisibleProfiles))
+            : null;
         const state = {
             cy,
             showPublic: storedFilters.showPublic ?? true,
             showInferred: storedFilters.showInferred ?? true,
             showTracked: storedFilters.showTracked ?? true,
             minDegree: storedMinDegree ?? 0,
+            maxVisibleProfiles: storedMaxVisibleProfiles ?? selectedMaxVisibleProfiles(root),
             hasStoredMinDegree: storedMinDegree !== null,
             autoMinDegreeApplied: false,
             selectedId: null,
@@ -1136,6 +1208,28 @@ export function destroyNetworkMaps() {
 
     activeRoots.clear();
 }
+
+window.addEventListener('network-map-layout-refresh', (event) => {
+    const detail = eventDetail(event);
+    const root = detail.mapId
+        ? document.querySelector(`[data-network-map-root][data-network-map-id="${detail.mapId}"]`)
+        : document.querySelector('[data-network-map-root]');
+
+    if (!root) {
+        return;
+    }
+
+    const state = instances.get(root);
+
+    if (!state?.cy) {
+        return;
+    }
+
+    window.requestAnimationFrame(() => {
+        state.cy.resize();
+        arrangeVisibleGraph(root, state.cy, false);
+    });
+});
 
 document.addEventListener('DOMContentLoaded', () => initNetworkMaps());
 document.addEventListener('livewire:navigating', () => destroyNetworkMaps());

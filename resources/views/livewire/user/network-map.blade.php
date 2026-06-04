@@ -8,8 +8,27 @@
     wire:init="prepareGraph"
     wire:loading.class="cursor-wait"
     x-data="{
+        mapFullscreen: false,
         networkNode: { id: null, type: null, isKnownProfile: false },
         nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, detailUrl: null, x: 0, y: 0 },
+        openMap() {
+            if (this.mapFullscreen) {
+                return;
+            }
+
+            this.mapFullscreen = true;
+            document.documentElement.classList.add('overflow-hidden');
+            this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } })));
+        },
+        closeMap() {
+            if (!this.mapFullscreen) {
+                return;
+            }
+
+            this.mapFullscreen = false;
+            document.documentElement.classList.remove('overflow-hidden');
+            this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } })));
+        },
         setNetworkNode(event) {
             if (event.detail?.mapId && event.detail.mapId !== '{{ $mapId }}') {
                 return;
@@ -54,6 +73,7 @@
     x-on:network-map-node-menu.window="openNodeMenu($event)"
     x-on:network-map-open-node.window="openNode($event)"
     x-on:click.outside="closeNodeMenu()"
+    x-on:keydown.escape.window="if (mapFullscreen) closeMap()"
 >
     <div
         wire:loading.flex
@@ -170,10 +190,26 @@
     </div>
     @endunless
 
+    <div
+        x-cloak
+        x-show="mapFullscreen"
+        x-transition.opacity
+        class="fixed inset-0 z-40 bg-slate-950/70"
+        x-on:click="closeMap()"
+    ></div>
+
     <main class="{{ $embedded ? '' : 'container mx-auto px-5 py-6' }}">
-        <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+        <div
+            class="grid gap-4"
+            x-bind:class="mapFullscreen
+                ? 'fixed inset-4 z-50 overflow-y-auto rounded-2xl bg-slate-100 p-4 xl:grid-cols-[minmax(0,1fr)_360px]'
+                : 'grid-cols-1'"
+        >
+            <section
+                class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
+                x-bind:class="mapFullscreen ? 'min-h-[calc(100vh-2rem)]' : ''"
+            >
+                <div x-show="mapFullscreen" x-cloak class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
                     <div class="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-600">
                         <button type="button" data-network-filter="public" data-active-classes="border-sky-300 bg-sky-50 text-sky-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="true">
                             Bekannte Profile
@@ -196,8 +232,26 @@
                                 <option value="8">8</option>
                             </select>
                         </label>
+                        <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-slate-600">
+                            <span>Max. Profile</span>
+                            <select data-network-filter-max-profiles class="border-0 bg-transparent p-0 text-xs font-bold text-slate-900 focus:ring-0">
+                                <option value="25">25</option>
+                                <option value="50">50</option>
+                                <option value="100" selected>100</option>
+                                <option value="150">150</option>
+                                <option value="250">250</option>
+                                <option value="500">500</option>
+                                <option value="0">Alle</option>
+                            </select>
+                        </label>
+                        <span class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-slate-600">
+                            <span data-network-visible-profiles-count>0 sichtbar</span>
+                            <span class="text-slate-400">|</span>
+                            <span>effektiv min: <span data-network-effective-min-degree>0</span></span>
+                        </span>
                     </div>
                     <div class="flex items-center gap-2 text-xs font-semibold text-slate-600">
+                        <button type="button" x-on:click="closeMap()" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">Schliessen</button>
                         <button type="button" data-network-action="zoom-out" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">-</button>
                         <button type="button" data-network-action="zoom-in" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">+</button>
                         <button type="button" data-network-action="fit" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">Reset</button>
@@ -209,8 +263,21 @@
                         Noch keine Personen vorhanden. Lege zuerst Personen an, damit das Netzwerk dargestellt werden kann.
                     </div>
                 @else
-                    <div class="relative h-[640px] min-h-[520px] bg-slate-50" wire:ignore>
+                    <div
+                        class="relative bg-slate-50"
+                        x-bind:class="mapFullscreen ? 'h-[calc(100vh-9rem)] min-h-[640px]' : 'h-[420px] min-h-[420px] cursor-zoom-in'"
+                        x-on:click="if (!mapFullscreen) openMap()"
+                        wire:ignore
+                    >
                         <div data-network-canvas class="absolute inset-0"></div>
+                        <div
+                            x-show="!mapFullscreen"
+                            class="absolute inset-0 z-[5] flex items-center justify-center bg-slate-950/10 backdrop-blur-[1px]"
+                        >
+                            <div class="rounded-full border border-white/70 bg-white/90 px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm">
+                                Karte anklicken, um Vollbild und Steuerung zu oeffnen
+                            </div>
+                        </div>
                         <div data-network-loading-panel class="absolute left-4 top-4 z-10 w-[min(420px,calc(100%-2rem))] rounded-lg border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur">
                             <div class="flex items-start justify-between gap-3">
                                 <div>
@@ -228,7 +295,7 @@
                 @endif
             </section>
 
-            <aside class="space-y-4">
+            <aside x-show="mapFullscreen" x-cloak class="space-y-4">
                 <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                     <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Auswahl</h2>
                     <p data-network-detail-empty class="mt-3 text-sm leading-6 text-slate-600">
@@ -297,6 +364,30 @@
                     </div>
                 </div>
             </aside>
+        </div>
+
+        <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600">
+            <div class="flex flex-wrap items-center gap-3">
+                <span class="font-semibold text-slate-800">Cache Debug</span>
+                <span class="rounded-full bg-white px-2 py-0.5 font-semibold text-slate-700">{{ $cacheDebug['status'] ?? 'unbekannt' }}</span>
+                @if(!empty($cacheDebug['token']))
+                    <span>Token: <span class="font-mono">{{ $cacheDebug['token'] }}</span></span>
+                @endif
+                @if(!empty($cacheDebug['chunk_count']))
+                    <span>Chunks: {{ $cacheDebug['chunk_count'] }}</span>
+                @endif
+                @if(!empty($cacheDebug['tracked_people']))
+                    <span>Personen: {{ $cacheDebug['tracked_people'] }}</span>
+                @endif
+            </div>
+            <div class="mt-3 grid gap-2 md:grid-cols-2">
+                <div>Scope: <span class="font-mono">{{ $cacheDebug['scope'] ?? '-' }}</span></div>
+                <div>Erzeugt: <span class="font-mono">{{ $cacheDebug['generated_at'] ?? '-' }}</span></div>
+                <div>Hash aktuell: <span class="font-mono break-all">{{ $cacheDebug['data_hash'] ?? '-' }}</span></div>
+                <div>Hash Cache: <span class="font-mono break-all">{{ $cacheDebug['cached_hash'] ?? '-' }}</span></div>
+                <div>Meta Key: <span class="font-mono break-all">{{ $cacheDebug['meta_cache_key'] ?? '-' }}</span></div>
+                <div>Graph Key: <span class="font-mono break-all">{{ $cacheDebug['graph_cache_key'] ?? '-' }}</span></div>
+            </div>
         </div>
     </main>
 
