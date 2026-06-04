@@ -1166,14 +1166,6 @@
             <div class="flex gap-2 overflow-x-auto text-sm" role="tablist" aria-label="Profilinformationen">
                 <button
                     type="button"
-                    x-on:click="activeProfileTab = 'notizen'"
-                    x-bind:class="activeProfileTab === 'notizen' ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
-                    class="shrink-0 rounded-lg px-3 py-1.5 font-semibold"
-                >
-                    Notizen
-                </button>
-                <button
-                    type="button"
                     x-on:click="activeProfileTab = 'verbindungen'"
                     x-bind:class="activeProfileTab === 'verbindungen' ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
                     class="shrink-0 rounded-lg px-3 py-1.5 font-semibold"
@@ -1192,55 +1184,7 @@
         </div>
 
         <div class="p-4">
-            <div id="notizen" x-show="activeProfileTab === 'notizen'" class="scroll-mt-4">
-                <h3 class="text-lg font-bold text-slate-900">Instagram-Notizen</h3>
-                <div class="mt-3 space-y-2">
-                    @forelse($trackedPerson->knownFacts as $knownFact)
-                        <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                            <div class="flex items-center justify-between gap-3">
-                                <div class="font-semibold text-slate-900">{{ $knownFact->label }}</div>
-                                @if($knownFact->source)
-                                    <span class="text-xs uppercase tracking-wide text-slate-500">{{ $knownFact->source }}</span>
-                                @endif
-                            </div>
-                            <p class="mt-1 whitespace-pre-wrap">{{ $knownFact->value }}</p>
-                            @if($knownFact->notes)
-                                <p class="mt-2 text-xs text-slate-500">{{ $knownFact->notes }}</p>
-                            @endif
-                        </div>
-                    @empty
-                        <p class="text-sm text-slate-500">Noch keine bekannten Daten hinterlegt.</p>
-                    @endforelse
-                </div>
-
-                <div class="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Bezeichnung</label>
-                        <input type="text" wire:model.defer="knownFactLabel" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500" placeholder="z. B. Wohnort">
-                        @error('knownFactLabel') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Wert</label>
-                        <textarea wire:model.defer="knownFactValue" rows="3" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"></textarea>
-                        @error('knownFactValue') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Quelle</label>
-                        <input type="text" wire:model.defer="knownFactSource" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                        @error('knownFactSource') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
-                    </div>
-                    <div>
-                        <label class="mb-1 block text-sm font-medium text-slate-700">Zusatznotiz</label>
-                        <textarea wire:model.defer="knownFactNotes" rows="2" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"></textarea>
-                        @error('knownFactNotes') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
-                    </div>
-                    <div class="flex justify-end">
-                        <button wire:click="saveKnownFact" class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800">
-                            Daten speichern
-                        </button>
-                    </div>
-                </div>
-            </div>
+           
 
             <div id="verbindungen" x-show="activeProfileTab === 'verbindungen'" class="scroll-mt-4">
                 <div class="flex flex-wrap items-start justify-between gap-3">
