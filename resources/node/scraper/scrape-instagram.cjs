@@ -984,6 +984,45 @@ function buildCookiePath(runtimeConfig) {
   return path.join(cookieBasePath, 'instagram-cookies.json');
 }
 
+function buildScraperProfileBlockPath(runtimeConfig = {}) {
+  const profileLabel = normalizeText(String(runtimeConfig.profileLabel || runtimeConfig.profile_label || 'instagram-default'))
+    .replace(/[^a-z0-9._-]+/gi, '_')
+    .slice(0, 80) || 'instagram-default';
+  const profileDirectory = isUsableDirectory(runtimeConfig.browserProfilePath)
+    ? runtimeConfig.browserProfilePath
+    : path.join(__dirname, '../../../storage/app/browser-profiles/instagram', profileLabel);
+
+  ensureDirectory(profileDirectory);
+  return path.join(profileDirectory, 'profile-blocked.json');
+}
+
+function persistScraperProfileBlock(runtimeConfig = {}, reason = 'instagram-rate-limit', details = {}) {
+  try {
+    const blockPath = buildScraperProfileBlockPath(runtimeConfig);
+    const blockInfo = {
+      profileLabel: normalizeText(String(runtimeConfig.profileLabel || runtimeConfig.profile_label || 'instagram-default')) || null,
+      loginUsername: normalizeText(String(runtimeConfig.loginUsername || runtimeConfig.login_username || '')) || null,
+      blockedAt: new Date().toISOString(),
+      reason: normalizeText(String(reason || 'instagram-rate-limit')) || 'instagram-rate-limit',
+      details: {
+        relationship: details.relationship || null,
+        status: details.status || null,
+        source: details.source || null,
+        text: normalizeText(String(details.text || '')) || null,
+      },
+    };
+
+    fs.writeFileSync(blockPath, JSON.stringify(blockInfo, null, 2), 'utf8');
+    return blockInfo;
+  } catch (error) {
+    recordRunDebug('scraper-profile-block-write-failed', {
+      error: normalizeText(error.message || String(error)),
+      profileLabel: normalizeText(String(runtimeConfig.profileLabel || runtimeConfig.profile_label || 'instagram-default')) || null,
+    });
+    return null;
+  }
+}
+
 async function loadCookiesFromFile(page, cookieFilePath) {
   try {
     if (!fs.existsSync(cookieFilePath)) {
@@ -1542,7 +1581,7 @@ async function closeInstagramDialog(page) {
 async function collectFollowerEntriesFromDialog(page) {
   return page.evaluate(() => {
     const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
-    const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|try again later|we restrict certain activity|we limit how often)/i;
+    const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|zu viele anfragen|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|try again later|too many requests|429|error 429|we restrict certain activity|we limit how often|this action was blocked|rate limit)/i;
     const rateLimitDialog = Array.from(document.querySelectorAll('div[role="dialog"]'))
       .find((dialogElement) => rateLimitPattern.test(
         normalizeElementText(dialogElement.innerText || dialogElement.textContent || ''),
@@ -3887,7 +3926,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
       .replace(/^@/, '')
       .replace(/[^a-z0-9._]/gi, '')
       .toLowerCase();
-    const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|try again later|we restrict certain activity|we limit how often)/i;
+    const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|zu viele anfragen|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|try again later|too many requests|429|error 429|we restrict certain activity|we limit how often|this action was blocked|rate limit)/i;
     const bodyText = normalizeElementText(document.body?.innerText || document.body?.textContent || '');
 
     if (rateLimitPattern.test(bodyText)) {
@@ -5147,6 +5186,20 @@ async function switchScraperAccountAfterRateLimit(page, runtimeConfig, notes, re
 
   if (currentKey) {
     usedAccountKeys.add(currentKey);
+  }
+
+  const blockedInfo = persistScraperProfileBlock(runtimeConfig, rateLimitText || 'instagram-rate-limit', {
+    relationship,
+    text: rateLimitText || null,
+  });
+
+  if (blockedInfo) {
+    notes.push(`Scraper-Profil gesperrt: ${blockedInfo.reason}.`);
+    recordRunDebug('scraper-profile-blocked', {
+      relationship,
+      profileLabel: runtimeConfig.profileLabel || null,
+      blockedInfo,
+    });
   }
 
   if (accountPool.length <= 1) {
