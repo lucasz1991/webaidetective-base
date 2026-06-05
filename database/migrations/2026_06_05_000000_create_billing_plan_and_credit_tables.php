@@ -158,6 +158,10 @@ return new class extends Migration
                 'type' => 'billing',
                 'key' => 'credit_costs',
                 'value' => json_encode([
+                    'scan_base_credit' => 1,
+                    'scan_credit_per_minute' => 2,
+                    'scan_minimum_credits' => 1,
+                    'scan_max_billable_minutes' => 30,
                     'profile_scan' => 1,
                     'profile_image_scan' => 1,
                     'post_scan' => 3,

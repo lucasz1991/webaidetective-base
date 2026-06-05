@@ -1,101 +1,14 @@
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { attachScanBilling } = require('./lib/scan-billing.cjs');
+const {
+  configureRuntimeEnvironment,
+  ensureDirectory,
+} = require('./lib/runtime-environment.cjs');
 
-function ensureDirectory(directoryPath) {
-  fs.mkdirSync(directoryPath, { recursive: true });
-  return directoryPath;
-}
-
-function looksBrokenWindowsPath(directoryPath) {
-  return /^undefined([\\/]|$)/i.test(directoryPath);
-}
-
-function isUsableDirectory(directoryPath) {
-  if (!directoryPath || typeof directoryPath !== 'string') {
-    return false;
-  }
-
-  if (looksBrokenWindowsPath(directoryPath)) {
-    return false;
-  }
-
-  try {
-    ensureDirectory(directoryPath);
-    fs.accessSync(directoryPath, fs.constants.W_OK);
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
-function resolveRuntimeTempDirectory() {
-  const explicitCandidates = [
-    process.env.PUPPETEER_TMP_DIR,
-    process.env.TEMP,
-    process.env.TMP,
-    process.env.TMPDIR,
-  ].filter(Boolean);
-
-  for (const candidate of explicitCandidates) {
-    if (isUsableDirectory(candidate)) {
-      return candidate;
-    }
-  }
-
-  try {
-    const systemTmp = os.tmpdir();
-
-    if (isUsableDirectory(systemTmp)) {
-      return systemTmp;
-    }
-  } catch (error) {
-    // Ignore invalid system temp resolution and use the project-local fallback below.
-  }
-
-  return ensureDirectory(path.resolve(__dirname, '../../../storage/app/tmp'));
-}
-
-function resolveWindowsSystemRoot() {
-  if (process.platform !== 'win32') {
-    return null;
-  }
-
-  const candidates = [
-    process.env.SystemRoot,
-    process.env.windir,
-    'C:\\Windows',
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    if (looksBrokenWindowsPath(candidate)) {
-      continue;
-    }
-
-    try {
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    } catch (error) {
-      // Ignore broken candidates and continue with the next one.
-    }
-  }
-
-  return null;
-}
-
-const runtimeTempDirectory = resolveRuntimeTempDirectory();
-const windowsSystemRoot = resolveWindowsSystemRoot();
-
-process.env.PUPPETEER_TMP_DIR = runtimeTempDirectory;
-process.env.TEMP = process.env.TEMP || runtimeTempDirectory;
-process.env.TMP = process.env.TMP || runtimeTempDirectory;
-process.env.TMPDIR = process.env.TMPDIR || runtimeTempDirectory;
-
-if (windowsSystemRoot) {
-  process.env.SystemRoot = process.env.SystemRoot || windowsSystemRoot;
-  process.env.windir = process.env.windir || windowsSystemRoot;
-}
+const { runtimeTempDirectory } = configureRuntimeEnvironment({
+  fallbackTempDirectory: path.resolve(__dirname, '../../../storage/app/tmp'),
+});
 
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
@@ -7358,7 +7271,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       if (isLoginSessionMode) {
         debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
 
-        const responsePayload = {
+        const responsePayload = attachScanBilling({
           ok: sessionEstablished,
           statusLevel: sessionEstablished ? 'success' : 'error',
           statusMessage: sessionEstablished
@@ -7386,7 +7299,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
           durationMs: Date.now() - startedAt,
           operationMode,
           debugLogPath,
-        };
+        }, runtimeConfig);
         flushRunDebug(responsePayload);
         console.log(JSON.stringify(responsePayload));
 
@@ -7416,7 +7329,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
         },
       );
       debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
-      const responsePayload = {
+      const responsePayload = attachScanBilling({
         ...batchPayload,
         username,
         finalUrl: page.url(),
@@ -7440,7 +7353,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
         durationMs: Date.now() - startedAt,
         operationMode,
         debugLogPath,
-      };
+      }, runtimeConfig);
       flushRunDebug(responsePayload);
       console.log(JSON.stringify(responsePayload));
 
@@ -7670,7 +7583,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
 
     debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
 
-    const responsePayload = {
+    const responsePayload = attachScanBilling({
       ok: outcome.ok,
       statusLevel: outcome.statusLevel,
       statusMessage: outcome.statusMessage,
@@ -7697,7 +7610,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       durationMs: Date.now() - startedAt,
       operationMode,
       debugLogPath,
-    };
+    }, runtimeConfig);
     flushRunDebug(responsePayload);
     console.log(JSON.stringify(responsePayload));
   } catch (error) {
@@ -7709,7 +7622,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
 
     debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
 
-    const responsePayload = {
+    const responsePayload = attachScanBilling({
       ok: false,
       statusLevel: 'error',
       statusMessage: aborted
@@ -7729,7 +7642,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       warnings: dedupe(consoleMessages),
       durationMs: Date.now() - startedAt,
       debugLogPath,
-    };
+    }, runtimeConfig);
     recordRunDebug('run-error', responsePayload);
     flushRunDebug(responsePayload);
     console.log(JSON.stringify(responsePayload));

@@ -912,7 +912,15 @@ class InstagramScraper
             'followingListMaxItems' => max(0, (int) ($profile['following_list_max_items'] ?? 0)),
             'relationshipListMaxScrollRounds' => max(20, (int) ($profile['relationship_list_max_scroll_rounds'] ?? 100000)),
             'accountPool' => $this->buildRuntimeAccountPool($settings, $profile),
+            'creditCosts' => $this->loadCreditCostSettings(),
         ];
+    }
+
+    private function loadCreditCostSettings(): array
+    {
+        $settings = Setting::getValue('billing', 'credit_costs');
+
+        return is_array($settings) ? $settings : [];
     }
 
     private function loadScraperProfileSettings(): mixed
