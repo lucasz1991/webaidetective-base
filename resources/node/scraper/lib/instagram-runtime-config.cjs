@@ -165,7 +165,9 @@ function normalizeRuntimeAccountConfig(account, baseConfig, helpers = {}, option
 }
 
 function getScraperAccountKey(runtimeConfig = {}, helpers = {}) {
-  const { normalizeText } = helpers;
+  const normalizeText = typeof helpers.normalizeText === 'function'
+    ? helpers.normalizeText
+    : (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
   const candidates = [
     runtimeConfig.profileId,
     runtimeConfig.cookieFilePath,
