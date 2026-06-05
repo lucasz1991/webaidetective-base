@@ -139,6 +139,7 @@ class InstagramProfileRelationshipStore
             $snapshot->forceFill(['instagram_profile_id' => $profile->id])->save();
         }
 
+        $this->propagateProfileDataToLinkedTrackedPeople($profile, $trackedPerson);
         $this->storeRelationshipLists($profile, $trackedPerson, $snapshot, $extracted, $attemptInfo);
 
         return $profile;
@@ -376,6 +377,37 @@ class InstagramProfileRelationshipStore
         ) {
             $trackedPerson->forceFill(['current_instagram_profile_id' => $profile->id])->save();
         }
+    }
+
+    private function propagateProfileDataToLinkedTrackedPeople(InstagramProfile $profile, ?TrackedPerson $scannedTrackedPerson = null): void
+    {
+        if (! $this->isReady() || ! $this->hasColumn('tracked_people', 'current_instagram_profile_id')) {
+            return;
+        }
+
+        $updates = array_filter([
+            'instagram_username' => $profile->username,
+            'instagram_profile_image_path' => $profile->profile_image_path,
+            'instagram_profile_image_hash' => $profile->profile_image_hash,
+            'profile_image_path' => $profile->profile_image_path,
+            'profile_image_hash' => $profile->profile_image_hash,
+            'instagram_followers_count' => $profile->followers_count,
+            'instagram_following_count' => $profile->following_count,
+            'instagram_posts_count' => $profile->posts_count,
+            'last_instagram_status_level' => $profile->last_status_level,
+            'last_instagram_status_message' => $profile->last_status_message,
+            'last_instagram_analyzed_at' => $profile->last_scanned_at,
+            'updated_at' => now(),
+        ], static fn ($value): bool => $value !== null);
+
+        if ($updates === []) {
+            return;
+        }
+
+        TrackedPerson::query()
+            ->where('current_instagram_profile_id', $profile->id)
+            ->when($scannedTrackedPerson, fn ($query) => $query->whereKeyNot($scannedTrackedPerson->id))
+            ->update($updates);
     }
 
     private function unlinkTrackedPersonCurrentProfile(TrackedPerson $trackedPerson): void

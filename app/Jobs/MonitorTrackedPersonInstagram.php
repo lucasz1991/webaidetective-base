@@ -194,61 +194,91 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             ]);
         }
 
-        if (! $this->shouldSendInstagramNotification($trackedPerson, $snapshot)) {
+        if (! $this->sendNotifications || ! $this->snapshotHasNotificationChanges($snapshot)) {
             Log::info('Instagram-Monitoring-Scan abgeschlossen; keine Benachrichtigung verschickt.', [
                 'tracked_person_id' => $trackedPerson->id,
                 'instagram_username' => $trackedPerson->instagram_username,
                 'snapshot_id' => $snapshot->id,
                 'scan_mode' => data_get($snapshot->raw_payload, 'analysisPolicy.scanMode'),
                 'send_notifications' => $this->sendNotifications,
-                'notify_social_changes' => (bool) $trackedPerson->notify_social_changes,
-                'notify_instagram_changes' => (bool) $trackedPerson->notify_instagram_changes,
                 'has_changes' => (bool) $snapshot->has_changes,
                 'detected_changes_count' => count($snapshot->detected_changes ?? []),
-                'notification_changes' => $this->snapshotHasNotificationChanges($snapshot),
-                'skip_reasons' => $this->notificationSkipReasons($trackedPerson, $snapshot),
             ]);
 
             return;
         }
 
-        $owner = $trackedPerson->user;
-
-        if (! $owner) {
-            Log::warning('Instagram-Benachrichtigung konnte nicht erstellt werden, weil kein Besitzer gefunden wurde.', [
-                'tracked_person_id' => $trackedPerson->id,
-                'instagram_username' => $trackedPerson->instagram_username,
-                'snapshot_id' => $snapshot->id,
-            ]);
-
-            return;
-        }
-
-        $subject = 'Aenderungen bei '.$trackedPerson->display_name;
-
-        Mail::create([
-            'type' => $this->resolveNotificationDeliveryType($trackedPerson),
-            'from_user_id' => $owner->id,
-            'content' => [
-                'subject' => $subject,
-                'header' => 'Automatische Beobachtung',
-                'body' => $this->buildNotificationMessage($trackedPerson, $snapshot),
-                'link' => route('messages'),
-            ],
-            'recipients' => [
-                [
-                    'user_id' => $owner->id,
-                    'email' => $owner->email,
-                    'status' => false,
-                ],
-            ],
-        ]);
+        $notifiedTrackedPersonIds = $this->notifyLinkedTrackedPeople($trackedPerson, $snapshot);
 
         Log::info('Instagram-Aenderungsbenachrichtigung wurde erstellt.', [
             'tracked_person_id' => $trackedPerson->id,
             'instagram_username' => $trackedPerson->instagram_username,
             'snapshot_id' => $snapshot->id,
+            'notified_tracked_person_ids' => $notifiedTrackedPersonIds,
         ]);
+    }
+
+    private function notifyLinkedTrackedPeople(TrackedPerson $scannedTrackedPerson, $snapshot): array
+    {
+        $trackedPeople = $this->linkedTrackedPeopleForNotification($scannedTrackedPerson);
+        $notifiedTrackedPersonIds = [];
+
+        foreach ($trackedPeople as $trackedPerson) {
+            if (! $this->shouldSendInstagramNotification($trackedPerson, $snapshot)) {
+                continue;
+            }
+
+            $owner = $trackedPerson->user;
+
+            if (! $owner) {
+                Log::warning('Instagram-Benachrichtigung konnte nicht erstellt werden, weil kein Besitzer gefunden wurde.', [
+                    'tracked_person_id' => $trackedPerson->id,
+                    'instagram_username' => $trackedPerson->instagram_username,
+                    'snapshot_id' => $snapshot->id,
+                ]);
+
+                continue;
+            }
+
+            Mail::create([
+                'type' => $this->resolveNotificationDeliveryType($trackedPerson),
+                'from_user_id' => $owner->id,
+                'content' => [
+                    'subject' => 'Aenderungen bei '.$trackedPerson->display_name,
+                    'header' => 'Automatische Beobachtung',
+                    'body' => $this->buildNotificationMessage($trackedPerson, $snapshot),
+                    'link' => route('messages'),
+                ],
+                'recipients' => [
+                    [
+                        'user_id' => $owner->id,
+                        'email' => $owner->email,
+                        'status' => false,
+                    ],
+                ],
+            ]);
+
+            $notifiedTrackedPersonIds[] = (int) $trackedPerson->id;
+        }
+
+        return $notifiedTrackedPersonIds;
+    }
+
+    private function linkedTrackedPeopleForNotification(TrackedPerson $trackedPerson)
+    {
+        $profileId = (int) ($trackedPerson->current_instagram_profile_id ?? 0);
+
+        if ($profileId > 0) {
+            return TrackedPerson::query()
+                ->with('user')
+                ->where('current_instagram_profile_id', $profileId)
+                ->get();
+        }
+
+        return TrackedPerson::query()
+            ->with('user')
+            ->whereRaw("LOWER(TRIM(LEADING '@' FROM instagram_username)) = ?", [strtolower(ltrim((string) $trackedPerson->instagram_username, '@'))])
+            ->get();
     }
 
     private function resolveNotificationDeliveryType(TrackedPerson $trackedPerson): string
@@ -260,7 +290,15 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
 
     public function uniqueId(): string
     {
-        return $this->trackedPersonId.':'.($this->isFullScan() ? 'full' : 'mini');
+        $trackedPerson = TrackedPerson::query()
+            ->select(['id', 'instagram_username', 'current_instagram_profile_id'])
+            ->find($this->trackedPersonId);
+
+        $profileKey = $trackedPerson?->current_instagram_profile_id
+            ? 'profile:'.$trackedPerson->current_instagram_profile_id
+            : 'username:'.strtolower(ltrim((string) $trackedPerson?->instagram_username, '@'));
+
+        return $profileKey.':'.($this->isFullScan() ? 'full' : 'mini');
     }
 
     private function isFullScan(): bool

@@ -67,6 +67,11 @@ class InstagramProfile extends Model
         return $this->hasMany(InstagramProfileRelationship::class, 'related_instagram_profile_id');
     }
 
+    public function setUsernameAttribute($value): void
+    {
+        $this->attributes['username'] = $this->normalizeUsername($value);
+    }
+
     public function getDisplayHandleAttribute(): string
     {
         return '@'.ltrim((string) $this->username, '@');
@@ -75,5 +80,19 @@ class InstagramProfile extends Model
     public function getProfileImageStorageUrlAttribute(): ?string
     {
         return PublicAssetUrl::fromStorageOrRemote($this->profile_image_path, $this->profile_image_url);
+    }
+
+    private function normalizeUsername(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $username = strtolower(trim((string) $value));
+        $username = preg_replace('/^https?:\/\/(www\.)?instagram\.com\//i', '', $username) ?? $username;
+        $username = trim(ltrim($username, '@'), "/ \t\n\r\0\x0B");
+        $username = preg_replace('/[?#].*$/', '', $username) ?? $username;
+
+        return $username !== '' ? $username : null;
     }
 }

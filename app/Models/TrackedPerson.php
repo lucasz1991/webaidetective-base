@@ -129,6 +129,11 @@ class TrackedPerson extends Model
             ->latestOfMany('analyzed_at');
     }
 
+    public function setInstagramUsernameAttribute($value): void
+    {
+        $this->attributes['instagram_username'] = $this->normalizeSocialUsername($value);
+    }
+
     public function getDisplayNameAttribute(): string
     {
         return trim(collect([$this->first_name, $this->last_name])->implode(' '))
@@ -163,5 +168,19 @@ class TrackedPerson extends Model
     public function analyzeInstagram(?callable $progress = null, bool $fullScan = false): TrackedPersonInstagramSnapshot
     {
         return app(TrackedPersonInstagramAnalysisService::class)->analyze($this, $progress, $fullScan);
+    }
+
+    private function normalizeSocialUsername(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $username = strtolower(trim((string) $value));
+        $username = preg_replace('/^https?:\/\/(www\.)?instagram\.com\//i', '', $username) ?? $username;
+        $username = trim(ltrim($username, '@'), "/ \t\n\r\0\x0B");
+        $username = preg_replace('/[?#].*$/', '', $username) ?? $username;
+
+        return $username !== '' ? $username : null;
     }
 }
