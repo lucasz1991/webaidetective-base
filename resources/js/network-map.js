@@ -20,23 +20,68 @@ function initialFor(value) {
     return (text.charAt(0) || '?').toUpperCase();
 }
 
+function visibilityValue(data) {
+    const visibility = String(data?.profileVisibility || data?.visibility || '').toLowerCase();
+
+    if (visibility === 'public' || visibility === 'private') {
+        return visibility;
+    }
+
+    const status = String(data?.status || '').toLowerCase();
+
+    if (status === 'public' || status === 'private') {
+        return status;
+    }
+
+    return 'unknown';
+}
+
+function visibilityLabel(data) {
+    const visibility = visibilityValue(data);
+
+    if (visibility === 'public') {
+        return 'Oeffentlich';
+    }
+
+    if (visibility === 'private') {
+        return 'Privat';
+    }
+
+    return 'Unbekannt';
+}
+
+function visibilityBadgeElement(data) {
+    const badge = document.createElement('span');
+    const visibility = visibilityValue(data);
+    const classes = {
+        public: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+        private: 'bg-slate-100 text-slate-700 ring-slate-200',
+        unknown: 'bg-amber-50 text-amber-800 ring-amber-200',
+    };
+
+    badge.className = `inline-flex rounded-lg px-2 py-0.5 text-[11px] font-semibold ring-1 ${classes[visibility] || classes.unknown}`;
+    badge.textContent = visibilityLabel(data);
+
+    return badge;
+}
+
 function avatarElement(data, large = false) {
     const imageUrl = String(data?.imageUrl || '').trim();
     const element = document.createElement(imageUrl ? 'img' : 'div');
     const sizeClass = large ? 'h-12 w-12' : 'h-9 w-9';
-    const commonClasses = `${sizeClass} shrink-0 rounded-full ring-2`;
+    const commonClasses = `${sizeClass} shrink-0 rounded-full border border-slate-200`;
 
     if (imageUrl) {
         element.src = imageUrl;
         element.alt = data?.handle || data?.fullLabel || 'Instagram-Profilbild';
         element.loading = 'lazy';
         element.referrerPolicy = 'no-referrer';
-        element.className = `${commonClasses} object-cover ring-slate-200 bg-slate-100`;
+        element.className = `${commonClasses} object-cover bg-slate-100`;
 
         return element;
     }
 
-    element.className = `${commonClasses} flex items-center justify-center bg-slate-100 text-xs font-bold text-slate-600 ring-slate-200`;
+    element.className = `${commonClasses} flex items-center justify-center bg-slate-100 text-xs font-bold text-slate-600`;
     element.textContent = initialFor(data?.handle || data?.fullLabel || data?.label);
 
     return element;
@@ -105,6 +150,8 @@ function toElements(graph) {
         classes: [
             node.hasImage ? 'network-has-image' : '',
             node.isPrimary ? 'network-primary' : '',
+            visibilityValue(node) === 'public' ? 'network-profile-public' : '',
+            visibilityValue(node) === 'private' ? 'network-profile-private' : '',
         ].filter(Boolean).join(' '),
         position: Number.isFinite(Number(node.x)) && Number.isFinite(Number(node.y))
             ? { x: Number(node.x), y: Number(node.y) }
@@ -502,6 +549,7 @@ function updateSelectionPanel(root, cy) {
         .filter(Boolean)
         .join(' · ');
     root.querySelector('[data-network-detail-text]').textContent = node.data('detail') || 'Keine Zusatzdetails gespeichert.';
+    root.querySelector('[data-network-detail-visibility]')?.replaceChildren(visibilityBadgeElement(node.data()));
 
     const edges = visibleConnectedEdges(node);
     root.querySelector('[data-network-detail-edge-count]').textContent = edges.length;
@@ -526,6 +574,7 @@ function updateSelectionPanel(root, cy) {
         const text = document.createElement('span');
         const label = document.createElement('span');
         const handle = document.createElement('span');
+        const badges = document.createElement('span');
         const connection = document.createElement('span');
         const edgeLabels = edges
             .filter((edge) => edge.source().id() === connectedNode.id() || edge.target().id() === connectedNode.id())
@@ -546,10 +595,13 @@ function updateSelectionPanel(root, cy) {
         handle.className = 'block text-xs text-slate-500';
         handle.textContent = connectedNode.data('handle') || connectedNode.data('type');
 
+        badges.className = 'mt-1 flex flex-wrap gap-1';
+        badges.append(visibilityBadgeElement(connectedNode.data()));
+
         connection.className = 'mt-1 block text-xs font-semibold text-slate-600';
         connection.textContent = uniqueEdgeLabels.join(' + ') || 'Verbindung';
 
-        text.append(label, handle, connection);
+        text.append(label, handle, badges, connection);
         button.append(avatarElement(connectedNode.data()), text);
         list.append(button);
     });
@@ -780,8 +832,20 @@ async function initNetworkMap(root) {
             {
                 selector: 'node[type = "candidate"]',
                 style: {
-                    'background-color': '#fdf2f8',
-                    'border-color': '#f9a8d4',
+                    'background-color': '#f8fafc',
+                    'border-color': '#cbd5e1',
+                },
+            },
+            {
+                selector: '.network-profile-public',
+                style: {
+                    'border-color': '#34d399',
+                },
+            },
+            {
+                selector: '.network-profile-private',
+                style: {
+                    'border-color': '#64748b',
                 },
             },
             {
