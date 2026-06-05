@@ -441,6 +441,9 @@ class NetworkMap extends Component
                         'isPrimary' => false,
                         'role' => 'Bekanntes Profil',
                         'status' => $publicProfile->is_public ? 'public' : 'unknown',
+                        'profileVisibility' => $linkedInstagramProfile
+                            ? $this->profileStatusForInstagramProfile($linkedInstagramProfile)
+                            : ($publicProfile->is_public ? 'public' : 'unknown'),
                         'detail' => $publicProfile->relationship_label,
                         'isKnownProfile' => true,
                     ];
@@ -487,6 +490,9 @@ class NetworkMap extends Component
                         'isPrimary' => false,
                         'role' => 'Rekonstruierter Kandidat',
                         'status' => 'inferred',
+                        'profileVisibility' => $connection->candidateInstagramProfile
+                            ? $this->profileStatusForInstagramProfile($connection->candidateInstagramProfile)
+                            : 'unknown',
                         'detail' => $connection->relationship_label,
                         'isKnownProfile' => false,
                     ];
@@ -567,6 +573,7 @@ class NetworkMap extends Component
             'isPrimary' => (bool) $person->is_primary,
             'role' => $person->is_primary ? 'Hauptperson' : 'Beobachtete Person',
             'status' => $person->last_instagram_status_level ?: 'neutral',
+            'profileVisibility' => $this->profileStatusForTrackedPerson($person),
             'detail' => $person->last_instagram_status_message ?: null,
             'isKnownProfile' => false,
             'detailUrl' => route('tracked-people.show', ['trackedPersonId' => $person->id]),
@@ -1200,6 +1207,7 @@ class NetworkMap extends Component
             'isPrimary' => false,
             'role' => $role,
             'status' => $this->profileStatusForInstagramProfile($profile),
+            'profileVisibility' => $this->profileStatusForInstagramProfile($profile),
             'detail' => $this->profileDetailForInstagramProfile($profile),
             'isKnownProfile' => false,
         ];
@@ -1262,6 +1270,7 @@ class NetworkMap extends Component
             'isPrimary' => false,
             'role' => 'Listeneintrag',
             'status' => 'listed',
+            'profileVisibility' => $this->profileStatusForRelationshipItem($item),
             'detail' => 'Aus einer gespeicherten Instagram-Liste. '.($profileUrl ? 'Profil: '.$profileUrl : ''),
             'isKnownProfile' => false,
         ];
@@ -1400,6 +1409,47 @@ class NetworkMap extends Component
 
         return data_get($rawPayload, 'extractedProfile.profileVisibility') === 'public'
             || data_get($rawPayload, 'extractedProfile.isPrivate') === false;
+    }
+
+    private function profileStatusForTrackedPerson(TrackedPerson $person): string
+    {
+        $rawPayload = is_array($person->latestInstagramSnapshot?->raw_payload)
+            ? $person->latestInstagramSnapshot->raw_payload
+            : [];
+        $visibility = Str::lower((string) data_get($rawPayload, 'extractedProfile.profileVisibility', ''));
+
+        if (in_array($visibility, ['public', 'private'], true)) {
+            return $visibility;
+        }
+
+        if (data_get($rawPayload, 'extractedProfile.isPrivate') === true) {
+            return 'private';
+        }
+
+        if (data_get($rawPayload, 'extractedProfile.isPrivate') === false) {
+            return 'public';
+        }
+
+        return 'unknown';
+    }
+
+    private function profileStatusForRelationshipItem(mixed $item): string
+    {
+        $visibility = Str::lower((string) data_get($item, 'profileVisibility', ''));
+
+        if (in_array($visibility, ['public', 'private'], true)) {
+            return $visibility;
+        }
+
+        if (data_get($item, 'isPrivate') === true) {
+            return 'private';
+        }
+
+        if (data_get($item, 'isPrivate') === false) {
+            return 'public';
+        }
+
+        return 'unknown';
     }
 
     private function instagramProfileIsPublic(?InstagramProfile $profile): bool

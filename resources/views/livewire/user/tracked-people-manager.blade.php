@@ -134,14 +134,12 @@
                 </div>
                 <div class="grid gap-4 p-4 pl-5 lg:grid-cols-[minmax(230px,1fr)_minmax(0,0.9fr)] lg:items-center">
                     <div class="flex min-w-0 items-center gap-3">
-                        <div class="shrink-0 rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-0.5 shadow-sm">
-                            <div class="h-16 w-16 overflow-hidden rounded-full border-2 border-white bg-slate-100">
-                                @if($trackedPerson->profile_image_url)
-                                    <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full object-cover">
-                                @else
-                                    <div class="flex h-full w-full items-center justify-center text-[10px] font-semibold text-slate-500">IG</div>
-                                @endif
-                            </div>
+                        <div class="h-16 w-16 shrink-0 overflow-hidden rounded-full border border-slate-200 bg-slate-100 shadow-sm">
+                            @if($trackedPerson->profile_image_url)
+                                <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full object-cover">
+                            @else
+                                <div class="flex h-full w-full items-center justify-center text-[10px] font-semibold text-slate-500">IG</div>
+                            @endif
                         </div>
                         <div class="min-w-0 flex-1">
                             <div class="flex min-w-0 flex-wrap items-center gap-2">
@@ -248,14 +246,12 @@
                     @if($selectedTrackedPerson)
                         <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.72fr)] lg:items-start">
                             <div class="flex flex-col gap-4 sm:flex-row sm:items-start">
-                                <div class="rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-0.5">
-                                    <div class="h-20 w-20 overflow-hidden rounded-full border-2 border-white bg-slate-100">
-                                        @if($selectedTrackedPerson->profile_image_url)
-                                            <img src="{{ $selectedTrackedPerson->profile_image_url }}" alt="{{ $selectedTrackedPerson->display_name }}" class="h-full w-full object-cover">
-                                        @else
-                                            <div class="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-500">IG</div>
-                                        @endif
-                                    </div>
+                                <div class="h-20 w-20 shrink-0 overflow-hidden rounded-full border border-slate-200 bg-slate-100 shadow-sm">
+                                    @if($selectedTrackedPerson->profile_image_url)
+                                        <img src="{{ $selectedTrackedPerson->profile_image_url }}" alt="{{ $selectedTrackedPerson->display_name }}" class="h-full w-full object-cover">
+                                    @else
+                                        <div class="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-500">IG</div>
+                                    @endif
                                 </div>
 
                                 <div class="min-w-0 flex-1">

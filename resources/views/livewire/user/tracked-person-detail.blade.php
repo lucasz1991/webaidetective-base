@@ -47,19 +47,53 @@
             $username = ltrim(trim((string) data_get($item, 'username', '')), '@');
             $initial = \Illuminate\Support\Str::upper(\Illuminate\Support\Str::substr($username !== '' ? $username : '?', 0, 1));
             $toneClass = match ($tone) {
-                'emerald' => 'ring-emerald-200 bg-emerald-50 text-emerald-700',
-                'rose' => 'ring-rose-200 bg-rose-50 text-rose-700',
-                default => 'ring-slate-200 bg-slate-100 text-slate-600',
+                'emerald' => 'bg-emerald-50 text-emerald-700',
+                'rose' => 'bg-rose-50 text-rose-700',
+                default => 'bg-slate-100 text-slate-600',
             };
 
             if (filled($imageUrl)) {
                 return new \Illuminate\Support\HtmlString(
-                    '<img src="'.e($imageUrl).'" alt="'.e($username !== '' ? '@'.$username : 'Instagram-Profilbild').'" loading="lazy" referrerpolicy="no-referrer" class="h-11 w-11 shrink-0 rounded-full object-cover ring-2 '.$toneClass.'">',
+                    '<img src="'.e($imageUrl).'" alt="'.e($username !== '' ? '@'.$username : 'Instagram-Profilbild').'" loading="lazy" referrerpolicy="no-referrer" class="h-11 w-11 shrink-0 rounded-full border border-slate-200 object-cover '.$toneClass.'">',
                 );
             }
 
             return new \Illuminate\Support\HtmlString(
-                '<div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-xs font-bold ring-2 '.$toneClass.'">'.e($initial).'</div>',
+                '<div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-slate-200 text-xs font-bold '.$toneClass.'">'.e($initial).'</div>',
+            );
+        };
+        $relationshipVisibility = function ($item): string {
+            $visibility = \Illuminate\Support\Str::lower((string) data_get($item, 'profileVisibility', ''));
+
+            if (in_array($visibility, ['public', 'private'], true)) {
+                return $visibility;
+            }
+
+            if (data_get($item, 'isPrivate') === true) {
+                return 'private';
+            }
+
+            if (data_get($item, 'isPrivate') === false) {
+                return 'public';
+            }
+
+            return 'unknown';
+        };
+        $relationshipVisibilityBadge = function ($item) use ($relationshipVisibility) {
+            $visibility = $relationshipVisibility($item);
+            $label = match ($visibility) {
+                'public' => 'Oeffentlich',
+                'private' => 'Privat',
+                default => 'Unbekannt',
+            };
+            $class = match ($visibility) {
+                'public' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+                'private' => 'bg-slate-100 text-slate-700 ring-slate-200',
+                default => 'bg-amber-50 text-amber-800 ring-amber-200',
+            };
+
+            return new \Illuminate\Support\HtmlString(
+                '<span class="mt-1 inline-flex rounded-lg px-2 py-0.5 text-[11px] font-semibold ring-1 '.$class.'">'.$label.'</span>',
             );
         };
         $relationshipTimestamp = function ($item, array $keys = ['firstSeenAt', 'lastSeenAt', 'removedAt']) {
@@ -339,11 +373,11 @@
         <div class="bg-gradient-to-r from-rose-50 via-slate-50 to-slate-100 px-4 py-4 text-slate-950 sm:px-5">
             <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div class="flex items-center gap-4">
-                    <div class="h-20 w-20 shrink-0 rounded-full bg-gradient-to-tr from-rose-200 via-slate-200 to-fuchsia-200 p-1 shadow-sm">
+                    <div class="h-20 w-20 shrink-0 overflow-hidden rounded-full border border-slate-200 bg-slate-100 shadow-sm">
                         @if($trackedPerson->profile_image_url)
-                            <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full rounded-full border-4 border-white object-cover">
+                            <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" class="h-full w-full object-cover">
                         @else
-                            <div class="flex h-full w-full items-center justify-center rounded-full border-4 border-white bg-slate-100 text-sm font-semibold text-slate-500">
+                            <div class="flex h-full w-full items-center justify-center text-sm font-semibold text-slate-500">
                                 IG
                             </div>
                         @endif
@@ -629,6 +663,7 @@
                                                 @if(data_get($addedFollower, 'displayName'))
                                                     <div class="mt-0.5 truncate text-slate-500">{{ data_get($addedFollower, 'displayName') }}</div>
                                                 @endif
+                                                {!! $relationshipVisibilityBadge($addedFollower) !!}
                                             </div>
                                             @if(data_get($addedFollower, 'profileUrl'))
                                                 <a href="{{ data_get($addedFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50">
@@ -658,6 +693,7 @@
                                                 @if(data_get($removedFollower, 'displayName'))
                                                     <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedFollower, 'displayName') }}</div>
                                                 @endif
+                                                {!! $relationshipVisibilityBadge($removedFollower) !!}
                                             </div>
                                             @if(data_get($removedFollower, 'profileUrl'))
                                                 <a href="{{ data_get($removedFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
@@ -701,6 +737,7 @@
                                         @if(data_get($removedFollower, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedFollower, 'displayName') }}</div>
                                         @endif
+                                        {!! $relationshipVisibilityBadge($removedFollower) !!}
                                     </div>
                                     @if(data_get($removedFollower, 'profileUrl'))
                                         <a href="{{ data_get($removedFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
@@ -730,6 +767,7 @@
                                         @if(data_get($historyFollower, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($historyFollower, 'displayName') }}</div>
                                         @endif
+                                        {!! $relationshipVisibilityBadge($historyFollower) !!}
                                     </div>
                                     @if(data_get($historyFollower, 'profileUrl'))
                                         <a href="{{ data_get($historyFollower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
@@ -756,6 +794,7 @@
                                         @if(data_get($follower, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($follower, 'displayName') }}</div>
                                         @endif
+                                        {!! $relationshipVisibilityBadge($follower) !!}
                                     </div>
                                     @if(data_get($follower, 'profileUrl'))
                                         <a href="{{ data_get($follower, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white">
@@ -861,6 +900,7 @@
                                                 @if(data_get($addedProfile, 'displayName'))
                                                     <div class="mt-0.5 truncate text-slate-500">{{ data_get($addedProfile, 'displayName') }}</div>
                                                 @endif
+                                                {!! $relationshipVisibilityBadge($addedProfile) !!}
                                             </div>
                                             @if(data_get($addedProfile, 'profileUrl'))
                                                 <a href="{{ data_get($addedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50">
@@ -890,6 +930,7 @@
                                                 @if(data_get($removedProfile, 'displayName'))
                                                     <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedProfile, 'displayName') }}</div>
                                                 @endif
+                                                {!! $relationshipVisibilityBadge($removedProfile) !!}
                                             </div>
                                             @if(data_get($removedProfile, 'profileUrl'))
                                                 <a href="{{ data_get($removedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
@@ -933,6 +974,7 @@
                                         @if(data_get($removedProfile, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($removedProfile, 'displayName') }}</div>
                                         @endif
+                                        {!! $relationshipVisibilityBadge($removedProfile) !!}
                                     </div>
                                     @if(data_get($removedProfile, 'profileUrl'))
                                         <a href="{{ data_get($removedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-semibold text-rose-800 hover:bg-rose-50">
@@ -962,6 +1004,7 @@
                                         @if(data_get($historyProfile, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($historyProfile, 'displayName') }}</div>
                                         @endif
+                                        {!! $relationshipVisibilityBadge($historyProfile) !!}
                                     </div>
                                     @if(data_get($historyProfile, 'profileUrl'))
                                         <a href="{{ data_get($historyProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
@@ -988,6 +1031,7 @@
                                         @if(data_get($followedProfile, 'displayName'))
                                             <div class="mt-0.5 truncate text-slate-500">{{ data_get($followedProfile, 'displayName') }}</div>
                                         @endif
+                                        {!! $relationshipVisibilityBadge($followedProfile) !!}
                                     </div>
                                     @if(data_get($followedProfile, 'profileUrl'))
                                         <a href="{{ data_get($followedProfile, 'profileUrl') }}" target="_blank" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white">
