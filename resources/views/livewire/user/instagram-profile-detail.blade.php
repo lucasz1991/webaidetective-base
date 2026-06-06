@@ -13,6 +13,29 @@
         };
     @endphp
 
+    <div
+        wire:loading.flex
+        wire:target="analyzeInstagramMini,analyzeInstagram,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions"
+        class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
+    >
+        <div class="w-full max-w-md rounded-lg bg-white p-6 text-center shadow-2xl">
+            <div class="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-pink-200 border-t-pink-600"></div>
+            <h3 class="mt-4 text-lg font-bold text-slate-950">Instagram-Scan laeuft</h3>
+            <p class="mt-2 text-sm text-slate-600">Das Profil wird mit denselben Scan-Services wie eine beobachtete Person verarbeitet.</p>
+        </div>
+    </div>
+
+    @if($detailStatus)
+        <div @class([
+            'rounded-lg border p-3 text-sm',
+            'border-emerald-200 bg-emerald-50 text-emerald-900' => $detailStatusLevel === 'success',
+            'border-amber-200 bg-amber-50 text-amber-950' => $detailStatusLevel === 'partial',
+            'border-rose-200 bg-rose-50 text-rose-900' => $detailStatusLevel === 'error',
+        ])>
+            {{ $detailStatus }}
+        </div>
+    @endif
+
     <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="flex flex-col gap-5 p-5 lg:flex-row lg:items-start lg:justify-between">
             <div class="flex min-w-0 gap-4">
@@ -71,6 +94,48 @@
                     </div>
                 </div>
             @endforeach
+        </div>
+    </section>
+
+    <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h2 class="text-base font-bold text-slate-950">Scans und gespeicherte Listen</h2>
+                <p class="mt-1 text-sm text-slate-500">Die Aktionen entsprechen dem Detail einer beobachteten Person.</p>
+            </div>
+            @if(! $trackedPerson)
+                <span class="rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
+                    Beim ersten Scan wird das Profil automatisch als beobachtet angelegt.
+                </span>
+            @endif
+        </div>
+
+        <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <button type="button" wire:click="analyzeInstagramMini" wire:loading.attr="disabled" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50">
+                Mini-Scan
+            </button>
+            <button type="button" wire:click="analyzeInstagram" wire:loading.attr="disabled" class="rounded-lg bg-pink-600 px-4 py-2 text-sm font-semibold text-white hover:bg-pink-700 disabled:opacity-50">
+                Vollanalyse
+            </button>
+            @if($visibility === 'public')
+                <button type="button" wire:click="scanInstagramFollowersList" wire:loading.attr="disabled" class="rounded-lg border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-100 disabled:opacity-50">
+                    Follower scannen
+                </button>
+                <button type="button" wire:click="scanInstagramFollowingList" wire:loading.attr="disabled" class="rounded-lg border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-100 disabled:opacity-50">
+                    Gefolgt scannen
+                </button>
+            @endif
+            @if($visibility === 'private')
+                <button type="button" wire:click="scanInstagramSuggestions" wire:loading.attr="disabled" class="rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-4 py-2 text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-100 disabled:opacity-50">
+                    Vorschlaege scannen
+                </button>
+            @endif
+            <button type="button" wire:click="$set('showFollowersModal', true)" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                Follower-Liste ansehen
+            </button>
+            <button type="button" wire:click="$set('showFollowingModal', true)" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                Gefolgt-Liste ansehen
+            </button>
         </div>
     </section>
 
@@ -139,4 +204,7 @@
             </table>
         </div>
     </section>
+
+    <x-instagram-profile-list-modal model="showFollowersModal" title="Followerliste" :scan="$latestFollowersScan" />
+    <x-instagram-profile-list-modal model="showFollowingModal" title="Gefolgt-Liste" :scan="$latestFollowingScan" />
 </div>
