@@ -31,10 +31,10 @@ class InstagramScraper
             throw new \RuntimeException('Bitte einen gueltigen Instagram-Username eingeben.');
         }
 
-        $nodeScript = base_path('resources/node/scraper/scrape-instagram.cjs');
+        $nodeScript = $this->resolveNodeScriptForOperationMode($operationMode);
 
         if (! File::exists($nodeScript)) {
-            throw new \RuntimeException('Node-Skript nicht gefunden.');
+            throw new \RuntimeException('Node-Skript fuer Instagram-'.$operationMode.' nicht gefunden.');
         }
 
         $scanControl = $this->extractScanControl($runtimeConfigOverrides);
@@ -863,6 +863,19 @@ class InstagramScraper
         return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'suggestions', 'login-session'], true)
             ? $operationMode
             : 'analyze';
+    }
+
+    private function resolveNodeScriptForOperationMode(string $operationMode): string
+    {
+        $scriptName = match ($operationMode) {
+            'mini' => 'scrape-instagram-mini.cjs',
+            'analyze', 'profile' => 'scrape-instagram-full.cjs',
+            'followers', 'following' => 'scrape-instagram-list.cjs',
+            'suggestions' => 'scrape-instagram-suggestions.cjs',
+            default => 'scrape-instagram.cjs',
+        };
+
+        return base_path('resources/node/scraper/'.$scriptName);
     }
 
     private function writeRuntimeConfig(array $overrides = []): string

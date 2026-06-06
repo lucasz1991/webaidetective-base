@@ -12,7 +12,7 @@ const normalizeUsername = (value) => String(value || '')
 const publicUsername = normalizeUsername(process.argv[2]);
 const targetUsername = normalizeUsername(process.argv[3]);
 const runtimeConfigPath = process.argv[4] || null;
-const scraperScriptPath = path.join(__dirname, 'scrape-instagram.cjs');
+const scraperScriptPath = path.join(__dirname, 'scrape-instagram-list.cjs');
 const nodeBinary = process.execPath || 'node';
 
 function progressLog(stage, payload = {}) {
