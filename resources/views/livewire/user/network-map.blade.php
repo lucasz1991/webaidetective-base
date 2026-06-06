@@ -194,7 +194,7 @@
         <div
             class="grid"
             x-bind:class="mapFullscreen
-                ? 'fixed inset-0 z-50 h-screen w-screen overflow-hidden bg-white xl:grid-cols-[minmax(0,1fr)_360px]'
+                ? 'fixed inset-0 z-50 h-screen w-screen overflow-hidden bg-white'
                 : 'grid-cols-1 gap-4'"
         >
             <section
@@ -295,7 +295,7 @@
                 @endif
             </section>
 
-            <aside x-show="mapFullscreen" x-cloak class="h-screen overflow-y-auto border-l border-slate-200 bg-white">
+            <aside class="hidden">
                 <div class="border-b border-slate-200 p-4">
                     <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Auswahl</h2>
                     <p data-network-detail-empty class="mt-3 text-sm leading-6 text-slate-600">

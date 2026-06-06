@@ -1077,7 +1077,7 @@ async function initNetworkMap(root) {
             {
                 selector: 'edge',
                 style: {
-                    width: 2,
+                    width: 1,
                     'line-color': '#0284c7',
                     'target-arrow-color': '#0284c7',
                     'target-arrow-shape': 'triangle',
@@ -1096,7 +1096,7 @@ async function initNetworkMap(root) {
             {
                 selector: 'edge[networkType = "tracked-list"]',
                 style: {
-                    width: 3,
+                    width: 1.4,
                     'line-color': '#059669',
                     'target-arrow-color': '#059669',
                     'line-style': 'solid',
@@ -1106,7 +1106,7 @@ async function initNetworkMap(root) {
             {
                 selector: 'edge[networkType = "tracked-profile-rel"]',
                 style: {
-                    width: 3,
+                    width: 1.4,
                     'line-color': '#4f46e5',
                     'target-arrow-color': '#4f46e5',
                     'line-style': 'solid',
@@ -1125,7 +1125,7 @@ async function initNetworkMap(root) {
                 selector: '.network-neighbor',
                 style: {
                     opacity: 1,
-                    width: 4,
+                    width: 2,
                     'z-index': 10,
                 },
             },
