@@ -287,6 +287,7 @@ function writeStoredFilters(root, state) {
         showPublic: state.showPublic,
         showInferred: state.showInferred,
         showTracked: state.showTracked,
+        showDirectOnly: state.showDirectOnly,
         minDegree: state.minDegree,
         maxVisibleProfiles: state.maxVisibleProfiles,
     }));
@@ -320,6 +321,43 @@ function edgeVisibleForState(edge, state) {
 
 function visibleDegreeForState(node, state) {
     return node.connectedEdges().filter((edge) => edgeVisibleForState(edge, state)).length;
+}
+
+function directReferenceNode(cy, state) {
+    if (state?.selectedId) {
+        const selected = cy.getElementById(state.selectedId);
+
+        if (selected.length) {
+            return selected;
+        }
+    }
+
+    const primary = cy.nodes().filter((node) => Boolean(node.data('isPrimary'))).first();
+
+    if (primary.length) {
+        return primary;
+    }
+
+    const person = cy.nodes('[type = "person"]').first();
+
+    return person.length ? person : cy.nodes().first();
+}
+
+function directVisibleNodeIds(cy, state) {
+    const reference = directReferenceNode(cy, state);
+    const ids = new Set();
+
+    if (!reference?.length) {
+        return ids;
+    }
+
+    ids.add(reference.id());
+    reference.connectedEdges()
+        .filter((edge) => edgeVisibleForState(edge, state))
+        .connectedNodes()
+        .forEach((node) => ids.add(node.id()));
+
+    return ids;
 }
 
 function networkMaxVisibleProfiles(root) {
@@ -492,65 +530,117 @@ function arrangeVisibleGraph(root, cy, animate = true) {
     const centerY = height / 2;
     const nodes = visibleNodes.toArray();
     const primary = nodes.find((node) => Boolean(node.data('isPrimary'))) || nodes.find((node) => node.data('type') === 'person') || nodes[0];
-    const buckets = {
-        person: [],
-        hub: [],
-        high: [],
-        medium: [],
-        low: [],
-    };
+    const anchors = [];
+    const children = [];
+    const anchorGroups = new Map();
+    const ungrouped = [];
+    const visibleEdges = cy.edges().not('.network-filtered');
 
     nodes.forEach((node) => {
         if (node.id() === primary.id()) {
             return;
         }
 
-        if (node.data('type') === 'person') {
-            buckets.person.push(node);
+        if (node.data('type') === 'person' || node.data('type') === 'profile') {
+            anchors.push(node);
             return;
         }
 
-        const degree = visibleDegree(node);
-
-        if (degree >= 12) {
-            buckets.hub.push(node);
-        } else if (degree >= 8) {
-            buckets.high.push(node);
-        } else if (degree >= 4) {
-            buckets.medium.push(node);
-        } else {
-            buckets.low.push(node);
-        }
+        children.push(node);
     });
 
-    Object.values(buckets).forEach((bucket) => {
-        bucket.sort((a, b) => visibleDegree(b) - visibleDegree(a) || String(a.data('username') || a.id()).localeCompare(String(b.data('username') || b.id())));
-    });
+    anchors.sort((a, b) => (
+        visibleDegree(b) - visibleDegree(a)
+        || String(a.data('username') || a.id()).localeCompare(String(b.data('username') || b.id()))
+    ));
 
     const updates = [{ node: primary, position: { x: centerX, y: centerY } }];
-    const placeBucket = (bucket, baseRadius, perRing, offset) => {
-        bucket.forEach((node, index) => {
-            const ring = Math.floor(index / perRing);
-            const ringIndex = index - (ring * perRing);
-            const ringCount = Math.min(perRing, bucket.length - (ring * perRing));
-            const angle = ((Math.PI * 2) * (ringIndex / Math.max(1, ringCount))) + offset + (ring * 0.17);
-            const radius = baseRadius + (ring * 125);
+    const anchorPositions = new Map();
+    const anchorRadius = Math.max(220, Math.min(430, 180 + (anchors.length * 8)));
+
+    anchors.forEach((node, index) => {
+        const angle = (-Math.PI / 2) + ((Math.PI * 2) * (index / Math.max(1, anchors.length)));
+        const ring = Math.floor(index / 28);
+        const position = {
+            x: centerX + Math.cos(angle) * (anchorRadius + (ring * 170)),
+            y: centerY + Math.sin(angle) * (anchorRadius + (ring * 170)),
+        };
+
+        anchorPositions.set(node.id(), position);
+        updates.push({ node, position });
+    });
+
+    const anchorIds = new Set([primary.id(), ...anchors.map((node) => node.id())]);
+    const preferredAnchorForChild = (node) => {
+        const connectedAnchors = visibleEdges
+            .filter((edge) => edge.source().id() === node.id() || edge.target().id() === node.id())
+            .connectedNodes()
+            .filter((connectedNode) => anchorIds.has(connectedNode.id()) && connectedNode.id() !== node.id())
+            .toArray()
+            .sort((a, b) => (
+                (a.id() === primary.id() ? -1 : 0)
+                - (b.id() === primary.id() ? -1 : 0)
+                || visibleDegree(b) - visibleDegree(a)
+            ));
+
+        return connectedAnchors[0] || null;
+    };
+
+    children
+        .sort((a, b) => visibleDegree(b) - visibleDegree(a) || String(a.data('username') || a.id()).localeCompare(String(b.data('username') || b.id())))
+        .forEach((node) => {
+            const anchor = preferredAnchorForChild(node);
+
+            if (!anchor) {
+                ungrouped.push(node);
+                return;
+            }
+
+            const group = anchorGroups.get(anchor.id()) || [];
+            group.push(node);
+            anchorGroups.set(anchor.id(), group);
+        });
+
+    anchorGroups.forEach((group, anchorId) => {
+        const anchorPosition = anchorPositions.get(anchorId) || { x: centerX, y: centerY };
+        const columns = Math.max(2, Math.ceil(Math.sqrt(group.length)));
+        const spacing = 72;
+        const rowGap = 74;
+
+        group.forEach((node, index) => {
+            const row = Math.floor(index / columns);
+            const column = index % columns;
+            const centeredColumn = column - ((Math.min(columns, group.length - (row * columns)) - 1) / 2);
 
             updates.push({
                 node,
                 position: {
-                    x: centerX + Math.cos(angle) * radius,
-                    y: centerY + Math.sin(angle) * radius,
+                    x: anchorPosition.x + (centeredColumn * spacing),
+                    y: anchorPosition.y + 120 + (row * rowGap),
                 },
             });
         });
-    };
+    });
 
-    placeBucket(buckets.person, 165, 18, -Math.PI / 2);
-    placeBucket(buckets.hub, 220, 18, -Math.PI / 2.6);
-    placeBucket(buckets.high, 320, 24, -Math.PI / 2.5);
-    placeBucket(buckets.medium, 470, 34, -Math.PI / 3);
-    placeBucket(buckets.low, 650, 46, -Math.PI / 4);
+    ungrouped.forEach((node, index) => {
+        const ring = Math.floor(index / 42);
+        const ringIndex = index - (ring * 42);
+        const ringCount = Math.min(42, ungrouped.length - (ring * 42));
+        const angle = (Math.PI * 2 * (ringIndex / Math.max(1, ringCount))) + Math.PI / 5;
+        const radius = 620 + (ring * 150);
+
+        updates.push({
+            node,
+            position: {
+                x: centerX + Math.cos(angle) * radius,
+                y: centerY + Math.sin(angle) * radius,
+            },
+        });
+    });
+
+    if (!anchors.length && !children.length) {
+        updates[0].position = { x: centerX, y: centerY };
+    }
 
     updates.forEach(({ node, position }) => {
         if (animate) {
@@ -572,6 +662,10 @@ function setSelected(root, cy, nodeId) {
 
     state.selectedId = nodeId;
     cy.elements().removeClass('network-selected network-neighbor network-faded');
+
+    if (state.showDirectOnly) {
+        applyFilters(root, cy);
+    }
 
     if (nodeId) {
         const node = cy.getElementById(nodeId);
@@ -721,12 +815,25 @@ function applyFilters(root, cy) {
         }
     });
 
+    if (state.showDirectOnly) {
+        const directIds = directVisibleNodeIds(cy, state);
+
+        cy.nodes().forEach((node) => {
+            if (directIds.has(node.id())) {
+                node.removeClass('network-filtered');
+            } else {
+                node.addClass('network-filtered');
+            }
+        });
+    }
+
     root.querySelectorAll('[data-network-filter]').forEach((button) => {
         const filter = button.dataset.networkFilter;
         const active = {
             public: state.showPublic,
             inferred: state.showInferred,
             tracked: state.showTracked,
+            direct: state.showDirectOnly,
         }[filter] ?? true;
 
         updateButton(button, active);
@@ -796,8 +903,10 @@ function bindControls(root, cy) {
                 state.showPublic = !state.showPublic;
             } else if (button.dataset.networkFilter === 'inferred') {
                 state.showInferred = !state.showInferred;
-            } else {
+            } else if (button.dataset.networkFilter === 'tracked') {
                 state.showTracked = !state.showTracked;
+            } else if (button.dataset.networkFilter === 'direct') {
+                state.showDirectOnly = !state.showDirectOnly;
             }
 
             applyFilters(root, cy);
@@ -1035,6 +1144,7 @@ async function initNetworkMap(root) {
             showPublic: storedFilters.showPublic ?? true,
             showInferred: storedFilters.showInferred ?? true,
             showTracked: storedFilters.showTracked ?? true,
+            showDirectOnly: storedFilters.showDirectOnly ?? false,
             minDegree: storedMinDegree ?? 0,
             maxVisibleProfiles: storedMaxVisibleProfiles ?? selectedMaxVisibleProfiles(root),
             hasStoredMinDegree: storedMinDegree !== null,

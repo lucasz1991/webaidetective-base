@@ -198,10 +198,14 @@
                 : 'grid-cols-1 gap-4'"
         >
             <section
-                class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
+                class="relative overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
                 x-bind:class="mapFullscreen ? '!min-h-screen !rounded-none !border-0 !shadow-none' : ''"
             >
-                <div x-show="mapFullscreen" x-cloak class="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-2">
+                <div
+                    x-show="mapFullscreen"
+                    x-cloak
+                    class="absolute left-1/2 top-2 z-20 flex max-w-[calc(100%-1rem)] -translate-x-1/2 flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200/70 bg-white/35 px-3 py-2 opacity-20 shadow-sm backdrop-blur-md transition duration-200 hover:bg-white/90 hover:opacity-100 focus-within:bg-white/95 focus-within:opacity-100"
+                >
                     <div class="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-600">
                         <button type="button" data-network-filter="public" data-active-classes="border-sky-300 bg-sky-50 text-sky-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="true">
                             Bekannte Profile
@@ -211,6 +215,9 @@
                         </button>
                         <button type="button" data-network-filter="tracked" data-active-classes="border-emerald-300 bg-emerald-50 text-emerald-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="true">
                             Follower/Gefolgt
+                        </button>
+                        <button type="button" data-network-filter="direct" data-active-classes="border-slate-900 bg-slate-900 text-white" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="false">
+                            Direkt verbunden
                         </button>
                         <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-slate-600">
                             <span>Min. Verbindungen</span>
@@ -257,7 +264,7 @@
                 @else
                     <div
                         class="relative bg-slate-50"
-                        x-bind:class="mapFullscreen ? 'h-[calc(100vh-3.5rem)] min-h-0' : 'h-[420px] min-h-[420px] cursor-zoom-in'"
+                        x-bind:class="mapFullscreen ? 'h-screen min-h-0' : 'h-[420px] min-h-[420px] cursor-zoom-in'"
                         x-on:click="if (!mapFullscreen) openMap()"
                         wire:ignore
                     >
