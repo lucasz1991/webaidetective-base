@@ -11,6 +11,19 @@
             'private' => 'bg-slate-100 text-slate-700 ring-slate-200',
             default => 'bg-amber-50 text-amber-800 ring-amber-200',
         };
+        $scanStatusLevel = $lastScanStatus['level'] ?: 'unknown';
+        $scanStatusLabel = match ($scanStatusLevel) {
+            'success' => 'Erfolgreich',
+            'partial' => 'Teilweise',
+            'error', 'failed' => 'Fehlgeschlagen',
+            default => 'Unbekannt',
+        };
+        $scanStatusClass = match ($scanStatusLevel) {
+            'success' => 'text-emerald-700',
+            'partial' => 'text-amber-700',
+            'error', 'failed' => 'text-rose-700',
+            default => 'text-slate-600',
+        };
     @endphp
 
     <div
@@ -62,8 +75,11 @@
                     @if($profile->biography)
                         <p class="mt-3 max-w-3xl whitespace-pre-line text-sm leading-6 text-slate-600">{{ $profile->biography }}</p>
                     @endif
-                    @if($profile->last_status_message)
-                        <p class="mt-3 text-sm text-slate-500">{{ $profile->last_status_message }}</p>
+                    @if($lastScanStatus['message'])
+                        <p class="mt-3 text-sm text-slate-500">
+                            <span class="font-semibold {{ $scanStatusClass }}">{{ $lastScanStatus['type'] }}:</span>
+                            {{ $lastScanStatus['message'] }}
+                        </p>
                     @endif
                 </div>
             </div>
@@ -80,20 +96,43 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-2 gap-px bg-slate-200 sm:grid-cols-4">
-            @foreach([
-                ['Follower', $profile->followers_count],
-                ['Gefolgt', $profile->following_count],
-                ['Beitraege', $profile->posts_count],
-                ['Letzter Scan', $profile->last_scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i')],
-            ] as [$label, $value])
-                <div class="bg-white px-5 py-4">
-                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">{{ $label }}</div>
-                    <div class="mt-1 text-lg font-bold text-slate-950">
-                        {{ is_numeric($value) ? number_format($value) : ($value ?: '-') }}
-                    </div>
+        <div class="grid grid-cols-2 gap-px bg-slate-200 sm:grid-cols-3 xl:grid-cols-5">
+            <button
+                type="button"
+                wire:click="$set('showFollowersModal', true)"
+                class="bg-white px-5 py-4 text-left transition hover:bg-pink-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-pink-500"
+                title="Followerliste oeffnen"
+            >
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
+                <div class="mt-1 text-lg font-bold text-slate-950">{{ is_numeric($profile->followers_count) ? number_format($profile->followers_count) : '-' }}</div>
+                <div class="mt-1 text-xs font-semibold text-pink-700">Liste oeffnen</div>
+            </button>
+            <button
+                type="button"
+                wire:click="$set('showFollowingModal', true)"
+                class="bg-white px-5 py-4 text-left transition hover:bg-pink-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-pink-500"
+                title="Gefolgt-Liste oeffnen"
+            >
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gefolgt</div>
+                <div class="mt-1 text-lg font-bold text-slate-950">{{ is_numeric($profile->following_count) ? number_format($profile->following_count) : '-' }}</div>
+                <div class="mt-1 text-xs font-semibold text-pink-700">Liste oeffnen</div>
+            </button>
+            <div class="bg-white px-5 py-4">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Beitraege</div>
+                <div class="mt-1 text-lg font-bold text-slate-950">{{ is_numeric($profile->posts_count) ? number_format($profile->posts_count) : '-' }}</div>
+            </div>
+            <div class="bg-white px-5 py-4">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Letzter Scan</div>
+                <div class="mt-1 text-lg font-bold text-slate-950">
+                    {{ $lastScanStatus['scannedAt']?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
                 </div>
-            @endforeach
+                <div class="mt-1 text-xs text-slate-500">{{ $lastScanStatus['type'] }}</div>
+            </div>
+            <div class="bg-white px-5 py-4">
+                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Scanstatus</div>
+                <div class="mt-1 text-lg font-bold {{ $scanStatusClass }}">{{ $scanStatusLabel }}</div>
+                <div class="mt-1 truncate text-xs text-slate-500" title="{{ $lastScanStatus['message'] }}">{{ $lastScanStatus['message'] ?: 'Noch kein Scanstatus gespeichert.' }}</div>
+            </div>
         </div>
     </section>
 

@@ -64,12 +64,37 @@ class InstagramProfileDetail extends Component
             ->first();
 
         $trackedPerson = $this->findTrackedPerson($profile);
+        $latestSuggestionScan = $trackedPerson?->instagramSuggestionScans()
+            ->latest('analyzed_at')
+            ->first();
+        $lastScanStatus = [
+            'level' => $profile->last_status_level,
+            'message' => $profile->last_status_message,
+            'scannedAt' => $profile->last_scanned_at,
+            'type' => 'Instagram-Scan',
+        ];
+
+        if (
+            $latestSuggestionScan?->analyzed_at
+            && (
+                ! $lastScanStatus['scannedAt']
+                || $latestSuggestionScan->analyzed_at->isAfter($lastScanStatus['scannedAt'])
+            )
+        ) {
+            $lastScanStatus = [
+                'level' => $latestSuggestionScan->status_level,
+                'message' => $latestSuggestionScan->status_message,
+                'scannedAt' => $latestSuggestionScan->analyzed_at,
+                'type' => 'Vorschlagsscan',
+            ];
+        }
 
         return view('livewire.user.instagram-profile-detail', [
             'profile' => $profile,
             'trackedPerson' => $trackedPerson,
             'latestFollowersScan' => $latestFollowersScan,
             'latestFollowingScan' => $latestFollowingScan,
+            'lastScanStatus' => $lastScanStatus,
         ])->layout('layouts.app');
     }
 
@@ -103,7 +128,10 @@ class InstagramProfileDetail extends Component
             $scan = app(TrackedPersonInstagramWorkflowService::class)
                 ->runSuggestionScan($trackedPerson);
             $this->setStatus(
-                'Vorschlagsscan abgeschlossen: '.number_format($scan->suggestion_matches_count).' Verbindungen gefunden.',
+                'Vorschlagsscan abgeschlossen: '
+                    .number_format($scan->suggestions_checked_count).' von '
+                    .number_format($scan->suggestions_observed_count).' Vorschlaegen geprueft, '
+                    .number_format($scan->suggestion_matches_count).' Verbindungen gefunden.',
                 $scan->status_level === 'success' ? 'success' : 'partial',
             );
         } catch (\Throwable $exception) {

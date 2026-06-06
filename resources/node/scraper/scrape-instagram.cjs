@@ -3153,7 +3153,7 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
     .filter(([, history]) => (
       Boolean(history?.hasMatch)
       || Boolean(history?.permanentlyDismissed)
-      || Number(history?.noMatchChecks || 0) > 0
+      || Number(history?.noMatchChecks || 0) >= 2
     ))
     .map(([username]) => normalizeInstagramUsername(username))
     .filter(Boolean));

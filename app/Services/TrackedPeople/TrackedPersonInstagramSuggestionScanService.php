@@ -108,13 +108,13 @@ class TrackedPersonInstagramSuggestionScanService
                 ]);
             },
             $this->withActiveScanControl([
-                'suggestionScanMaxItems' => 140,
-                'suggestionCandidateMaxItems' => 80,
-                'suggestionPublicListSearchMaxScrollRounds' => 90,
-                'suggestionInlineMaxRounds' => 36,
-                'suggestionDialogMaxRounds' => 48,
-                'suggestionCandidateInlineMaxRounds' => 24,
-                'suggestionCandidateDialogMaxRounds' => 36,
+                'suggestionScanMaxItems' => 500,
+                'suggestionCandidateMaxItems' => 300,
+                'suggestionPublicListSearchMaxScrollRounds' => 140,
+                'suggestionInlineMaxRounds' => 60,
+                'suggestionDialogMaxRounds' => 100,
+                'suggestionCandidateInlineMaxRounds' => 40,
+                'suggestionCandidateDialogMaxRounds' => 70,
                 'suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson),
             ]),
         );
