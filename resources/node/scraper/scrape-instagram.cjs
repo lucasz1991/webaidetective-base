@@ -1228,18 +1228,307 @@ function extractPostMetricFromText(text = '', patterns = []) {
   return null;
 }
 
+function normalizeInstagramPostTimestamp(value) {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const numericValue = Number(value);
+  const date = Number.isFinite(numericValue)
+    ? new Date(numericValue > 1000000000000 ? numericValue : numericValue * 1000)
+    : new Date(String(value));
+
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function normalizeInstagramPostMediaType(item = {}) {
+  const productType = normalizeText(String(item.product_type || item.productType || '')).toLowerCase();
+  const mediaType = normalizeText(String(item.media_type || item.mediaType || '')).toLowerCase();
+
+  if (
+    ['clips', 'reels', 'reel'].includes(productType)
+    || ['reels', 'reel'].includes(mediaType)
+    || item.clips_metadata
+  ) {
+    return 'reel';
+  }
+
+  if (['igtv', 'tv'].includes(productType) || ['igtv', 'tv'].includes(mediaType)) {
+    return 'tv';
+  }
+
+  return 'post';
+}
+
+function firstInstagramPostImageUrl(item = {}) {
+  const candidates = [
+    item.thumbnail_url,
+    item.display_url,
+    item.image_versions2?.candidates?.[0]?.url,
+    item.carousel_media?.[0]?.image_versions2?.candidates?.[0]?.url,
+    item.carousel_media?.[0]?.thumbnail_url,
+  ];
+
+  return candidates
+    .map((candidate) => normalizeText(String(candidate || '')))
+    .find(Boolean) || null;
+}
+
+function normalizeInstagramTimelinePost(item, username) {
+  if (!item || typeof item !== 'object' || Array.isArray(item)) {
+    return null;
+  }
+
+  const shortcode = normalizeText(String(item.code || item.shortcode || ''));
+
+  if (!/^[A-Za-z0-9_-]{5,}$/.test(shortcode)) {
+    return null;
+  }
+
+  const targetUsername = normalizeInstagramUsername(username);
+  const ownerUsername = normalizeInstagramUsername(
+    item.user?.username
+      || item.owner?.username
+      || item.owner_username
+      || '',
+  );
+
+  if (ownerUsername && targetUsername && ownerUsername !== targetUsername) {
+    return null;
+  }
+
+  const mediaType = normalizeInstagramPostMediaType(item);
+  const caption = normalizeText(String(
+    item.caption?.text
+      || item.edge_media_to_caption?.edges?.[0]?.node?.text
+      || item.accessibility_caption
+      || '',
+  )) || null;
+  const likesCount = hasFiniteNumericValue(item.like_count)
+    ? Number(item.like_count)
+    : (hasFiniteNumericValue(item.edge_media_preview_like?.count)
+      ? Number(item.edge_media_preview_like.count)
+      : null);
+  const commentsCount = hasFiniteNumericValue(item.comment_count)
+    ? Number(item.comment_count)
+    : (hasFiniteNumericValue(item.edge_media_to_comment?.count)
+      ? Number(item.edge_media_to_comment.count)
+      : null);
+
+  return {
+    shortcode,
+    mediaType,
+    postUrl: `https://www.instagram.com/${mediaType === 'reel' ? 'reel' : (mediaType === 'tv' ? 'tv' : 'p')}/${shortcode}/`,
+    thumbnailUrl: firstInstagramPostImageUrl(item),
+    caption,
+    publishedAt: normalizeInstagramPostTimestamp(item.taken_at || item.taken_at_timestamp),
+    likesCount,
+    commentsCount,
+    ownerUsername: ownerUsername || targetUsername || null,
+    source: 'timeline-api',
+  };
+}
+
+async function fetchInstagramTimelinePage(page, username, cursor = null, count = 12) {
+  return page.evaluate(async ({ profileUsername, maxId, pageSize }) => {
+    const query = new URLSearchParams({
+      count: String(pageSize),
+    });
+
+    if (maxId) {
+      query.set('max_id', maxId);
+    }
+
+    const endpoint = `/api/v1/feed/user/${encodeURIComponent(profileUsername)}/username/?${query.toString()}`;
+
+    try {
+      const response = await fetch(endpoint, {
+        credentials: 'include',
+        headers: {
+          Accept: '*/*',
+          'X-IG-App-ID': '936619743392459',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      });
+      const rawBody = await response.text();
+      const normalizedBody = rawBody.replace(/^for\s*\(\s*;\s*;\s*\)\s*;\s*/, '');
+      let payload = null;
+
+      try {
+        payload = normalizedBody ? JSON.parse(normalizedBody) : null;
+      } catch (error) {
+        return {
+          ok: false,
+          status: response.status,
+          endpoint,
+          error: `invalid-json: ${error.message}`,
+          bodyPreview: normalizedBody.slice(0, 500),
+        };
+      }
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        endpoint,
+        payload,
+        bodyPreview: response.ok ? null : normalizedBody.slice(0, 500),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        status: null,
+        endpoint,
+        error: error.message || String(error),
+        bodyPreview: null,
+      };
+    }
+  }, {
+    profileUsername: username,
+    maxId: cursor,
+    pageSize: count,
+  });
+}
+
+async function collectInstagramTimelinePosts(page, username, maxItems) {
+  const itemsByShortcode = new Map();
+  const pageSize = Math.min(12, Math.max(1, maxItems));
+  const maxPages = Math.max(1, Math.ceil(maxItems / pageSize) + 1);
+  const diagnostics = {
+    attempted: true,
+    successfulPages: 0,
+    pages: [],
+    rateLimited: false,
+    reachedEnd: false,
+    error: null,
+  };
+  let cursor = null;
+
+  for (let pageIndex = 0; pageIndex < maxPages && itemsByShortcode.size < maxItems; pageIndex += 1) {
+    const response = await fetchInstagramTimelinePage(page, username, cursor, pageSize);
+    const payload = response?.payload && typeof response.payload === 'object'
+      ? response.payload
+      : {};
+    const rawItems = Array.isArray(payload.items)
+      ? payload.items
+      : (Array.isArray(payload.data?.items) ? payload.data.items : []);
+    const nextCursor = normalizeText(String(
+      payload.next_max_id
+        || payload.nextMaxId
+        || payload.data?.next_max_id
+        || '',
+    )) || null;
+    const moreAvailable = payload.more_available === true
+      || payload.moreAvailable === true
+      || payload.data?.more_available === true;
+    const rateLimited = response?.status === 429
+      || /rate.?limit|please wait|bitte warte/i.test(String(
+        payload.message
+          || response?.error
+          || response?.bodyPreview
+          || '',
+      ));
+
+    diagnostics.pages.push({
+      page: pageIndex + 1,
+      status: response?.status ?? null,
+      ok: Boolean(response?.ok),
+      itemCount: rawItems.length,
+      nextCursor: Boolean(nextCursor),
+      moreAvailable,
+      endpoint: response?.endpoint || null,
+      error: response?.error || payload.message || null,
+      bodyPreview: response?.bodyPreview || null,
+    });
+
+    recordRunDebug('posts-timeline-api-page', diagnostics.pages.at(-1));
+
+    if (!response?.ok) {
+      diagnostics.rateLimited = rateLimited;
+      diagnostics.error = response?.error || payload.message || `HTTP ${response?.status ?? 'unbekannt'}`;
+      break;
+    }
+
+    diagnostics.successfulPages += 1;
+
+    for (const rawItem of rawItems) {
+      const item = normalizeInstagramTimelinePost(rawItem, username);
+
+      if (!item || itemsByShortcode.has(item.shortcode)) {
+        continue;
+      }
+
+      itemsByShortcode.set(item.shortcode, item);
+
+      if (itemsByShortcode.size >= maxItems) {
+        break;
+      }
+    }
+
+    progressLog('posts-timeline-api', {
+      relationship: 'posts',
+      loaded: itemsByShortcode.size,
+      page: pageIndex + 1,
+      message: `${itemsByShortcode.size} Beitraege aus der Instagram-Timeline gelesen.`,
+    });
+
+    if (!moreAvailable) {
+      diagnostics.reachedEnd = true;
+      break;
+    }
+
+    if (!nextCursor || nextCursor === cursor) {
+      diagnostics.error = 'Instagram meldet weitere Beitraege, liefert aber keinen neuen Cursor.';
+      break;
+    }
+
+    cursor = nextCursor;
+    await sleep(350);
+  }
+
+  return {
+    items: Array.from(itemsByShortcode.values()),
+    diagnostics,
+  };
+}
+
 async function collectProfilePostLinks(page, username, expectedCount, runtimeConfig = {}) {
   const maxItems = Math.max(1, Number(runtimeConfig.postScanMaxItems || 100));
   const maxScrollRounds = Math.max(1, Number(runtimeConfig.postScanMaxScrollRounds || 40));
   const linksByShortcode = new Map();
+  const timelineCollection = await collectInstagramTimelinePosts(page, username, maxItems);
+  const sourceCounts = {
+    timelineApi: 0,
+    dom: 0,
+  };
   let staleRounds = 0;
-  let reachedEnd = false;
+  let reachedEnd = Boolean(timelineCollection.diagnostics.reachedEnd);
+
+  for (const item of timelineCollection.items) {
+    linksByShortcode.set(item.shortcode, item);
+    sourceCounts.timelineApi += 1;
+  }
 
   for (let round = 0; round < maxScrollRounds && linksByShortcode.size < maxItems; round += 1) {
-    const links = await page.evaluate((profileUsername) => Array.from(document.querySelectorAll('main a[href]'))
+    if (expectedCount > 0 && linksByShortcode.size >= Math.min(maxItems, expectedCount)) {
+      break;
+    }
+
+    if (timelineCollection.diagnostics.reachedEnd && timelineCollection.diagnostics.successfulPages > 0) {
+      break;
+    }
+
+    const links = await page.evaluate((profileUsername) => Array.from(document.querySelectorAll('a[href]'))
       .map((anchor) => {
         const href = anchor.getAttribute('href') || '';
-        const match = href.match(/^\/(p|reel|tv)\/([^/?#]+)\/?/i);
+        let url;
+
+        try {
+          url = new URL(href, window.location.origin);
+        } catch (error) {
+          return null;
+        }
+
+        const match = url.pathname.match(/^\/(p|reel|tv)\/([^/?#]+)\/?/i);
 
         if (!match) {
           return null;
@@ -1250,10 +1539,11 @@ async function collectProfilePostLinks(page, username, expectedCount, runtimeCon
         return {
           shortcode: match[2],
           mediaType: match[1].toLowerCase() === 'p' ? 'post' : match[1].toLowerCase(),
-          postUrl: new URL(href, window.location.origin).href,
+          postUrl: url.href,
           thumbnailUrl: image?.currentSrc || image?.src || null,
           thumbnailAlt: image?.getAttribute('alt') || null,
           profileUsername,
+          source: 'dom',
         };
       })
       .filter(Boolean), username).catch(() => []);
@@ -1265,6 +1555,7 @@ async function collectProfilePostLinks(page, username, expectedCount, runtimeCon
       }
 
       linksByShortcode.set(item.shortcode, item);
+      sourceCounts.dom += 1;
 
       if (linksByShortcode.size >= maxItems) {
         break;
@@ -1316,14 +1607,29 @@ async function collectProfilePostLinks(page, username, expectedCount, runtimeCon
     await sleep(1100);
   }
 
-  return {
+  const result = {
     items: Array.from(linksByShortcode.values()),
     reachedEnd,
     complete: expectedCount <= 0
-      ? reachedEnd
+      ? reachedEnd && !timelineCollection.diagnostics.error
       : linksByShortcode.size >= Math.min(maxItems, expectedCount),
     limited: expectedCount > maxItems && linksByShortcode.size >= maxItems,
+    sourceCounts,
+    timelineApi: timelineCollection.diagnostics,
   };
+
+  recordRunDebug('posts-link-collection', {
+    expectedCount,
+    observedCount: result.items.length,
+    complete: result.complete,
+    reachedEnd: result.reachedEnd,
+    limited: result.limited,
+    sourceCounts,
+    timelineApi: timelineCollection.diagnostics,
+    shortcodes: result.items.slice(0, 25).map((item) => item.shortcode),
+  });
+
+  return result;
 }
 
 async function collectInstagramPosts(page, profile, username, profileUrl, runtimeConfig = {}) {
@@ -1356,7 +1662,7 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
   const linkCollection = await collectProfilePostLinks(page, username, expectedCount, runtimeConfig);
   const posts = [];
   const failedItems = [];
-  let rateLimited = false;
+  let rateLimited = Boolean(linkCollection.timelineApi?.rateLimited);
   let gracefullyStopped = false;
 
   for (let index = 0; index < linkCollection.items.length; index += 1) {
@@ -1377,6 +1683,26 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
       shortcode: link.shortcode,
       message: `Beitrag ${index + 1} von ${linkCollection.items.length} wird geprueft.`,
     });
+
+    if (link.source === 'timeline-api') {
+      posts.push({
+        ...link,
+        ownerUsername: undefined,
+      });
+
+      progressLog('posts-item-collected', {
+        relationship: 'posts',
+        loaded: posts.length,
+        expectedCount: linkCollection.items.length,
+        shortcode: link.shortcode,
+        likesCount: link.likesCount,
+        commentsCount: link.commentsCount,
+        source: link.source,
+        message: `Beitrag ${index + 1} von ${linkCollection.items.length} aus der Timeline gespeichert.`,
+        ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
+      });
+      continue;
+    }
 
     const navigation = await navigateWithSoftTimeout(page, link.postUrl, runtimeConfig);
 
@@ -1446,10 +1772,10 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
     posts.push({
       ...link,
       thumbnailUrl: details.thumbnailUrl || link.thumbnailUrl || null,
-      caption: details.description || link.thumbnailAlt || null,
-      publishedAt: details.publishedAt,
-      likesCount,
-      commentsCount,
+      caption: details.description || link.caption || link.thumbnailAlt || null,
+      publishedAt: details.publishedAt || link.publishedAt || null,
+      likesCount: likesCount ?? link.likesCount ?? null,
+      commentsCount: commentsCount ?? link.commentsCount ?? null,
     });
     rateLimited = rateLimited || Boolean(details.rateLimited);
 
@@ -1484,9 +1810,11 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
     ? 'Instagram-Beitragsscan wurde wegen eines Rate-Limits vorzeitig beendet.'
     : (gracefullyStopped
       ? 'Instagram-Beitragsscan wurde beendet; bisherige Beitraege werden gespeichert.'
-      : (complete
-        ? 'Instagram-Beitragsscan abgeschlossen.'
-        : 'Instagram-Beitragsscan teilweise abgeschlossen; nicht alle Beitraege waren erreichbar.'));
+      : (linkCollection.limited
+        ? `Instagram-Beitragsscan am konfigurierten Limit beendet; ${posts.length} von ${expectedCount} Beitraegen gespeichert.`
+        : (complete
+          ? 'Instagram-Beitragsscan abgeschlossen.'
+          : 'Instagram-Beitragsscan teilweise abgeschlossen; nicht alle Beitraege waren erreichbar.')));
 
   progressLog('posts-complete', {
     relationship: 'posts',
@@ -1508,6 +1836,11 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
     limited: linkCollection.limited,
     items: posts,
     failedItems,
+    collectionDiagnostics: {
+      sourceCounts: linkCollection.sourceCounts,
+      reachedEnd: linkCollection.reachedEnd,
+      timelineApi: linkCollection.timelineApi,
+    },
     statusLevel,
     statusMessage,
   };
