@@ -47,6 +47,7 @@ class NetworkMap extends Component
         'edges' => 0,
         'inferred' => 0,
         'trackedList' => 0,
+        'systemWide' => 0,
     ];
 
     public array $cacheDebug = [];
@@ -100,6 +101,12 @@ class NetworkMap extends Component
 
     private function generateDataHash(Collection $trackedPeople): string
     {
+        $systemRelationshipState = InstagramProfileRelationship::query()
+            ->where('status', 'active')
+            ->whereIn('list_type', ['followers', 'following'])
+            ->whereNull('removed_at')
+            ->selectRaw('COUNT(*) as relationship_count, MAX(updated_at) as latest_updated_at')
+            ->first();
         $data = $trackedPeople->map(function (TrackedPerson $person) {
             $currentRelationships = $person->currentInstagramProfile?->sourceRelationships ?? collect();
             $publicProfiles = $person->publicProfiles ?? collect();
@@ -125,8 +132,13 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 5;
+        $data['graph_version'] = 6;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
+        $data['system_relationships'] = [
+            'count' => (int) ($systemRelationshipState?->relationship_count ?? 0),
+            'updated_at' => $systemRelationshipState?->latest_updated_at,
+            'profiles_updated_at' => InstagramProfile::query()->max('updated_at'),
+        ];
 
         // Also include primary person flag
         $data['primary_person_id'] = $this->primaryTrackedPersonId;
@@ -345,6 +357,7 @@ class NetworkMap extends Component
             'edges' => 0,
             'inferred' => 0,
             'trackedList' => 0,
+            'systemWide' => 0,
         ];
     }
 
@@ -358,6 +371,7 @@ class NetworkMap extends Component
             'edges' => count($graph['edges']),
             'inferred' => $edges->where('type', 'inferred')->count(),
             'trackedList' => $edges->where('type', 'tracked-list')->count(),
+            'systemWide' => $edges->where('systemWideEvidence', true)->count(),
         ];
     }
 
@@ -527,27 +541,11 @@ class NetworkMap extends Component
 
         $nodesByInstagram = $this->indexGraphNodesByInstagramUsername($nodes);
 
-        if ($primaryPerson && $this->contextTrackedPersonId) {
-            $focalProfiles = collect([$primaryPerson->currentInstagramProfile])
-                ->merge($primaryPerson->publicProfiles->pluck('instagramProfile'))
-                ->filter()
-                ->unique(fn (InstagramProfile $profile) => $profile->id)
-                ->values();
-
-            $this->addSystemConnectionsForFocusedProfiles(
-                $focalProfiles,
-                $peopleByInstagram,
-                $nodesByInstagram,
-                $nodes,
-                $edges,
-            );
-        }
-
         $this->addStoredInstagramProfileListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addTrackedRelationshipListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addObservedTrackedPersonConnectionsToPrimary($trackedPeople, $primaryPerson, $nodesByInstagram, $nodes, $edges);
         $this->addTrackedPersonProfileRelationships($trackedPeople, $nodesByInstagram, $nodes, $edges);
-        $this->addVisibleInstagramProfileListEdges($peopleByInstagram, $nodesByInstagram, $nodes, $edges);
+        $this->addSystemWideDirectProfileConnections($peopleByInstagram, $nodesByInstagram, $nodes, $edges);
 
         return $this->applyLayout(array_values($nodes), array_values($edges));
     }
@@ -731,14 +729,13 @@ class NetworkMap extends Component
         }
     }
 
-    private function addVisibleInstagramProfileListEdges(
+    private function addSystemWideDirectProfileConnections(
         Collection $peopleByInstagram,
         Collection $nodesByInstagram,
         array &$nodes,
         array &$edges,
     ): void {
         $usernames = collect($nodes)
-            ->filter(fn (array $node): bool => ($node['type'] ?? null) !== 'person')
             ->map(fn (array $node): string => $this->normalizeUsername($node['username'] ?? $node['handle'] ?? ''))
             ->filter()
             ->unique()
@@ -748,175 +745,189 @@ class NetworkMap extends Component
             return;
         }
 
-        $profiles = InstagramProfile::query()
+        $seedProfiles = InstagramProfile::query()
             ->whereIn('username', $usernames->all())
+            ->get();
+        $seedProfileIds = $seedProfiles->pluck('id')->filter()->values();
+
+        if ($seedProfileIds->isEmpty()) {
+            return;
+        }
+
+        $relationships = InstagramProfileRelationship::query()
+            ->where('status', 'active')
+            ->whereIn('list_type', ['followers', 'following'])
+            ->whereNull('removed_at')
+            ->where(function ($query) use ($seedProfileIds): void {
+                $query
+                    ->whereIn('source_instagram_profile_id', $seedProfileIds->all())
+                    ->orWhereIn('related_instagram_profile_id', $seedProfileIds->all());
+            })
             ->with([
-                'sourceRelationships' => fn ($query) => $query
-                    ->where('status', 'active')
-                    ->whereIn('list_type', ['followers', 'following'])
-                    ->whereNull('removed_at')
-                    ->with('relatedInstagramProfile'),
+                'sourceInstagramProfile',
+                'relatedInstagramProfile',
+                'firstSeenScan:id,user_id',
+                'lastSeenScan:id,user_id',
             ])
             ->get();
-        $processedSources = [];
 
-        foreach ($profiles as $profile) {
-            if ($profile->sourceRelationships->isEmpty()) {
-                continue;
-            }
+        if ($relationships->isEmpty()) {
+            return;
+        }
 
-            $sourceNode = $nodesByInstagram->get($this->normalizeUsername($profile->username));
-            $sourceId = $sourceNode['id'] ?? null;
+        $evidenceByRelationship = $this->systemRelationshipEvidence($relationships);
 
-            if (! $sourceId || ! isset($nodes[$sourceId])) {
-                continue;
-            }
-
-            $this->addInstagramProfileListRelationshipEdges(
-                $profile,
-                $sourceId,
-                $peopleByInstagram,
-                $nodesByInstagram,
+        foreach ($relationships as $relationship) {
+            $sourceProfile = $relationship->sourceInstagramProfile;
+            $relatedProfile = $relationship->relatedInstagramProfile;
+            $sourceId = $this->ensureInstagramProfileNode(
                 $nodes,
+                $nodesByInstagram,
+                $peopleByInstagram,
+                $sourceProfile,
+                'Systemverbindung',
+            );
+            $relatedId = $this->ensureInstagramProfileNode(
+                $nodes,
+                $nodesByInstagram,
+                $peopleByInstagram,
+                $relatedProfile,
+                'Systemverbindung',
+            );
+
+            if (! $sourceId || ! $relatedId || $sourceId === $relatedId || ! $sourceProfile || ! $relatedProfile) {
+                continue;
+            }
+
+            $evidence = $evidenceByRelationship->get($relationship->id, []);
+            $metadata = [
+                'systemWideEvidence' => true,
+                'ownUserEvidence' => (bool) ($evidence['own'] ?? false),
+                'otherUserEvidence' => (bool) ($evidence['other'] ?? false),
+                'systemEvidenceScanCount' => (int) ($evidence['scan_count'] ?? 0),
+                'systemEvidenceUserCount' => (int) ($evidence['user_count'] ?? 0),
+            ];
+            $evidenceSuffix = $this->systemRelationshipEvidenceDescription($evidence);
+
+            if ($relationship->list_type === 'followers') {
+                $this->mergeTrackedRelationshipEdge(
+                    $edges,
+                    $relatedId,
+                    $sourceId,
+                    'Followerliste',
+                    sprintf(
+                        '%s folgt %s laut systemweit gespeicherter Followerliste. %s',
+                        $this->displayUsernameForInstagramProfile($relatedProfile),
+                        $this->displayUsernameForInstagramProfile($sourceProfile),
+                        $evidenceSuffix,
+                    ),
+                    $metadata,
+                );
+
+                continue;
+            }
+
+            $this->mergeTrackedRelationshipEdge(
                 $edges,
-                $processedSources,
+                $sourceId,
+                $relatedId,
+                'Gefolgt-Liste',
+                sprintf(
+                    '%s folgt %s laut systemweit gespeicherter Gefolgt-Liste. %s',
+                    $this->displayUsernameForInstagramProfile($sourceProfile),
+                    $this->displayUsernameForInstagramProfile($relatedProfile),
+                    $evidenceSuffix,
+                ),
+                $metadata,
             );
         }
     }
 
-    private function addSystemConnectionsForFocusedProfiles(
-        Collection $focalProfiles,
-        Collection $peopleByInstagram,
-        Collection $nodesByInstagram,
-        array &$nodes,
-        array &$edges,
-    ): void {
-        foreach ($focalProfiles as $focalProfile) {
-            if (! $focalProfile instanceof InstagramProfile || ! filled($focalProfile->username)) {
-                continue;
-            }
+    private function systemRelationshipEvidence(Collection $relationships): Collection
+    {
+        $relationshipIds = $relationships->pluck('id')->filter()->values();
+        $currentUserId = (int) Auth::id();
 
-            $focalUsername = $this->normalizeUsername($focalProfile->username);
-            $focalNode = $nodesByInstagram->get($focalUsername);
-            $focalNodeId = $focalNode['id'] ?? $this->ensureInstagramProfileNode(
-                $nodes,
-                $nodesByInstagram,
-                $peopleByInstagram,
-                $focalProfile,
-                'Fokusprofil',
-            );
+        if ($relationshipIds->isEmpty()) {
+            return collect();
+        }
 
-            if (! $focalNodeId) {
-                continue;
-            }
-
-            $focalProfile->loadMissing([
-                'sourceRelationships' => fn ($query) => $query
-                    ->where('status', 'active')
-                    ->whereIn('list_type', ['followers', 'following'])
-                    ->whereNull('removed_at')
-                    ->with('relatedInstagramProfile'),
-                'relatedRelationships' => fn ($query) => $query
-                    ->where('status', 'active')
-                    ->whereIn('list_type', ['followers', 'following'])
-                    ->whereNull('removed_at')
-                    ->with('sourceInstagramProfile'),
+        $evidence = DB::table('instagram_profile_list_scan_items as items')
+            ->join('instagram_profile_list_scans as scans', 'scans.id', '=', 'items.list_scan_id')
+            ->whereIn('items.relationship_id', $relationshipIds->all())
+            ->whereNull('items.deleted_at')
+            ->whereNull('scans.deleted_at')
+            ->select('items.relationship_id')
+            ->selectRaw('COUNT(DISTINCT items.list_scan_id) as scan_count')
+            ->selectRaw('COUNT(DISTINCT scans.user_id) as user_count')
+            ->selectRaw('MAX(CASE WHEN scans.user_id = ? THEN 1 ELSE 0 END) as own_evidence', [$currentUserId])
+            ->selectRaw(
+                'MAX(CASE WHEN scans.user_id IS NOT NULL AND scans.user_id <> ? THEN 1 ELSE 0 END) as other_evidence',
+                [$currentUserId],
+            )
+            ->groupBy('items.relationship_id')
+            ->get()
+            ->mapWithKeys(fn ($row): array => [
+                (int) $row->relationship_id => [
+                    'scan_count' => (int) $row->scan_count,
+                    'user_count' => (int) $row->user_count,
+                    'own' => (bool) $row->own_evidence,
+                    'other' => (bool) $row->other_evidence,
+                ],
             ]);
 
-            foreach ($focalProfile->sourceRelationships as $relationship) {
-                if (! $this->isActiveListRelationship($relationship)) {
-                    continue;
-                }
-
-                $relatedProfile = $relationship->relatedInstagramProfile;
-                $targetId = $this->ensureInstagramProfileNode(
-                    $nodes,
-                    $nodesByInstagram,
-                    $peopleByInstagram,
-                    $relatedProfile,
-                    'Systemverbindung',
-                );
-
-                if (! $targetId || $targetId === $focalNodeId || ! $relatedProfile) {
-                    continue;
-                }
-
-                if ($relationship->list_type === 'followers') {
-                    $this->mergeTrackedRelationshipEdge(
-                        $edges,
-                        $targetId,
-                        $focalNodeId,
-                        'System Followerliste',
-                        sprintf(
-                            '%s folgt %s laut systemweiter Followerliste.',
-                            $this->displayUsernameForInstagramProfile($relatedProfile),
-                            $this->displayUsernameForInstagramProfile($focalProfile),
-                        ),
-                    );
-
-                    continue;
-                }
-
-                $this->mergeTrackedRelationshipEdge(
-                    $edges,
-                    $focalNodeId,
-                    $targetId,
-                    'System Gefolgt-Liste',
-                    sprintf(
-                        '%s folgt %s laut systemweiter Gefolgt-Liste.',
-                        $this->displayUsernameForInstagramProfile($focalProfile),
-                        $this->displayUsernameForInstagramProfile($relatedProfile),
-                    ),
-                );
+        foreach ($relationships as $relationship) {
+            if ($evidence->has($relationship->id)) {
+                continue;
             }
 
-            foreach ($focalProfile->relatedRelationships as $relationship) {
-                if (! $this->isActiveListRelationship($relationship)) {
-                    continue;
-                }
+            $scanIds = collect([
+                $relationship->firstSeenScan?->id,
+                $relationship->lastSeenScan?->id,
+            ])->filter()->unique()->values();
+            $scanUserIds = collect([
+                $relationship->firstSeenScan?->user_id,
+                $relationship->lastSeenScan?->user_id,
+            ])->filter()->unique()->values();
 
-                $sourceProfile = $relationship->sourceInstagramProfile;
-                $sourceId = $this->ensureInstagramProfileNode(
-                    $nodes,
-                    $nodesByInstagram,
-                    $peopleByInstagram,
-                    $sourceProfile,
-                    'Systemverbindung',
-                );
-
-                if (! $sourceId || $sourceId === $focalNodeId || ! $sourceProfile) {
-                    continue;
-                }
-
-                if ($relationship->list_type === 'followers') {
-                    $this->mergeTrackedRelationshipEdge(
-                        $edges,
-                        $focalNodeId,
-                        $sourceId,
-                        'System Followerliste',
-                        sprintf(
-                            '%s folgt %s laut systemweiter Followerliste.',
-                            $this->displayUsernameForInstagramProfile($focalProfile),
-                            $this->displayUsernameForInstagramProfile($sourceProfile),
-                        ),
-                    );
-
-                    continue;
-                }
-
-                $this->mergeTrackedRelationshipEdge(
-                    $edges,
-                    $sourceId,
-                    $focalNodeId,
-                    'System Gefolgt-Liste',
-                    sprintf(
-                        '%s folgt %s laut systemweiter Gefolgt-Liste.',
-                        $this->displayUsernameForInstagramProfile($sourceProfile),
-                        $this->displayUsernameForInstagramProfile($focalProfile),
-                    ),
-                );
-            }
+            $evidence->put($relationship->id, [
+                'scan_count' => $scanIds->count(),
+                'user_count' => $scanUserIds->count(),
+                'own' => $scanUserIds->contains($currentUserId),
+                'other' => $scanUserIds->contains(fn ($userId): bool => (int) $userId !== $currentUserId),
+            ]);
         }
+
+        return $evidence;
+    }
+
+    private function systemRelationshipEvidenceDescription(array $evidence): string
+    {
+        $scanCount = (int) ($evidence['scan_count'] ?? 0);
+        $userCount = (int) ($evidence['user_count'] ?? 0);
+        $own = (bool) ($evidence['own'] ?? false);
+        $other = (bool) ($evidence['other'] ?? false);
+
+        if ($own && $other) {
+            return sprintf(
+                'Durch %s aus %s Benutzerkonten bestaetigt, darunter eigene und weitere System-Scans.',
+                trans_choice(':count Scan|:count Scans', $scanCount, ['count' => number_format($scanCount, 0, ',', '.')]),
+                number_format($userCount, 0, ',', '.'),
+            );
+        }
+
+        if ($other) {
+            return sprintf(
+                'Durch %s anderer Benutzer im System erkannt.',
+                trans_choice(':count Scan|:count Scans', $scanCount, ['count' => number_format($scanCount, 0, ',', '.')]),
+            );
+        }
+
+        if ($own) {
+            return 'Durch eigene gespeicherte Scans bestaetigt.';
+        }
+
+        return 'Aus dem systemweiten Profilgraphen uebernommen.';
     }
 
     private function addTrackedRelationshipListEdges(
@@ -1349,8 +1360,20 @@ class NetworkMap extends Component
             $nodes[$id]['role'] = $role;
         }
 
-        if (blank($nodes[$id]['detail'] ?? null)) {
-            $nodes[$id]['detail'] = $this->profileDetailForInstagramProfile($profile);
+        if (
+            ($nodes[$id]['type'] ?? null) !== 'person'
+            && in_array($nodes[$id]['label'] ?? null, [null, '', '@'.$profile->username, $profile->display_handle], true)
+        ) {
+            $nodes[$id]['label'] = $profile->display_name ?: $profile->full_name ?: $profile->display_handle;
+        }
+
+        $nodes[$id]['detail'] = $this->mergeNodeDetail(
+            $nodes[$id]['detail'] ?? null,
+            $this->profileDetailForInstagramProfile($profile),
+        );
+
+        if (in_array($nodes[$id]['profileVisibility'] ?? 'unknown', ['unknown', 'listed', ''], true)) {
+            $nodes[$id]['profileVisibility'] = $this->profileStatusForInstagramProfile($profile);
         }
 
         if (($nodes[$id]['status'] ?? 'unknown') === 'unknown') {
@@ -1485,7 +1508,14 @@ class NetworkMap extends Component
         return $parts->isNotEmpty() ? $parts->implode(' | ') : null;
     }
 
-    private function mergeTrackedRelationshipEdge(array &$edges, string $from, string $to, string $sourceLabel, string $detail): void
+    private function mergeTrackedRelationshipEdge(
+        array &$edges,
+        string $from,
+        string $to,
+        string $sourceLabel,
+        string $detail,
+        array $metadata = [],
+    ): void
     {
         $edgeId = 'tracked-list-'.$from.'-'.$to;
 
@@ -1498,6 +1528,11 @@ class NetworkMap extends Component
                 'label' => $sourceLabel,
                 'sourceHandle' => $sourceLabel,
                 'evidence' => [$detail],
+                'systemWideEvidence' => (bool) ($metadata['systemWideEvidence'] ?? false),
+                'ownUserEvidence' => (bool) ($metadata['ownUserEvidence'] ?? false),
+                'otherUserEvidence' => (bool) ($metadata['otherUserEvidence'] ?? false),
+                'systemEvidenceScanCount' => (int) ($metadata['systemEvidenceScanCount'] ?? 0),
+                'systemEvidenceUserCount' => (int) ($metadata['systemEvidenceUserCount'] ?? 0),
             ];
 
             return;
@@ -1517,6 +1552,18 @@ class NetworkMap extends Component
             ->unique()
             ->values()
             ->all();
+        $edges[$edgeId]['systemWideEvidence'] = (bool) ($edges[$edgeId]['systemWideEvidence'] ?? false)
+            || (bool) ($metadata['systemWideEvidence'] ?? false);
+        $edges[$edgeId]['ownUserEvidence'] = (bool) ($edges[$edgeId]['ownUserEvidence'] ?? false)
+            || (bool) ($metadata['ownUserEvidence'] ?? false);
+        $edges[$edgeId]['otherUserEvidence'] = (bool) ($edges[$edgeId]['otherUserEvidence'] ?? false)
+            || (bool) ($metadata['otherUserEvidence'] ?? false);
+        $edges[$edgeId]['systemEvidenceScanCount'] = (int) ($edges[$edgeId]['systemEvidenceScanCount'] ?? 0)
+            + (int) ($metadata['systemEvidenceScanCount'] ?? 0);
+        $edges[$edgeId]['systemEvidenceUserCount'] = max(
+            (int) ($edges[$edgeId]['systemEvidenceUserCount'] ?? 0),
+            (int) ($metadata['systemEvidenceUserCount'] ?? 0),
+        );
     }
 
     private function profileImageUrlForPerson(TrackedPerson $person): ?string

@@ -760,11 +760,16 @@ function updateSelectionPanel(root, cy) {
         const handle = document.createElement('span');
         const badges = document.createElement('span');
         const connection = document.createElement('span');
-        const edgeLabels = edges
-            .filter((edge) => edge.source().id() === connectedNode.id() || edge.target().id() === connectedNode.id())
+        const connectedEdges = edges
+            .filter((edge) => edge.source().id() === connectedNode.id() || edge.target().id() === connectedNode.id());
+        const edgeLabels = connectedEdges
             .map((edge) => edge.data('label'))
             .filter(Boolean);
         const uniqueEdgeLabels = [...new Set(edgeLabels)];
+        const hasOtherUserEvidence = connectedEdges
+            .some((edge) => Boolean(edge.data('otherUserEvidence')));
+        const hasSystemWideEvidence = connectedEdges
+            .some((edge) => Boolean(edge.data('systemWideEvidence')));
 
         button.type = 'button';
         button.className = 'flex w-full items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-left text-sm transition hover:bg-white';
@@ -784,6 +789,12 @@ function updateSelectionPanel(root, cy) {
 
         connection.className = 'mt-1 block text-xs font-semibold text-slate-600';
         connection.textContent = uniqueEdgeLabels.join(' + ') || 'Verbindung';
+
+        if (hasOtherUserEvidence) {
+            connection.textContent += ' · durch weitere Benutzer-Scans erkannt';
+        } else if (hasSystemWideEvidence) {
+            connection.textContent += ' · systemweit bestätigt';
+        }
 
         text.append(label, handle, badges, connection);
         button.append(avatarElement(connectedNode.data()), text);
@@ -1112,6 +1123,15 @@ async function initNetworkMap(root) {
                     'target-arrow-color': '#a5b4fc',
                     'line-style': 'solid',
                     opacity: 0.46,
+                },
+            },
+            {
+                selector: 'edge[otherUserEvidence]',
+                style: {
+                    width: 1.1,
+                    'line-color': '#a78bfa',
+                    'target-arrow-color': '#a78bfa',
+                    opacity: 0.58,
                 },
             },
             {

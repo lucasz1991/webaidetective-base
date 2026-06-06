@@ -166,7 +166,7 @@
                     @endif
                 </div>
 
-                <div class="grid grid-cols-2 gap-2 text-sm sm:grid-cols-5">
+                <div class="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3 xl:grid-cols-6">
                     <div class="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
                         <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Personen</div>
                         <div class="mt-1 text-xl font-bold text-slate-950">{{ number_format($stats['people']) }}</div>
@@ -186,6 +186,10 @@
                     <div class="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
                         <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Listen</div>
                         <div class="mt-1 text-xl font-bold text-slate-950">{{ number_format($stats['trackedList']) }}</div>
+                    </div>
+                    <div class="rounded-lg border border-violet-200 bg-violet-50 px-4 py-3 shadow-sm">
+                        <div class="text-xs font-semibold uppercase tracking-wide text-violet-700">Systemweit</div>
+                        <div class="mt-1 text-xl font-bold text-violet-950">{{ number_format($stats['systemWide'] ?? 0) }}</div>
                     </div>
                 </div>
             </div>
