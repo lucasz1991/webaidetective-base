@@ -144,6 +144,86 @@ function updateBuildStatus(root, options = {}) {
     }
 }
 
+function publicBadgeLayer(root) {
+    return root.querySelector('[data-network-public-badges]');
+}
+
+function updatePublicBadges(root, cy) {
+    const layer = publicBadgeLayer(root);
+    const container = cy?.container?.();
+
+    if (!layer || !container) {
+        return;
+    }
+
+    const width = cy.width();
+    const height = cy.height();
+    const fragment = document.createDocumentFragment();
+
+    cy.nodes('.network-profile-public')
+        .not('.network-filtered')
+        .filter((node) => node.data('type') !== 'person' && Boolean(node.data('hasImage')))
+        .forEach((node) => {
+            const position = node.renderedPosition();
+            const nodeSize = Number(node.renderedWidth?.() || node.data('nodeSize') || 42);
+            const badgeSize = Math.max(16, Math.min(22, Math.round(nodeSize * 0.34)));
+            const left = position.x + (nodeSize / 2) - (badgeSize * 0.25);
+            const top = position.y - (nodeSize / 2) + (badgeSize * 0.25);
+
+            if (left < -badgeSize || top < -badgeSize || left > width + badgeSize || top > height + badgeSize) {
+                return;
+            }
+
+            const badge = document.createElement('span');
+            badge.className = 'network-public-profile-badge';
+            badge.textContent = '\u2713';
+            badge.title = 'Oeffentlich erkannt';
+            badge.style.cssText = [
+                'position:absolute',
+                `left:${left}px`,
+                `top:${top}px`,
+                `width:${badgeSize}px`,
+                `height:${badgeSize}px`,
+                'transform:translate(-50%,-50%)',
+                'display:flex',
+                'align-items:center',
+                'justify-content:center',
+                'border-radius:9999px',
+                'border:2px solid #ffffff',
+                'background:#10b981',
+                'color:#ffffff',
+                'font-size:11px',
+                'font-weight:900',
+                'line-height:1',
+                'box-shadow:0 6px 14px rgba(15,23,42,0.22)',
+            ].join(';');
+            fragment.append(badge);
+        });
+
+    layer.replaceChildren(fragment);
+}
+
+function schedulePublicBadgeUpdate(root, cy) {
+    const state = instances.get(root);
+
+    if (!state || state.publicBadgeUpdateQueued) {
+        return;
+    }
+
+    state.publicBadgeUpdateQueued = true;
+    window.requestAnimationFrame(() => {
+        state.publicBadgeUpdateQueued = false;
+        updatePublicBadges(root, cy);
+    });
+}
+
+function bindPublicBadges(root, cy) {
+    const update = () => schedulePublicBadgeUpdate(root, cy);
+
+    cy.on('pan zoom resize render position add remove data style', update);
+    update();
+}
+
 function toElements(graph) {
     const nodes = (graph.nodes || []).map((node) => ({
         group: 'nodes',
@@ -682,6 +762,7 @@ function applyFilters(root, cy) {
     writeStoredFilters(root, state);
     arrangeVisibleGraph(root, cy, true);
     updateSelectionPanel(root, cy);
+    schedulePublicBadgeUpdate(root, cy);
 }
 
 function fitGraph(cy) {
@@ -971,6 +1052,7 @@ async function initNetworkMap(root) {
         activeRoots.add(root);
 
         bindControls(root, cy);
+        bindPublicBadges(root, cy);
         applyAutoMinDegreeIfNeeded(root, cy);
         applyFilters(root, cy);
 
@@ -1133,6 +1215,7 @@ function resetGraph(root) {
     state.selectedId = null;
     state.cy.elements().remove();
     updateSelectionPanel(root, state.cy);
+    schedulePublicBadgeUpdate(root, state.cy);
     updateBuildStatus(root, {
         visible: true,
         label: 'Netzwerk wird vorbereitet',
@@ -1162,6 +1245,7 @@ async function loadPreparedGraph(root, detail) {
     state.selectedId = null;
     cy.elements().remove();
     updateSelectionPanel(root, cy);
+    schedulePublicBadgeUpdate(root, cy);
 
     updateBuildStatus(root, {
         visible: true,
@@ -1190,6 +1274,7 @@ async function loadPreparedGraph(root, detail) {
         const chunk = await response.json();
         addGraphChunk(root, cy, chunk);
         applyFilters(root, cy);
+        schedulePublicBadgeUpdate(root, cy);
 
         const progress = ((index + 1) / chunkCount) * 100;
         updateBuildStatus(root, {

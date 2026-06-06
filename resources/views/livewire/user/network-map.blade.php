@@ -190,26 +190,18 @@
     </div>
     @endunless
 
-    <div
-        x-cloak
-        x-show="mapFullscreen"
-        x-transition.opacity
-        class="fixed inset-0 z-40 bg-slate-950/70"
-        x-on:click="closeMap()"
-    ></div>
-
     <main class="{{ $embedded ? '' : 'container mx-auto px-5 py-6' }}">
         <div
-            class="grid gap-4"
+            class="grid"
             x-bind:class="mapFullscreen
-                ? 'fixed inset-4 z-50 overflow-y-auto rounded-2xl bg-slate-100 p-4 xl:grid-cols-[minmax(0,1fr)_360px]'
-                : 'grid-cols-1'"
+                ? 'fixed inset-0 z-50 h-screen w-screen overflow-hidden bg-white xl:grid-cols-[minmax(0,1fr)_360px]'
+                : 'grid-cols-1 gap-4'"
         >
             <section
                 class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
-                x-bind:class="mapFullscreen ? 'min-h-[calc(100vh-2rem)]' : ''"
+                x-bind:class="mapFullscreen ? '!min-h-screen !rounded-none !border-0 !shadow-none' : ''"
             >
-                <div x-show="mapFullscreen" x-cloak class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                <div x-show="mapFullscreen" x-cloak class="flex min-h-14 flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-2">
                     <div class="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-600">
                         <button type="button" data-network-filter="public" data-active-classes="border-sky-300 bg-sky-50 text-sky-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="true">
                             Bekannte Profile
@@ -265,11 +257,12 @@
                 @else
                     <div
                         class="relative bg-slate-50"
-                        x-bind:class="mapFullscreen ? 'h-[calc(100vh-9rem)] min-h-[640px]' : 'h-[420px] min-h-[420px] cursor-zoom-in'"
+                        x-bind:class="mapFullscreen ? 'h-[calc(100vh-3.5rem)] min-h-0' : 'h-[420px] min-h-[420px] cursor-zoom-in'"
                         x-on:click="if (!mapFullscreen) openMap()"
                         wire:ignore
                     >
                         <div data-network-canvas class="absolute inset-0"></div>
+                        <div data-network-public-badges class="pointer-events-none absolute inset-0 z-[4]"></div>
                         <div
                             x-show="!mapFullscreen"
                             class="absolute inset-0 z-[5] flex items-center justify-center bg-slate-950/10 backdrop-blur-[1px]"
@@ -295,8 +288,8 @@
                 @endif
             </section>
 
-            <aside x-show="mapFullscreen" x-cloak class="space-y-4">
-                <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <aside x-show="mapFullscreen" x-cloak class="h-screen overflow-y-auto border-l border-slate-200 bg-white">
+                <div class="border-b border-slate-200 p-4">
                     <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Auswahl</h2>
                     <p data-network-detail-empty class="mt-3 text-sm leading-6 text-slate-600">
                         Waehle einen Knoten im Netzwerk aus, um direkte Verknuepfungen zu sehen.
@@ -345,14 +338,14 @@
                     </div>
                 </div>
 
-                <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div class="border-b border-slate-200 p-4">
                     <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Verbundene Knoten</h2>
                     <div class="mt-3 space-y-2" data-network-connected-list>
                         <p class="text-sm text-slate-500">Keine direkte Auswahl.</p>
                     </div>
                 </div>
 
-                <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div class="p-4">
                     <h2 class="text-sm font-bold uppercase tracking-wide text-slate-500">Legende</h2>
                     <div class="mt-3 space-y-2 text-sm text-slate-600">
                         <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-sky-600"></span> Bekannte Profil-Verknuepfung</div>
@@ -362,6 +355,7 @@
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-amber-400 ring-2 ring-amber-500"></span> Hauptperson</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-slate-950"></span> Beobachtete Person</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full border border-slate-300 bg-slate-50"></span> Rekonstruierter Kandidat</div>
+                        <div class="flex items-center gap-2"><span class="inline-flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-black text-white ring-2 ring-white">&#10003;</span> Als oeffentlich erkannt</div>
                     </div>
                 </div>
             </aside>
@@ -389,8 +383,8 @@
         </button>
     </div>
 
-    <x-modal wire:model="showProfilePreviewModal" maxWidth="3xl">
-        <div class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
+    @if($showProfilePreviewModal)
+        <div class="fixed inset-0 z-[60] flex h-screen w-screen flex-col overflow-hidden bg-white">
             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Instagram-Profil</h3>
@@ -556,5 +550,5 @@
                 @endif
             </div>
         </div>
-    </x-modal>
+    @endif
 </div>
