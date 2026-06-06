@@ -97,6 +97,14 @@ class UserNavigationMenu extends Component
         $plan = $subscription?->plan;
         $wallet = $user->creditWallet;
         $status = $subscription?->status;
+        $monthlyCredits = (int) ($plan?->monthly_credits ?? 0);
+        $usedCredits = (int) ($wallet?->used_credits ?? 0);
+        $availableCredits = (int) ($wallet?->available_credits ?? 0);
+        $reservedCredits = (int) ($wallet?->reserved_credits ?? 0);
+        $bonusCredits = (int) ($wallet?->bonus_credits ?? 0);
+        $scanUsagePercent = $monthlyCredits > 0
+            ? min(100, (int) round(($usedCredits / $monthlyCredits) * 100))
+            : 0;
 
         $statusLabel = match ($status) {
             'active' => 'Abo aktiv',
@@ -130,11 +138,15 @@ class UserNavigationMenu extends Component
             'icon_classes' => $iconClasses,
             'plan_name' => $plan?->name ?: 'Free',
             'ends_at' => $subscription?->ends_at?->format('d.m.Y'),
-            'monthly_credits' => (int) ($plan?->monthly_credits ?? 0),
-            'available_credits' => (int) ($wallet?->available_credits ?? 0),
-            'reserved_credits' => (int) ($wallet?->reserved_credits ?? 0),
-            'used_credits' => (int) ($wallet?->used_credits ?? 0),
-            'bonus_credits' => (int) ($wallet?->bonus_credits ?? 0),
+            'monthly_credits' => $monthlyCredits,
+            'available_credits' => $availableCredits,
+            'reserved_credits' => $reservedCredits,
+            'used_credits' => $usedCredits,
+            'bonus_credits' => $bonusCredits,
+            'scan_usage_percent' => $scanUsagePercent,
+            'scan_usage_label' => $monthlyCredits > 0
+                ? number_format($usedCredits, 0, ',', '.').' / '.number_format($monthlyCredits, 0, ',', '.').' Credits genutzt'
+                : number_format($usedCredits, 0, ',', '.').' Credits genutzt',
         ];
     }
 }

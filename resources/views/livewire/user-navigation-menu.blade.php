@@ -251,6 +251,22 @@
                                                 </div>
                                             </div>
 
+                                            <div class="rounded-lg border border-slate-200 bg-white p-3">
+                                                <div class="flex items-center justify-between gap-3">
+                                                    <div>
+                                                        <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Scan-Verbrauch</div>
+                                                        <div class="mt-1 text-sm font-bold text-slate-950">{{ $subscriptionSummary['scan_usage_label'] ?? '0 Credits genutzt' }}</div>
+                                                    </div>
+                                                    <div class="text-xs font-semibold text-slate-500">{{ $subscriptionSummary['scan_usage_percent'] ?? 0 }}%</div>
+                                                </div>
+                                                <div class="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                                                    <div
+                                                        class="h-full rounded-full bg-pink-600 transition-all"
+                                                        style="width: {{ $subscriptionSummary['scan_usage_percent'] ?? 0 }}%;"
+                                                    ></div>
+                                                </div>
+                                            </div>
+
                                             <div class="space-y-2 text-xs text-slate-600">
                                                 <div class="flex items-center justify-between">
                                                     <span>Bonus-Credits</span>
@@ -408,6 +424,21 @@
                                                             <div class="rounded-lg bg-white p-3">
                                                                 <div class="font-semibold uppercase tracking-wide text-slate-500">Monatlich</div>
                                                                 <div class="mt-1 text-base font-bold text-slate-950">{{ number_format($subscriptionSummary['monthly_credits'] ?? 0, 0, ',', '.') }}</div>
+                                                            </div>
+                                                        </div>
+                                                        <div class="mt-3 rounded-lg bg-white p-3 text-xs text-slate-600">
+                                                            <div class="flex items-center justify-between gap-3">
+                                                                <div>
+                                                                    <div class="font-semibold uppercase tracking-wide text-slate-500">Scan-Verbrauch</div>
+                                                                    <div class="mt-1 text-sm font-bold text-slate-950">{{ $subscriptionSummary['scan_usage_label'] ?? '0 Credits genutzt' }}</div>
+                                                                </div>
+                                                                <div class="font-semibold text-slate-500">{{ $subscriptionSummary['scan_usage_percent'] ?? 0 }}%</div>
+                                                            </div>
+                                                            <div class="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                                                                <div
+                                                                    class="h-full rounded-full bg-pink-600 transition-all"
+                                                                    style="width: {{ $subscriptionSummary['scan_usage_percent'] ?? 0 }}%;"
+                                                                ></div>
                                                             </div>
                                                         </div>
                                                     </div>
