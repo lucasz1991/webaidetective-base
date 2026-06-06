@@ -306,7 +306,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanPublicProfileConnections,scanInstagramSuggestions"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanPublicProfileConnections,scanInstagramSuggestions,scanInstagramPosts"
         class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
@@ -484,6 +484,16 @@
                         class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                         Follower scannen
+                    </button>
+                    <button
+                        type="button"
+                        wire:click="scanInstagramPosts"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramPosts"
+                        @disabled(! $trackedPerson->instagram_username)
+                        class="inline-flex h-9 items-center justify-center rounded-3xl border border-violet-200 bg-violet-50 px-3 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Beitraege scannen
                     </button>
                 @endif
                 <button
@@ -1867,6 +1877,43 @@
                 @else
                     <p class="mt-3 text-sm text-slate-500">Bisher wurde noch keine Instagram-Analyse gespeichert.</p>
                 @endif
+            </div>
+
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h3 class="text-lg font-bold text-slate-900">Instagram-Beitraege</h3>
+                    @if($trackedPerson->currentInstagramProfile?->postScans?->isNotEmpty())
+                        <span class="text-xs text-slate-500">
+                            Letzter Scan:
+                            {{ $trackedPerson->currentInstagramProfile->postScans->first()->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+                        </span>
+                    @endif
+                </div>
+
+                <div class="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    @forelse($trackedPerson->currentInstagramProfile?->posts ?? collect() as $post)
+                        <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:border-violet-300 hover:bg-violet-50">
+                            @if($post->thumbnail_url)
+                                <img src="{{ $post->thumbnail_url }}" alt="Instagram-Beitrag {{ $post->shortcode }}" class="h-44 w-full object-cover">
+                            @endif
+                            <div class="p-3">
+                                <div class="flex justify-between gap-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    <span>{{ $post->media_type }}</span>
+                                    <span>{{ $post->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>
+                                </div>
+                                @if($post->caption)
+                                    <p class="mt-2 line-clamp-2 text-sm text-slate-700">{{ $post->caption }}</p>
+                                @endif
+                                <div class="mt-3 flex gap-4 text-sm font-semibold text-slate-800">
+                                    <span>{{ $post->likes_count !== null ? number_format($post->likes_count) : '-' }} Likes</span>
+                                    <span>{{ $post->comments_count !== null ? number_format($post->comments_count) : '-' }} Kommentare</span>
+                                </div>
+                            </div>
+                        </a>
+                    @empty
+                        <p class="text-sm text-slate-500">Noch keine Instagram-Beitraege gespeichert.</p>
+                    @endforelse
+                </div>
             </div>
 
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">

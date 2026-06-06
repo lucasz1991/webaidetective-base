@@ -96,7 +96,7 @@ function calculateScanBilling(payload = {}, runtimeConfig = {}) {
   const featureCredits = {
     profileScan: costs.profileScan,
     profileImageScan: payload?.profile?.ogImage || payload?.profile?.profileImageUrl ? costs.profileImageScan : 0,
-    postScan: payload?.operationMode === 'analyze' ? costs.postScan : 0,
+    postScan: payload?.operationMode === 'posts' ? costs.postScan : 0,
     mediaDownload: countDownloadedMedia(payload.profile) * costs.mediaDownloadPerFile,
     aiAnalysis: 0,
   };

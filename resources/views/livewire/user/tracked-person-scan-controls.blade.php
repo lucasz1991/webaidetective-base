@@ -23,7 +23,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions,scanInstagramPosts"
         class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-white/20 bg-white p-5 text-center shadow-2xl">
@@ -139,6 +139,17 @@
                 >
                     <span wire:loading.remove wire:target="scanInstagramFollowingList">Gefolgt scannen</span>
                     <span wire:loading wire:target="scanInstagramFollowingList">Gefolgt-Scan laeuft...</span>
+                </button>
+                <button
+                    type="button"
+                    wire:click="scanInstagramPosts"
+                    wire:loading.attr="disabled"
+                    wire:target="scanInstagramPosts"
+                    @disabled(! $trackedPerson->instagram_username)
+                    class="inline-flex justify-center rounded-lg border border-violet-200 bg-violet-50 px-3 py-2 text-sm font-semibold text-violet-700 shadow-sm hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <span wire:loading.remove wire:target="scanInstagramPosts">Beitraege scannen</span>
+                    <span wire:loading wire:target="scanInstagramPosts">Beitragsscan laeuft...</span>
                 </button>
             @endif
             @if($profileIsPrivate)

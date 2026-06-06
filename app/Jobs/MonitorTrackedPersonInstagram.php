@@ -13,7 +13,6 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Arr;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 
 class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
@@ -32,71 +31,9 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
     ) {
     }
 
-    public static function dispatchFullScanIfNotQueued(int $trackedPersonId, bool $sendNotifications = true): bool
-    {
-        $lockKey = self::fullScanQueueCacheKey($trackedPersonId);
-
-        if (! Cache::add($lockKey, now()->toIso8601String(), now()->addHours(2))) {
-            return false;
-        }
-
-        try {
-            TrackedPerson::query()
-                ->whereKey($trackedPersonId)
-                ->update([
-                    'last_instagram_status_level' => 'partial',
-                    'last_instagram_status_message' => 'Instagram-Profil-/Listen-Aenderung erkannt; Instagram-Vollanalyse wurde als Hintergrund-Job eingereiht.',
-                ]);
-
-            self::dispatch($trackedPersonId, true, $sendNotifications, true);
-
-            return true;
-        } catch (\Throwable $exception) {
-            Cache::forget($lockKey);
-
-            throw $exception;
-        }
-    }
-
-    public static function shouldRunFullScanAfterSnapshot($snapshot): bool
-    {
-        if (data_get($snapshot?->raw_payload, 'analysisPolicy.scanMode') === 'full') {
-            return false;
-        }
-
-        return collect($snapshot?->detected_changes ?? [])
-            ->contains(function ($change): bool {
-                if (! is_array($change)) {
-                    return false;
-                }
-
-                $field = $change['field'] ?? null;
-
-                if ($field === 'profile_visibility') {
-                    return ($change['before'] ?? null) === 'private'
-                        && ($change['after'] ?? null) === 'public';
-                }
-
-                return in_array($field, [
-                    'followers_count',
-                    'following_count',
-                    'followers_list_added',
-                    'followers_list_removed',
-                    'following_list_added',
-                    'following_list_removed',
-                ], true);
-            });
-    }
-
     public function handle(): void
     {
-        try {
-            $this->run();
-        } finally {
-            if ($this->isFullScan()) {
-                Cache::forget(self::fullScanQueueCacheKey($this->trackedPersonId));
-            }
-        }
+        $this->run();
     }
 
     private function run(): void
@@ -126,7 +63,6 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
                 $trackedPerson,
                 $fullScan,
                 null,
-                $this->sendNotifications,
             );
             $snapshot = $runResult['snapshot'];
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
@@ -163,13 +99,15 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        $queued = (bool) ($runResult['queuedFullScan'] ?? false);
         $privateSuggestionScan = $runResult['privateSuggestionScan'] ?? null;
         $privateSuggestionScanFailed = (bool) ($runResult['privateSuggestionScanFailed'] ?? false);
         $privateSuggestionScanMessage = (string) ($runResult['privateSuggestionScanMessage'] ?? '');
+        $relationshipScans = $runResult['relationshipScans'] ?? [];
+        $postScan = $runResult['postScan'] ?? null;
+        $followUpFailures = $runResult['followUpFailures'] ?? [];
 
-        if ($this->isFullScan() && $privateSuggestionScan) {
-            Log::info('Privates Instagram-Profil in Vollanalyse erkannt; Vorschlag-Verbindungsscan wurde im Hintergrund ausgefuehrt.', [
+        if ($privateSuggestionScan) {
+            Log::info('Privates Instagram-Profil mit relevanter Aenderung erkannt; Vorschlag-Verbindungsscan wurde ausgefuehrt.', [
                 'tracked_person_id' => $trackedPerson->id,
                 'instagram_username' => $trackedPerson->instagram_username,
                 'snapshot_id' => $snapshot?->id,
@@ -177,8 +115,8 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             ]);
         }
 
-        if ($this->isFullScan() && $privateSuggestionScanFailed) {
-            Log::warning('Vorschlag-Verbindungsscan nach privater Vollanalyse fehlgeschlagen.', [
+        if ($privateSuggestionScanFailed) {
+            Log::warning('Vorschlag-Verbindungsscan nach privater Instagram-Aenderung fehlgeschlagen.', [
                 'tracked_person_id' => $trackedPerson->id,
                 'instagram_username' => $trackedPerson->instagram_username,
                 'snapshot_id' => $snapshot?->id,
@@ -186,11 +124,14 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             ]);
         }
 
-        if (! $this->isFullScan() && self::shouldRunFullScanAfterSnapshot($snapshot)) {
-            Log::info('Instagram-Profil-/Listen-Aenderung erkannt; Vollanalyse wurde nach Mini-Scan behandelt.', [
+        if (! $this->isFullScan() && ($relationshipScans !== [] || $postScan || $privateSuggestionScan || $followUpFailures !== [])) {
+            Log::info('Instagram-Kennzahlenaenderung erkannt; passende Folge-Scans wurden nach dem Mini-Scan ausgefuehrt.', [
                 'tracked_person_id' => $trackedPerson->id,
                 'instagram_username' => $trackedPerson->instagram_username,
-                'queued' => $queued,
+                'relationship_scans' => array_keys($relationshipScans),
+                'post_scan_id' => $postScan?->id,
+                'suggestion_scan_id' => $privateSuggestionScan?->id,
+                'follow_up_failures' => $followUpFailures,
             ]);
         }
 
@@ -340,11 +281,6 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
     private function snapshotHasNotificationChanges($snapshot): bool
     {
         return (bool) $snapshot->has_changes || count($snapshot->detected_changes ?? []) > 0;
-    }
-
-    private static function fullScanQueueCacheKey(int $trackedPersonId): string
-    {
-        return 'tracked-person-instagram-full-scan:'.$trackedPersonId;
     }
 
     private function buildNotificationMessage(TrackedPerson $trackedPerson, $snapshot): string

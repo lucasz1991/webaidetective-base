@@ -118,6 +118,8 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
     suggestionDialogMaxRounds: normalizeOptionalPositiveInteger(input?.suggestionDialogMaxRounds, merged.suggestionDialogMaxRounds || 48) || 48,
     suggestionCandidateInlineMaxRounds: normalizeOptionalPositiveInteger(input?.suggestionCandidateInlineMaxRounds, merged.suggestionCandidateInlineMaxRounds || 24) || 24,
     suggestionCandidateDialogMaxRounds: normalizeOptionalPositiveInteger(input?.suggestionCandidateDialogMaxRounds, merged.suggestionCandidateDialogMaxRounds || 36) || 36,
+    postScanMaxItems: normalizeOptionalPositiveInteger(input?.postScanMaxItems, merged.postScanMaxItems || 100) || 100,
+    postScanMaxScrollRounds: normalizeOptionalPositiveInteger(input?.postScanMaxScrollRounds, merged.postScanMaxScrollRounds || 40) || 40,
     profileHoverCardsEnabled: input?.profileHoverCardsEnabled !== false
       && input?.profile_hover_cards_enabled !== false
       && merged.profileHoverCardsEnabled !== false,

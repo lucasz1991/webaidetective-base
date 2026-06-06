@@ -717,6 +717,11 @@ class InstagramScraper
             'suggestions-candidate-error' => $expected > 0 ? min(98, max(25, 20 + (int) floor(($loaded / max(1, $expected)) * 78))) : 60,
             'suggestions-rate-limited' => 100,
             'suggestions-complete' => 100,
+            'posts-opening' => 5,
+            'posts-collecting-links' => $expected > 0 ? min(35, max(5, (int) floor(($loaded / max(1, $expected)) * 35))) : 20,
+            'posts-opening-item' => $expected > 0 ? min(95, max(35, 35 + (int) floor(($loaded / max(1, $expected)) * 60))) : 50,
+            'posts-item-collected' => $expected > 0 ? min(98, max(40, 35 + (int) floor(($loaded / max(1, $expected)) * 63))) : 75,
+            'posts-complete' => 100,
             'account-switching' => 8,
             'profile-session-check' => 12,
             'profile-opening' => 25,
@@ -847,6 +852,17 @@ class InstagramScraper
             };
         }
 
+        if ($phase === 'posts') {
+            return match ($stage) {
+                'posts-opening' => 'Instagram-Beitraege werden gesucht.',
+                'posts-collecting-links' => number_format($loaded, 0, ',', '.').' Beitragslinks gefunden.',
+                'posts-opening-item' => 'Beitrag wird geoeffnet: '.number_format($loaded + 1, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
+                'posts-item-collected' => 'Beitraege geprueft: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
+                'posts-complete' => 'Instagram-Beitragsscan abgeschlossen.',
+                default => 'Instagram-Beitraege werden geprueft.',
+            };
+        }
+
         return match ($stage) {
             'profile-session-check' => 'Instagram-Session wird geprueft.',
             'profile-opening' => 'Instagram-Profilseite wird geoeffnet.',
@@ -860,7 +876,7 @@ class InstagramScraper
     {
         $operationMode = Str::lower(trim($operationMode));
 
-        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'suggestions', 'login-session'], true)
+        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'suggestions', 'posts', 'login-session'], true)
             ? $operationMode
             : 'analyze';
     }
@@ -872,6 +888,7 @@ class InstagramScraper
             'analyze', 'profile' => 'scrape-instagram-full.cjs',
             'followers', 'following' => 'scrape-instagram-list.cjs',
             'suggestions' => 'scrape-instagram-suggestions.cjs',
+            'posts' => 'scrape-instagram-posts.cjs',
             default => 'scrape-instagram.cjs',
         };
 

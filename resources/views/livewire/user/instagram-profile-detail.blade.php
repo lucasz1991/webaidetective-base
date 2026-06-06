@@ -28,7 +28,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagramMini,analyzeInstagram,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions"
+        wire:target="analyzeInstagramMini,analyzeInstagram,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions,scanInstagramPosts"
         class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="w-full max-w-md rounded-lg bg-white p-6 text-center shadow-2xl">
@@ -163,6 +163,9 @@
                 <button type="button" wire:click="scanInstagramFollowingList" wire:loading.attr="disabled" class="rounded-lg border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-100 disabled:opacity-50">
                     Gefolgt scannen
                 </button>
+                <button type="button" wire:click="scanInstagramPosts" wire:loading.attr="disabled" class="rounded-lg border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50">
+                    Beitraege scannen
+                </button>
             @endif
             @if($visibility === 'private')
                 <button type="button" wire:click="scanInstagramSuggestions" wire:loading.attr="disabled" class="rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-4 py-2 text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-100 disabled:opacity-50">
@@ -194,9 +197,44 @@
                     <p class="text-sm text-slate-500">Keine aktiven ausgehenden Beziehungen gespeichert.</p>
                 @endforelse
             </div>
-        </section>
+    </section>
 
-        <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm xl:order-last xl:col-span-2">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-base font-bold text-slate-950">Gespeicherte Beitraege</h2>
+            @if($profile->postScans->isNotEmpty())
+                <span class="text-xs text-slate-500">
+                    Letzter Scan: {{ $profile->postScans->first()->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+                </span>
+            @endif
+        </div>
+        <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            @forelse($profile->posts as $post)
+                <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 transition hover:border-violet-300 hover:bg-violet-50">
+                    @if($post->thumbnail_url)
+                        <img src="{{ $post->thumbnail_url }}" alt="Instagram-Beitrag {{ $post->shortcode }}" class="h-48 w-full object-cover">
+                    @endif
+                    <div class="p-3">
+                        <div class="flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            <span>{{ $post->media_type }}</span>
+                            <span>{{ $post->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>
+                        </div>
+                        @if($post->caption)
+                            <p class="mt-2 line-clamp-2 text-sm text-slate-700">{{ $post->caption }}</p>
+                        @endif
+                        <div class="mt-3 flex gap-4 text-sm font-semibold text-slate-800">
+                            <span>{{ $post->likes_count !== null ? number_format($post->likes_count) : '-' }} Likes</span>
+                            <span>{{ $post->comments_count !== null ? number_format($post->comments_count) : '-' }} Kommentare</span>
+                        </div>
+                    </div>
+                </a>
+            @empty
+                <p class="text-sm text-slate-500">Noch keine Beitraege gespeichert.</p>
+            @endforelse
+        </div>
+    </section>
+
+    <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 class="text-base font-bold text-slate-950">Wird von diesen Profilen referenziert</h2>
             <div class="mt-4 space-y-2">
                 @forelse($profile->relatedRelationships as $relationship)

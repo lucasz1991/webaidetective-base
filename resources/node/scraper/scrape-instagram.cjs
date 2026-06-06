@@ -51,6 +51,7 @@ const isFollowingOnlyMode = operationMode === 'following';
 const isFollowersSearchMode = ['followers-search', 'search-followers'].includes(operationMode);
 const isFollowingSearchMode = ['following-search', 'search-following'].includes(operationMode);
 const isSuggestionsMode = ['suggestions', 'profile-suggestions', 'suggestion-connections'].includes(operationMode);
+const isPostsMode = ['posts', 'post-scan'].includes(operationMode);
 const isRelationshipSearchOnlyMode = isFollowersSearchMode || isFollowingSearchMode;
 const isRelationshipOnlyMode = isFollowersOnlyMode || isFollowingOnlyMode || isRelationshipSearchOnlyMode;
 const shouldCollectFollowers = operationMode === 'analyze' || isFollowersOnlyMode || isFollowersSearchMode;
@@ -109,6 +110,8 @@ const runtimeConfigDefaults = {
   suggestionDialogMaxRounds: 48,
   suggestionCandidateInlineMaxRounds: 24,
   suggestionCandidateDialogMaxRounds: 36,
+  postScanMaxItems: 100,
+  postScanMaxScrollRounds: 40,
   profileHoverCardsEnabled: true,
   profileHoverCardWaitMs: 850,
   suggestionDismissChecked: false,
@@ -1157,6 +1160,356 @@ async function collectProfileInfo(page, username) {
     usernameSeen:
       bodyText.toLowerCase().includes(username.toLowerCase()) ||
       (ogTitle || '').toLowerCase().includes(username.toLowerCase()),
+  };
+}
+
+function parseInstagramMetricCount(rawValue = '') {
+  const value = normalizeText(String(rawValue || '')).toLowerCase();
+
+  if (!value) {
+    return null;
+  }
+
+  let multiplier = 1;
+
+  if (/\bmio\b|\bm\b/.test(value)) {
+    multiplier = 1000000;
+  } else if (/\bk\b|\btsd\b/.test(value)) {
+    multiplier = 1000;
+  }
+
+  const numericPart = value.replace(/[^\d.,]/g, '');
+
+  if (!numericPart) {
+    return null;
+  }
+
+  if (multiplier === 1) {
+    const digits = numericPart.replace(/[^\d]/g, '');
+
+    return digits ? Number.parseInt(digits, 10) : null;
+  }
+
+  const decimalValue = Number.parseFloat(numericPart.replace(',', '.'));
+
+  return Number.isFinite(decimalValue) ? Math.round(decimalValue * multiplier) : null;
+}
+
+function extractPostMetricFromHtml(html = '', keys = []) {
+  for (const key of keys) {
+    const directPattern = new RegExp(`"${key}"\\s*:\\s*(\\d+)`, 'i');
+    const nestedPattern = new RegExp(`"${key}"\\s*:\\s*\\{[^{}]{0,500}?"count"\\s*:\\s*(\\d+)`, 'i');
+    const match = String(html || '').match(directPattern)
+      || String(html || '').match(nestedPattern);
+
+    if (match) {
+      return Number.parseInt(match[1], 10);
+    }
+  }
+
+  return null;
+}
+
+function extractPostMetricFromText(text = '', patterns = []) {
+  for (const pattern of patterns) {
+    const match = String(text || '').match(pattern);
+
+    if (!match) {
+      continue;
+    }
+
+    const count = parseInstagramMetricCount(match[1] || '');
+
+    if (count !== null) {
+      return count;
+    }
+  }
+
+  return null;
+}
+
+async function collectProfilePostLinks(page, username, expectedCount, runtimeConfig = {}) {
+  const maxItems = Math.max(1, Number(runtimeConfig.postScanMaxItems || 100));
+  const maxScrollRounds = Math.max(1, Number(runtimeConfig.postScanMaxScrollRounds || 40));
+  const linksByShortcode = new Map();
+  let staleRounds = 0;
+  let reachedEnd = false;
+
+  for (let round = 0; round < maxScrollRounds && linksByShortcode.size < maxItems; round += 1) {
+    const links = await page.evaluate((profileUsername) => Array.from(document.querySelectorAll('main a[href]'))
+      .map((anchor) => {
+        const href = anchor.getAttribute('href') || '';
+        const match = href.match(/^\/(p|reel|tv)\/([^/?#]+)\/?/i);
+
+        if (!match) {
+          return null;
+        }
+
+        const image = anchor.querySelector('img');
+
+        return {
+          shortcode: match[2],
+          mediaType: match[1].toLowerCase() === 'p' ? 'post' : match[1].toLowerCase(),
+          postUrl: new URL(href, window.location.origin).href,
+          thumbnailUrl: image?.currentSrc || image?.src || null,
+          thumbnailAlt: image?.getAttribute('alt') || null,
+          profileUsername,
+        };
+      })
+      .filter(Boolean), username).catch(() => []);
+    const beforeSize = linksByShortcode.size;
+
+    for (const item of links) {
+      if (!item?.shortcode || linksByShortcode.has(item.shortcode)) {
+        continue;
+      }
+
+      linksByShortcode.set(item.shortcode, item);
+
+      if (linksByShortcode.size >= maxItems) {
+        break;
+      }
+    }
+
+    staleRounds = linksByShortcode.size === beforeSize ? staleRounds + 1 : 0;
+
+    progressLog('posts-collecting-links', {
+      relationship: 'posts',
+      loaded: linksByShortcode.size,
+      expectedCount: Math.min(maxItems, Math.max(0, Number(expectedCount || 0))),
+      round: round + 1,
+      maxScrollRounds,
+      message: `${linksByShortcode.size} Beitragslinks gefunden.`,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
+    });
+
+    if (markGracefulStopIfRequested('posts', {
+      loaded: linksByShortcode.size,
+      expectedCount: Math.min(maxItems, Math.max(0, Number(expectedCount || 0))),
+    })) {
+      break;
+    }
+
+    if (expectedCount > 0 && linksByShortcode.size >= Math.min(maxItems, expectedCount)) {
+      break;
+    }
+
+    const scrollState = await page.evaluate(() => {
+      const before = window.scrollY;
+      const maxScrollTop = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+
+      window.scrollBy(0, Math.max(700, Math.floor(window.innerHeight * 0.85)));
+
+      return {
+        before,
+        maxScrollTop,
+        atEnd: before >= maxScrollTop - 8,
+      };
+    }).catch(() => ({ atEnd: true }));
+
+    reachedEnd = Boolean(scrollState.atEnd);
+
+    if (reachedEnd && staleRounds >= 2) {
+      break;
+    }
+
+    await sleep(1100);
+  }
+
+  return {
+    items: Array.from(linksByShortcode.values()),
+    reachedEnd,
+    complete: expectedCount <= 0
+      ? reachedEnd
+      : linksByShortcode.size >= Math.min(maxItems, expectedCount),
+    limited: expectedCount > maxItems && linksByShortcode.size >= maxItems,
+  };
+}
+
+async function collectInstagramPosts(page, profile, username, profileUrl, runtimeConfig = {}) {
+  const expectedCount = Math.max(0, Number(profile?.counts?.posts || 0));
+
+  if (profile?.isPrivate) {
+    return {
+      attempted: false,
+      available: false,
+      complete: false,
+      rateLimited: false,
+      gracefullyStopped: false,
+      expectedCount,
+      observedCount: 0,
+      items: [],
+      statusLevel: 'partial',
+      statusMessage: 'Privates Instagram-Profil; Beitraege sind fuer den Beitragsscan nicht sichtbar.',
+      reason: 'private-profile',
+    };
+  }
+
+  progressLog('posts-opening', {
+    relationship: 'posts',
+    loaded: 0,
+    expectedCount,
+    message: `Beitraege von @${username} werden gesammelt.`,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  const linkCollection = await collectProfilePostLinks(page, username, expectedCount, runtimeConfig);
+  const posts = [];
+  const failedItems = [];
+  let rateLimited = false;
+  let gracefullyStopped = false;
+
+  for (let index = 0; index < linkCollection.items.length; index += 1) {
+    const link = linkCollection.items[index];
+
+    if (markGracefulStopIfRequested('posts', {
+      loaded: posts.length,
+      expectedCount: linkCollection.items.length,
+    })) {
+      gracefullyStopped = true;
+      break;
+    }
+
+    progressLog('posts-opening-item', {
+      relationship: 'posts',
+      loaded: posts.length,
+      expectedCount: linkCollection.items.length,
+      shortcode: link.shortcode,
+      message: `Beitrag ${index + 1} von ${linkCollection.items.length} wird geprueft.`,
+    });
+
+    const navigation = await navigateWithSoftTimeout(page, link.postUrl, runtimeConfig);
+
+    if (!navigation.ok) {
+      failedItems.push({
+        ...link,
+        error: navigation.error,
+      });
+      continue;
+    }
+
+    await sleep(1100);
+
+    const details = await page.evaluate((profileUsername) => ({
+      bodyText: document.body?.innerText || '',
+      description: document.querySelector('meta[property="og:description"]')?.getAttribute('content') || null,
+      thumbnailUrl: document.querySelector('meta[property="og:image"]')?.getAttribute('content') || null,
+      publishedAt: document.querySelector('time[datetime]')?.getAttribute('datetime') || null,
+      rateLimited: /rate limit|bitte warte einige minuten|please wait a few minutes/i.test(document.body?.innerText || ''),
+      ownerSeen: Array.from(document.querySelectorAll('a[href]')).some((anchor) => {
+        try {
+          const pathParts = new URL(anchor.getAttribute('href'), window.location.origin).pathname
+            .split('/')
+            .filter(Boolean);
+
+          return pathParts.length === 1 && pathParts[0].toLowerCase() === profileUsername.toLowerCase();
+        } catch (error) {
+          return false;
+        }
+      }),
+    }), username).catch(() => ({
+      bodyText: '',
+      description: null,
+      thumbnailUrl: null,
+      publishedAt: null,
+      rateLimited: false,
+      ownerSeen: false,
+    }));
+
+    if (!details.ownerSeen) {
+      failedItems.push({
+        ...link,
+        error: 'post-owner-mismatch',
+      });
+      continue;
+    }
+
+    const html = await page.content().catch(() => '');
+    const likesCount = extractPostMetricFromHtml(html, [
+      'like_count',
+      'edge_media_preview_like',
+      'edge_liked_by',
+    ]) ?? extractPostMetricFromText(details.bodyText, [
+      /([\d.,\s]+(?:k|m|mio|tsd)?)\s+(?:likes?|gef[aä]llt-mir-angaben)/iu,
+      /gef[aä]llt\s+([\d.,\s]+(?:k|m|mio|tsd)?)\s+mal/iu,
+    ]);
+    const commentsCount = extractPostMetricFromHtml(html, [
+      'comment_count',
+      'edge_media_to_parent_comment',
+      'edge_media_to_comment',
+    ]) ?? extractPostMetricFromText(details.bodyText, [
+      /alle\s+([\d.,\s]+(?:k|m|mio|tsd)?)\s+kommentare/iu,
+      /view\s+all\s+([\d.,\s]+(?:k|m|mio|tsd)?)\s+comments?/iu,
+      /([\d.,\s]+(?:k|m|mio|tsd)?)\s+comments?/iu,
+    ]);
+
+    posts.push({
+      ...link,
+      thumbnailUrl: details.thumbnailUrl || link.thumbnailUrl || null,
+      caption: details.description || link.thumbnailAlt || null,
+      publishedAt: details.publishedAt,
+      likesCount,
+      commentsCount,
+    });
+    rateLimited = rateLimited || Boolean(details.rateLimited);
+
+    progressLog('posts-item-collected', {
+      relationship: 'posts',
+      loaded: posts.length,
+      expectedCount: linkCollection.items.length,
+      shortcode: link.shortcode,
+      likesCount,
+      commentsCount,
+      message: `Beitrag ${index + 1} von ${linkCollection.items.length} gespeichert.`,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
+    });
+
+    if (rateLimited) {
+      break;
+    }
+  }
+
+  if (!rateLimited && !gracefullyStopped) {
+    await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
+  }
+
+  const complete = !rateLimited
+    && !gracefullyStopped
+    && linkCollection.complete
+    && !linkCollection.limited
+    && failedItems.length === 0
+    && posts.length === linkCollection.items.length;
+  const statusLevel = complete ? 'success' : 'partial';
+  const statusMessage = rateLimited
+    ? 'Instagram-Beitragsscan wurde wegen eines Rate-Limits vorzeitig beendet.'
+    : (gracefullyStopped
+      ? 'Instagram-Beitragsscan wurde beendet; bisherige Beitraege werden gespeichert.'
+      : (complete
+        ? 'Instagram-Beitragsscan abgeschlossen.'
+        : 'Instagram-Beitragsscan teilweise abgeschlossen; nicht alle Beitraege waren erreichbar.'));
+
+  progressLog('posts-complete', {
+    relationship: 'posts',
+    loaded: posts.length,
+    expectedCount: linkCollection.items.length,
+    message: statusMessage,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  return {
+    attempted: true,
+    available: posts.length > 0 || expectedCount === 0,
+    complete,
+    rateLimited,
+    gracefullyStopped,
+    expectedCount,
+    observedCount: posts.length,
+    failedCount: failedItems.length,
+    limited: linkCollection.limited,
+    items: posts,
+    failedItems,
+    statusLevel,
+    statusMessage,
   };
 }
 
@@ -6688,6 +7041,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
   let title = null;
   let finalUrl = profileUrl;
   let suggestionScanResult = null;
+  let postsScanResult = null;
   let loginDiagnostics = {
     attempted: false,
     success: false,
@@ -7062,6 +7416,24 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       notes.push('Instagram-Scan wurde ueber die Oberflaeche nach den Grunddaten beendet.');
     }
 
+    if (isPostsMode && !gracefullyStopped) {
+      postsScanResult = await collectInstagramPosts(
+        page,
+        initialProfile,
+        username,
+        profileUrl,
+        runtimeConfig,
+      );
+      initialProfile.postsScan = postsScanResult;
+      initialHtml = await page.content().catch(() => initialHtml);
+      title = await page.title().catch(() => title);
+      finalUrl = page.url();
+
+      if (postsScanResult.gracefullyStopped) {
+        gracefullyStopped = true;
+      }
+    }
+
     if (isSuggestionsMode && !gracefullyStopped) {
       suggestionScanResult = await runProfileSuggestionConnectionScan(
         page,
@@ -7199,7 +7571,13 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       ...(cookieDiagnostics.warnings || []),
       ...(loginDiagnostics.warnings || []),
     ]);
-    const outcome = isSuggestionsMode && suggestionScanResult
+    const outcome = isPostsMode && postsScanResult
+      ? {
+        ok: postsScanResult.statusLevel !== 'error',
+        statusLevel: postsScanResult.statusLevel || 'unknown',
+        statusMessage: postsScanResult.statusMessage || 'Instagram-Beitragsscan abgeschlossen.',
+      }
+      : isSuggestionsMode && suggestionScanResult
       ? {
         ok: suggestionScanResult.statusLevel !== 'error',
         statusLevel: suggestionScanResult.statusLevel || 'unknown',
@@ -7257,6 +7635,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       cookieDiagnostics,
       loginDiagnostics,
       profile: initialProfile,
+      postsScan: postsScanResult,
       suggestionScan: suggestionScanResult,
       suggestionConnections: Array.isArray(suggestionScanResult?.matches)
         ? suggestionScanResult.matches

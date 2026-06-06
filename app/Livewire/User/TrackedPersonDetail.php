@@ -3,7 +3,6 @@
 namespace App\Livewire\User;
 
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
-use App\Jobs\MonitorTrackedPersonInstagram;
 use App\Models\InstagramProfile;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramMedia;
@@ -346,6 +345,51 @@ class TrackedPersonDetail extends Component
         $this->dispatch('tracked-person-refresh');
     }
 
+    public function scanInstagramPosts(): void
+    {
+        @set_time_limit(0);
+        @ignore_user_abort(false);
+
+        $trackedPerson = $this->resolveTrackedPerson()->loadMissing('latestInstagramSnapshot');
+
+        if (! $trackedPerson->instagram_username) {
+            $this->setDetailStatus('Fuer diese Person ist kein Instagram-Name hinterlegt.', 'error');
+
+            return;
+        }
+
+        if (! $this->trackedPersonInstagramProfileIsPublic($trackedPerson)) {
+            $this->setDetailStatus('Beitragsscans sind nur fuer oeffentliche Instagram-Profile verfuegbar.', 'partial');
+
+            return;
+        }
+
+        $progress = fn (array $state) => $this->streamInstagramProgress($state);
+        $this->cancelInstagramScanWhenClientDisconnects($trackedPerson->id);
+
+        try {
+            $scan = app(TrackedPersonInstagramWorkflowService::class)
+                ->runPostScan($trackedPerson, $trackedPerson->latestInstagramSnapshot, $progress);
+        } catch (TrackedPersonInstagramScanCancelledException) {
+            $this->setDetailStatus('Der Instagram-Beitragsscan wurde beendet.', 'partial');
+
+            return;
+        } catch (\Throwable $exception) {
+            $this->setDetailStatus('Instagram-Beitragsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+
+            return;
+        }
+
+        $this->setDetailStatus(
+            'Instagram-Beitragsscan abgeschlossen: '
+                .number_format($scan->observed_count, 0, ',', '.').' geprueft, '
+                .number_format($scan->new_count, 0, ',', '.').' neu und '
+                .number_format($scan->updated_count, 0, ',', '.').' aktualisiert.',
+            $scan->status_level === 'success' ? 'success' : 'partial',
+        );
+        $this->dispatch('tracked-person-refresh');
+    }
+
     private function runInstagramAnalysis(bool $fullScan): void
     {
         @set_time_limit(0);
@@ -382,7 +426,6 @@ class TrackedPersonDetail extends Component
                 $trackedPerson,
                 $fullScan,
                 $progress,
-                true,
             );
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
             $this->streamInstagramProgress([
@@ -489,10 +532,6 @@ class TrackedPersonDetail extends Component
         $stoppedByUser = (bool) data_get($relationshipList, 'gracefullyStopped', false)
             || (bool) data_get($snapshot->raw_payload, 'gracefullyStopped', false);
         $available = (bool) data_get($relationshipList, 'available', false);
-        $queuedFullScan = MonitorTrackedPersonInstagram::shouldRunFullScanAfterSnapshot($snapshot)
-            ? MonitorTrackedPersonInstagram::dispatchFullScanIfNotQueued($trackedPerson->id, true)
-            : false;
-
         $this->setDetailStatus(
             ($stoppedByUser ? $label.'-Scan wurde beendet und gespeichert: ' : $label.'-Scan abgeschlossen: ')
             .number_format($activeCount, 0, ',', '.')
@@ -500,8 +539,7 @@ class TrackedPersonDetail extends Component
             .number_format($observedCount, 0, ',', '.')
             .' zuletzt gesehen.'
             .($stoppedByUser ? ' Der Scan kann spaeter erneut gestartet werden.' : '')
-            .($rateLimited ? ' Instagram hat diese Liste per Rate-Limit blockiert; bisherige Eintraege bleiben erhalten.' : '')
-            .($queuedFullScan ? ' Eine Vollanalyse wurde als Hintergrund-Job eingereiht.' : ''),
+            .($rateLimited ? ' Instagram hat diese Liste per Rate-Limit blockiert; bisherige Eintraege bleiben erhalten.' : ''),
             $snapshot->status_level === 'success' && $available && ! $rateLimited && ! $stoppedByUser ? 'success' : 'partial',
         );
         $this->dispatch('tracked-person-refresh');
@@ -517,6 +555,7 @@ class TrackedPersonDetail extends Component
             'following' => 'Gefolgt-Liste',
             'public-connections' => 'Verbindungen',
             'suggestions' => 'Vorschlaege',
+            'posts' => 'Beitraege',
             'saving' => 'Speichern',
             'done' => 'Fertig',
             'error' => 'Fehler',
@@ -910,6 +949,14 @@ class TrackedPersonDetail extends Component
                     ->with(['publicProfile', 'candidateInstagramProfile'])
                     ->latest('last_seen_at')
                     ->limit(100),
+                'currentInstagramProfile.postScans' => fn ($query) => $query
+                    ->where('user_id', Auth::id())
+                    ->latest('scanned_at')
+                    ->limit(10),
+                'currentInstagramProfile.posts' => fn ($query) => $query
+                    ->latest('published_at')
+                    ->latest('last_seen_at')
+                    ->limit(24),
                 'latestInstagramSnapshot.media' => fn ($query) => $query->orderBy('sort_order'),
                 'instagramSnapshots' => fn ($query) => $query
                     ->where('has_changes', true)

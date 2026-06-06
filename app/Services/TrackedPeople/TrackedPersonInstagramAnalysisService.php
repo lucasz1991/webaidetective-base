@@ -179,10 +179,14 @@ class TrackedPersonInstagramAnalysisService
                 $previousSnapshot,
             );
 
+            $isMiniScan = ($attemptInfo['scan_mode'] ?? null) === 'mini';
+            $mediaUrls = $isMiniScan
+                ? array_values(array_filter([$extracted['profile_image_url'] ?? null]))
+                : ($extracted['image_urls'] ?? []);
             $storedMedia = $this->storeSnapshotMedia(
                 $trackedPerson,
                 $snapshot,
-                $miniScanWithoutCounts ? [] : ($extracted['image_urls'] ?? []),
+                $mediaUrls,
                 $persistedWarnings,
                 $previousSnapshot,
             );
@@ -199,7 +203,7 @@ class TrackedPersonInstagramAnalysisService
 
             $detectedChanges = $miniScanWithoutCounts
                 ? []
-                : $this->detectSnapshotChanges($previousSnapshot, $extracted, $profileImageHash);
+                : $this->detectSnapshotChanges($previousSnapshot, $extracted, $profileImageHash, $isMiniScan);
             $snapshotPayload = $this->buildStoredPayload(
                 $payload,
                 $extracted,
@@ -1180,18 +1184,25 @@ class TrackedPersonInstagramAnalysisService
         ?TrackedPersonInstagramSnapshot $previousSnapshot,
         array $extracted,
         ?string $profileImageHash,
+        bool $monitoringOnly = false,
     ): array {
         if (! $previousSnapshot) {
             return [];
         }
 
         $labels = [
-            'full_name' => 'Name',
-            'biography' => 'Bio',
             'posts_count' => 'Beitraege',
             'followers_count' => 'Follower',
             'following_count' => 'Gefolgt',
         ];
+
+        if (! $monitoringOnly) {
+            $labels = [
+                'full_name' => 'Name',
+                'biography' => 'Bio',
+                ...$labels,
+            ];
+        }
         $changes = [];
         $previousVisibility = $this->snapshotProfileVisibility($previousSnapshot);
         $currentVisibility = $this->extractedProfileVisibility($extracted);

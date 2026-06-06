@@ -37,6 +37,14 @@ class InstagramProfileDetail extends Component
                 ->where('user_id', $userId)
                 ->latest('scanned_at')
                 ->limit(20),
+            'postScans' => fn ($query) => $query
+                ->where('user_id', $userId)
+                ->latest('scanned_at')
+                ->limit(10),
+            'posts' => fn ($query) => $query
+                ->latest('published_at')
+                ->latest('last_seen_at')
+                ->limit(24),
             'sourceRelationships' => fn ($query) => $query
                 ->where('status', 'active')
                 ->whereNull('removed_at')
@@ -67,6 +75,7 @@ class InstagramProfileDetail extends Component
         $latestSuggestionScan = $trackedPerson?->instagramSuggestionScans()
             ->latest('analyzed_at')
             ->first();
+        $latestPostScan = $profile->postScans->first();
         $lastScanStatus = [
             'level' => $profile->last_status_level,
             'message' => $profile->last_status_message,
@@ -86,6 +95,21 @@ class InstagramProfileDetail extends Component
                 'message' => $latestSuggestionScan->status_message,
                 'scannedAt' => $latestSuggestionScan->analyzed_at,
                 'type' => 'Vorschlagsscan',
+            ];
+        }
+
+        if (
+            $latestPostScan?->scanned_at
+            && (
+                ! $lastScanStatus['scannedAt']
+                || $latestPostScan->scanned_at->isAfter($lastScanStatus['scannedAt'])
+            )
+        ) {
+            $lastScanStatus = [
+                'level' => $latestPostScan->status_level,
+                'message' => $latestPostScan->status_message,
+                'scannedAt' => $latestPostScan->scanned_at,
+                'type' => 'Beitragsscan',
             ];
         }
 
@@ -139,6 +163,27 @@ class InstagramProfileDetail extends Component
         }
     }
 
+    public function scanInstagramPosts(): void
+    {
+        @set_time_limit(0);
+
+        $trackedPerson = $this->resolveOrCreateTrackedPerson();
+
+        try {
+            $scan = app(TrackedPersonInstagramWorkflowService::class)
+                ->runPostScan($trackedPerson);
+            $this->setStatus(
+                'Beitragsscan abgeschlossen: '
+                    .number_format($scan->observed_count).' geprueft, '
+                    .number_format($scan->new_count).' neu und '
+                    .number_format($scan->updated_count).' aktualisiert.',
+                $scan->status_level === 'success' ? 'success' : 'partial',
+            );
+        } catch (\Throwable $exception) {
+            $this->setStatus('Beitragsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+        }
+    }
+
     private function runAnalysis(bool $fullScan): void
     {
         @set_time_limit(0);
@@ -147,7 +192,7 @@ class InstagramProfileDetail extends Component
 
         try {
             $result = app(TrackedPersonInstagramWorkflowService::class)
-                ->runAnalysis($trackedPerson, $fullScan, null, true);
+                ->runAnalysis($trackedPerson, $fullScan);
             $this->setStatus($result['resolvedStatusMessage'], $result['resolvedStatusLevel']);
         } catch (\Throwable $exception) {
             $this->setStatus(
