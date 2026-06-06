@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Cache;
 use App\Livewire\Dashboard;
 use App\Livewire\AdminConfig;
 use App\Livewire\User\NetworkMap;
+use App\Livewire\User\InstagramProfileDetail;
 use App\Livewire\User\TrackedPersonDetail;
 use App\Models\TrackedPerson;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
@@ -77,6 +78,9 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session'), 'verified']
         Route::get('/tracked-people/{trackedPersonId}', TrackedPersonDetail::class)
             ->whereNumber('trackedPersonId')
             ->name('tracked-people.show');
+        Route::get('/instagram-profiles/{instagramProfileId}', InstagramProfileDetail::class)
+            ->whereNumber('instagramProfileId')
+            ->name('instagram-profiles.show');
         Route::get('/network/graph/{token}/{chunk}', function (string $token, int $chunk) {
             $payload = Cache::get(NetworkMap::graphCacheKey((int) Auth::id(), $token));
 

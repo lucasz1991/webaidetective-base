@@ -180,7 +180,15 @@
         @endforelse
     </section>
 
-    @if($showDetailModal && $selectedTrackedPersonId)
+    @if($showDetailModal && $selectedTrackedPerson)
+        <x-instagram-profile-preview
+            model="showDetailModal"
+            :tracked-person="$selectedTrackedPerson"
+            :detail-route="route('tracked-people.show', $selectedTrackedPerson->id)"
+        />
+    @endif
+
+    @if(false && $showDetailModal && $selectedTrackedPersonId)
         <x-modal wire:model="showDetailModal" maxWidth="2xl">
             @php
                 $selectedStatusLevel = $selectedTrackedPerson?->last_instagram_status_level ?: 'neutral';

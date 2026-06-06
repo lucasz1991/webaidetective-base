@@ -52,6 +52,11 @@ class InstagramProfile extends Model
         return $this->hasMany(TrackedPersonInstagramProfileLink::class);
     }
 
+    public function publicProfileLinks(): HasMany
+    {
+        return $this->hasMany(TrackedPersonPublicProfile::class);
+    }
+
     public function listScans(): HasMany
     {
         return $this->hasMany(InstagramProfileListScan::class);
@@ -65,6 +70,16 @@ class InstagramProfile extends Model
     public function relatedRelationships(): HasMany
     {
         return $this->hasMany(InstagramProfileRelationship::class, 'related_instagram_profile_id');
+    }
+
+    public function candidateInferredConnections(): HasMany
+    {
+        return $this->hasMany(TrackedPersonInstagramInferredConnection::class, 'candidate_instagram_profile_id');
+    }
+
+    public function sourceInferredConnections(): HasMany
+    {
+        return $this->hasMany(TrackedPersonInstagramInferredConnection::class, 'source_public_instagram_profile_id');
     }
 
     public function setUsernameAttribute($value): void

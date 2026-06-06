@@ -415,7 +415,62 @@
         </button>
     </div>
 
-    @if($showProfilePreviewModal)
+    @if($showProfilePreviewModal && $profilePreview)
+        <x-instagram-profile-preview
+            model="showProfilePreviewModal"
+            :profile="$profilePreview"
+            :detail-route="$profilePreview['detail_url'] ?? null"
+        >
+            <x-slot:actions>
+                <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Profilaktionen</div>
+                    <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                        <button
+                            type="button"
+                            wire:click="addPreviewProfileAsTrackedPerson"
+                            wire:loading.attr="disabled"
+                            class="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-50"
+                        >
+                            Als beobachtetes Profil anlegen
+                        </button>
+                        @if(! ($profilePreview['is_known_profile'] ?? false))
+                            <button
+                                type="button"
+                                wire:click="addPreviewProfileAsKnown"
+                                wire:loading.attr="disabled"
+                                class="rounded-lg border border-pink-200 bg-pink-50 px-3 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-100 disabled:opacity-50"
+                            >
+                                Als bekannt speichern
+                            </button>
+                        @endif
+                        <button
+                            type="button"
+                            wire:click="scanPreviewProfile"
+                            wire:loading.attr="disabled"
+                            wire:target="scanPreviewProfile"
+                            class="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
+                        >
+                            <span wire:loading.remove wire:target="scanPreviewProfile">Vollanalyse direkt</span>
+                            <span wire:loading wire:target="scanPreviewProfile">Analyse laeuft...</span>
+                        </button>
+                        <button
+                            type="button"
+                            wire:click="scanPreviewProfileInBackground"
+                            wire:loading.attr="disabled"
+                            class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                            Vollanalyse im Hintergrund
+                        </button>
+                    </div>
+                    <p class="mt-2 text-xs text-slate-500">
+                        Nach dem Anlegen als beobachtetes Profil stehen Mini-Scan, Vollanalyse und profilspezifische Listenaktionen direkt in diesem Modal bereit.
+                    </p>
+                </div>
+            </x-slot:actions>
+        </x-instagram-profile-preview>
+    @endif
+
+    @if(false && $showProfilePreviewModal)
         <div class="fixed inset-0 z-[60] flex h-screen w-screen flex-col overflow-hidden bg-white">
             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
                 <div>

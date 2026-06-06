@@ -2045,6 +2045,15 @@ class NetworkMap extends Component
                 ->where('username', $normalizedUsername)
                 ->first()
             : null;
+        $observedTrackedPerson = $user->trackedPeople()
+            ->where(function ($query) use ($profile, $normalizedUsername) {
+                $query->where('current_instagram_profile_id', $profile->id)
+                    ->orWhereRaw(
+                        "LOWER(TRIM(LEADING '@' FROM instagram_username)) = ?",
+                        [$normalizedUsername],
+                    );
+            })
+            ->first();
 
         $activeSourceRelationships = $profile->sourceRelationships()
             ->where('status', 'active')
@@ -2056,6 +2065,7 @@ class NetworkMap extends Component
         $this->previewNodeId = $nodeId;
         $this->profilePreview = [
             'id' => $profile->id,
+            'detail_url' => route('instagram-profiles.show', ['instagramProfileId' => $profile->id]),
             'username' => $normalizedUsername,
             'handle' => $profile->display_handle,
             'display_name' => $profile->display_name ?: $profile->full_name ?: $profile->display_handle,
@@ -2069,6 +2079,7 @@ class NetworkMap extends Component
             'last_status_level' => $profile->last_status_level,
             'last_status_message' => $profile->last_status_message,
             'is_known_profile' => (bool) $knownPublicProfile,
+            'tracked_person_id' => $observedTrackedPerson?->id,
             'known_public_profile_id' => $knownPublicProfile?->id,
             'active_followers_count' => (clone $activeSourceRelationships)->where('list_type', 'followers')->count(),
             'active_following_count' => (clone $activeSourceRelationships)->where('list_type', 'following')->count(),
@@ -2104,6 +2115,56 @@ class NetworkMap extends Component
         }
 
         $this->addProfileAsKnown($this->previewNodeId);
+        $this->openProfilePreview($this->previewNodeId);
+    }
+
+    public function addPreviewProfileAsTrackedPerson(): void
+    {
+        $user = Auth::user();
+
+        if (! $user || ! $this->previewNodeId) {
+            return;
+        }
+
+        [$profile, $username] = $this->resolveInstagramProfileFromNodeId($this->previewNodeId);
+
+        if (! $profile && filled($username)) {
+            $profile = app(InstagramProfileRelationshipStore::class)->ensureProfile($username);
+        }
+
+        if (! $profile || ! filled($profile->username)) {
+            $this->dispatch('notification', type: 'error', message: 'Profil konnte nicht als beobachtete Person angelegt werden');
+
+            return;
+        }
+
+        $normalizedUsername = $this->normalizeUsername($profile->username);
+        $existing = $user->trackedPeople()
+            ->where(function ($query) use ($profile, $normalizedUsername) {
+                $query->where('current_instagram_profile_id', $profile->id)
+                    ->orWhereRaw(
+                        "LOWER(TRIM(LEADING '@' FROM instagram_username)) = ?",
+                        [$normalizedUsername],
+                    );
+            })
+            ->first();
+
+        if (! $existing) {
+            $displayName = trim((string) ($profile->display_name ?: $profile->full_name ?: $normalizedUsername));
+            $nameParts = preg_split('/\s+/', $displayName, 2) ?: [];
+            $existing = $user->trackedPeople()->create([
+                'first_name' => $nameParts[0] ?? $normalizedUsername,
+                'last_name' => $nameParts[1] ?? '',
+                'alias' => $displayName,
+                'instagram_username' => $normalizedUsername,
+                'current_instagram_profile_id' => $profile->id,
+                'is_primary' => ! $user->trackedPeople()->where('is_primary', true)->exists(),
+            ]);
+            app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($existing);
+        }
+
+        $this->forgetGraphCache((int) $user->id);
+        $this->dispatch('notification', type: 'success', message: 'Profil wurde als beobachtete Person angelegt');
         $this->openProfilePreview($this->previewNodeId);
     }
 
