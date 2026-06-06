@@ -1077,40 +1077,41 @@ async function initNetworkMap(root) {
             {
                 selector: 'edge',
                 style: {
-                    width: 1,
-                    'line-color': '#0284c7',
-                    'target-arrow-color': '#0284c7',
+                    width: 0.7,
+                    'line-color': '#7dd3fc',
+                    'target-arrow-color': '#7dd3fc',
                     'target-arrow-shape': 'triangle',
+                    'arrow-scale': 0.65,
                     'curve-style': 'bezier',
-                    opacity: 0.7,
+                    opacity: 0.38,
                 },
             },
             {
                 selector: 'edge[networkType = "inferred"]',
                 style: {
-                    'line-color': '#db2777',
-                    'target-arrow-color': '#db2777',
+                    'line-color': '#f9a8d4',
+                    'target-arrow-color': '#f9a8d4',
                     'line-style': 'dashed',
                 },
             },
             {
                 selector: 'edge[networkType = "tracked-list"]',
                 style: {
-                    width: 1.4,
-                    'line-color': '#059669',
-                    'target-arrow-color': '#059669',
+                    width: 0.9,
+                    'line-color': '#6ee7b7',
+                    'target-arrow-color': '#6ee7b7',
                     'line-style': 'solid',
-                    opacity: 0.86,
+                    opacity: 0.46,
                 },
             },
             {
                 selector: 'edge[networkType = "tracked-profile-rel"]',
                 style: {
-                    width: 1.4,
-                    'line-color': '#4f46e5',
-                    'target-arrow-color': '#4f46e5',
+                    width: 0.9,
+                    'line-color': '#a5b4fc',
+                    'target-arrow-color': '#a5b4fc',
                     'line-style': 'solid',
-                    opacity: 0.86,
+                    opacity: 0.46,
                 },
             },
             {
@@ -1124,8 +1125,8 @@ async function initNetworkMap(root) {
             {
                 selector: '.network-neighbor',
                 style: {
-                    opacity: 1,
-                    width: 2,
+                    opacity: 0.82,
+                    width: 1.5,
                     'z-index': 10,
                 },
             },
@@ -1170,6 +1171,7 @@ async function initNetworkMap(root) {
             loadedNodes: initialElements.filter((element) => element.group === 'nodes').length,
             loadedEdges: initialElements.filter((element) => element.group === 'edges').length,
             lastNodeTap: null,
+            nodeTapTimer: null,
         };
 
         instances.set(root, state);
@@ -1192,21 +1194,26 @@ async function initNetworkMap(root) {
             setSelected(root, cy, node.id());
 
             if (isDoubleTap) {
-                const containerRect = cy.container().getBoundingClientRect();
-                const rendered = event.renderedPosition || { x: cy.width() / 2, y: cy.height() / 2 };
-
-                dispatchNodeMenu(
-                    root,
-                    node,
-                    Math.min(window.innerWidth - 240, Math.max(8, containerRect.left + rendered.x + 12)),
-                    Math.min(window.innerHeight - 150, Math.max(8, containerRect.top + rendered.y + 12)),
-                );
+                window.clearTimeout(state.nodeTapTimer);
+                state.nodeTapTimer = null;
                 state.lastNodeTap = null;
+                dispatchOpenNode(root, node);
 
                 return;
             }
 
             state.lastNodeTap = { id: node.id(), at: now };
+            const containerRect = cy.container().getBoundingClientRect();
+            const rendered = event.renderedPosition || { x: cy.width() / 2, y: cy.height() / 2 };
+            const menuX = Math.min(window.innerWidth - 240, Math.max(8, containerRect.left + rendered.x + 12));
+            const menuY = Math.min(window.innerHeight - 190, Math.max(8, containerRect.top + rendered.y + 12));
+
+            window.clearTimeout(state.nodeTapTimer);
+            state.nodeTapTimer = window.setTimeout(() => {
+                dispatchNodeMenu(root, node, menuX, menuY);
+                state.lastNodeTap = null;
+                state.nodeTapTimer = null;
+            }, 360);
         });
         cy.on('taphold', 'node', (event) => {
             const node = event.target;
@@ -1477,6 +1484,7 @@ export function destroyNetworkMaps() {
         }
 
         window.removeEventListener('resize', state.resizeHandler);
+        window.clearTimeout(state.nodeTapTimer);
         state.cy.destroy();
         instances.delete(root);
     });

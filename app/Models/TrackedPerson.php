@@ -40,6 +40,7 @@ class TrackedPerson extends Model
         'notify_youtube_changes',
         'notify_snapchat_changes',
         'monitoring_enabled',
+        'monitoring_interval_minutes',
         'is_primary',
         'profile_image_path',
         'profile_image_hash',
@@ -64,6 +65,7 @@ class TrackedPerson extends Model
         'notify_youtube_changes' => 'boolean',
         'notify_snapchat_changes' => 'boolean',
         'monitoring_enabled' => 'boolean',
+        'monitoring_interval_minutes' => 'integer',
         'is_primary' => 'boolean',
     ];
 

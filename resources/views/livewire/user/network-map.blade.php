@@ -9,6 +9,7 @@
     wire:loading.class="cursor-wait"
     x-data="{
         mapFullscreen: false,
+        filterPanelOpen: false,
         networkNode: { id: null, type: null, isKnownProfile: false },
         nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, detailUrl: null, x: 0, y: 0 },
         openMap() {
@@ -26,6 +27,8 @@
             }
 
             this.mapFullscreen = false;
+            this.filterPanelOpen = false;
+            this.closeNodeMenu();
             document.documentElement.classList.remove('overflow-hidden');
             this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } })));
         },
@@ -72,7 +75,7 @@
     x-on:network-map-node-selected.window="setNetworkNode($event)"
     x-on:network-map-node-menu.window="openNodeMenu($event)"
     x-on:network-map-open-node.window="openNode($event)"
-    x-on:click.outside="closeNodeMenu()"
+    x-on:pointerdown.window="if (nodeMenu.open && !$event.target.closest('[data-network-node-menu]')) closeNodeMenu()"
     x-on:keydown.escape.window="if (mapFullscreen) closeMap()"
 >
     <div
@@ -201,10 +204,32 @@
                 class="relative overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
                 x-bind:class="mapFullscreen ? '!min-h-screen !rounded-none !border-0 !shadow-none' : ''"
             >
-                <div
+                <div x-show="mapFullscreen" x-cloak class="absolute left-3 top-3 z-30">
+                    <button
+                        type="button"
+                        x-on:click="filterPanelOpen = ! filterPanelOpen"
+                        x-bind:aria-expanded="filterPanelOpen"
+                        class="rounded-lg border border-slate-200 bg-white/95 px-4 py-2 text-sm font-semibold text-slate-700 shadow-md backdrop-blur transition hover:bg-white"
+                    >
+                        Filter
+                    </button>
+                </div>
+
+                <button
+                    type="button"
                     x-show="mapFullscreen"
                     x-cloak
-                    class="absolute left-1/2 top-2 z-20 flex max-w-[calc(100%-1rem)] -translate-x-1/2 flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200/70 bg-white/35 px-3 py-2 opacity-20 shadow-sm backdrop-blur-md transition duration-200 hover:bg-white/90 hover:opacity-100 focus-within:bg-white/95 focus-within:opacity-100"
+                    x-on:click="closeMap()"
+                    class="absolute right-3 top-3 z-30 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-md transition hover:bg-slate-50"
+                >
+                    Schliessen
+                </button>
+
+                <div
+                    x-show="mapFullscreen && filterPanelOpen"
+                    x-cloak
+                    x-on:click.outside="filterPanelOpen = false"
+                    class="absolute left-3 top-14 z-20 flex max-h-[calc(100vh-4.5rem)] w-[min(440px,calc(100%-1.5rem))] flex-col gap-3 overflow-y-auto rounded-lg border border-slate-200 bg-white/95 p-3 shadow-xl backdrop-blur-md"
                 >
                     <div class="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-600">
                         <button type="button" data-network-filter="public" data-active-classes="border-sky-300 bg-sky-50 text-sky-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="true">
@@ -249,8 +274,7 @@
                             <span>effektiv min: <span data-network-effective-min-degree>0</span></span>
                         </span>
                     </div>
-                    <div class="flex items-center gap-2 text-xs font-semibold text-slate-600">
-                        <button type="button" x-on:click="closeMap()" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">Schliessen</button>
+                    <div class="flex items-center gap-2 border-t border-slate-200 pt-3 text-xs font-semibold text-slate-600">
                         <button type="button" data-network-action="zoom-out" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">-</button>
                         <button type="button" data-network-action="zoom-in" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">+</button>
                         <button type="button" data-network-action="fit" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">Reset</button>
@@ -374,6 +398,7 @@
         x-cloak
         x-show="nodeMenu.open"
         x-bind:style="`left: ${nodeMenu.x}px; top: ${nodeMenu.y}px`"
+        data-network-node-menu
         class="fixed z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white text-sm shadow-xl"
     >
         <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-show="nodeMenu.type === 'person' && nodeMenu.detailUrl" x-on:click="window.location.href = nodeMenu.detailUrl; closeNodeMenu()">

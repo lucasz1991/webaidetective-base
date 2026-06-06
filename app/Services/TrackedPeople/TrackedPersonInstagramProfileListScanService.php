@@ -5,6 +5,7 @@ namespace App\Services\TrackedPeople;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScan;
 use App\Models\TrackedPerson;
+use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
 use Illuminate\Support\Collection;
@@ -18,6 +19,7 @@ class TrackedPersonInstagramProfileListScanService
         private readonly InstagramProfileDataExtractor $extractor,
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
+        private readonly ScanCreditService $scanCreditService,
     ) {
     }
 
@@ -162,6 +164,12 @@ class TrackedPersonInstagramProfileListScanService
             );
 
             if ($scan instanceof InstagramProfileListScan) {
+                $this->scanCreditService->charge(
+                    (int) $contextPerson->user_id,
+                    $scan,
+                    $payload,
+                    'Instagram-'.($relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' @'.$username,
+                );
                 $scans->push($scan);
             }
 

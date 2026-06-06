@@ -14,7 +14,7 @@ class Kernel extends ConsoleKernel
     {
         $schedule
             ->command('tracked-people:run-monitoring')
-            ->everyTenMinutes()
+            ->everyMinute()
             ->withoutOverlapping();
     }
 

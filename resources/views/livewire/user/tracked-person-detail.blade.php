@@ -1125,6 +1125,24 @@
                             <input type="checkbox" wire:model.defer="monitoring_enabled" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
                             <span class="font-medium">Dauerbeobachtung aktivieren</span>
                         </label>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Scan-Intervall dieser Person</label>
+                            <select wire:model.defer="monitoring_interval_minutes" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                <option value="1">Jede Minute</option>
+                                <option value="5">Alle 5 Minuten</option>
+                                <option value="10">Alle 10 Minuten</option>
+                                <option value="15">Alle 15 Minuten</option>
+                                <option value="30">Alle 30 Minuten</option>
+                                <option value="60">Stuendlich</option>
+                                <option value="180">Alle 3 Stunden</option>
+                                <option value="360">Alle 6 Stunden</option>
+                                <option value="720">Alle 12 Stunden</option>
+                                <option value="1440">Taeglich</option>
+                                <option value="10080">Woechentlich</option>
+                            </select>
+                            <p class="mt-1 text-xs text-slate-500">Der Scheduler prueft jede Minute, ob dieses Profil wieder faellig ist.</p>
+                            @error('monitoring_interval_minutes') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        </div>
                         <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                             <input type="checkbox" wire:model.defer="notify_social_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
                             <span class="font-medium">Benachrichtigungen fuer Instagram-Aenderungen aktivieren</span>

@@ -5,6 +5,7 @@ namespace App\Services\TrackedPeople;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramSuggestionScan;
+use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramScraper;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -16,6 +17,7 @@ class TrackedPersonInstagramSuggestionScanService
         private readonly InstagramScraper $scraper,
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
+        private readonly ScanCreditService $scanCreditService,
     ) {
     }
 
@@ -137,7 +139,7 @@ class TrackedPersonInstagramSuggestionScanService
         );
         $analyzedAt = now('UTC');
 
-        return DB::transaction(function () use (
+        $scan = DB::transaction(function () use (
             $trackedPerson,
             $targetUsername,
             $payload,
@@ -170,6 +172,15 @@ class TrackedPersonInstagramSuggestionScanService
 
             return $scan;
         });
+
+        $this->scanCreditService->charge(
+            (int) $trackedPerson->user_id,
+            $scan,
+            $payload,
+            'Instagram-Vorschlagsscan @'.$targetUsername,
+        );
+
+        return $scan;
     }
 
     private function storeInferredSuggestionConnections(

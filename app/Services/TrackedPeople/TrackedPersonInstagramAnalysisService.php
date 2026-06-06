@@ -4,6 +4,7 @@ namespace App\Services\TrackedPeople;
 
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
+use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
 use Illuminate\Support\Facades\Cache;
@@ -21,6 +22,7 @@ class TrackedPersonInstagramAnalysisService
         private readonly InstagramProfileDataExtractor $extractor,
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
+        private readonly ScanCreditService $scanCreditService,
     ) {
     }
 
@@ -261,6 +263,13 @@ class TrackedPersonInstagramAnalysisService
                 : ($fullScan ? 'Instagram-Analyse abgeschlossen.' : 'Instagram-Mini-Scan abgeschlossen.'),
         ]);
 
+        $this->scanCreditService->charge(
+            (int) $trackedPerson->user_id,
+            $snapshot,
+            $payload,
+            ($fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' @'.$trackedPerson->instagram_username,
+        );
+
         return $snapshot->fresh('media');
     }
 
@@ -466,6 +475,13 @@ class TrackedPersonInstagramAnalysisService
                 ? $label.'-Scan fehlgeschlagen.'
                 : $label.'-Scan abgeschlossen.',
         ]);
+
+        $this->scanCreditService->charge(
+            (int) $trackedPerson->user_id,
+            $snapshot,
+            $payload,
+            'Instagram-'.$label.' @'.$trackedPerson->instagram_username,
+        );
 
         return $snapshot->fresh('media');
     }

@@ -9,6 +9,7 @@ use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramPublicProfileScan;
 use App\Models\TrackedPersonInstagramPublicProfileScanLog;
 use App\Models\TrackedPersonPublicProfile;
+use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramScraper;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
@@ -25,6 +26,7 @@ class TrackedPersonInstagramPublicProfileScanService
         private readonly InstagramScraper $scraper,
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
+        private readonly ScanCreditService $scanCreditService,
     ) {
     }
 
@@ -958,6 +960,13 @@ class TrackedPersonInstagramPublicProfileScanService
 
             $scan = $existingScan ?: new TrackedPersonInstagramPublicProfileScan();
             $scan->forceFill($scanData)->save();
+
+            $this->scanCreditService->charge(
+                (int) $trackedPerson->user_id,
+                $scan,
+                $payload,
+                'Instagram-Public-Profile-Verbindungsscan @'.$publicProfile->username,
+            );
 
             if ($statusInfo['detail'] !== null) {
                 $this->storeScanLog(

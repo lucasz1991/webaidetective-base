@@ -41,6 +41,7 @@ class TrackedPersonDetail extends Component
     public $snapchat_username = '';
     public $notification_delivery_type = 'both';
     public $monitoring_enabled = false;
+    public $monitoring_interval_minutes = 60;
     public $notify_social_changes = false;
     public $notify_instagram_changes = true;
     public $notify_tiktok_changes = true;
@@ -93,6 +94,7 @@ class TrackedPersonDetail extends Component
             'snapchat_username' => ['nullable', 'string', 'max:255'],
             'notification_delivery_type' => ['required', 'string', 'in:message,mail,both'],
             'monitoring_enabled' => ['boolean'],
+            'monitoring_interval_minutes' => ['required', 'integer', 'min:1', 'max:10080'],
             'notify_social_changes' => ['boolean'],
             'notify_instagram_changes' => ['boolean'],
             'notify_tiktok_changes' => ['boolean'],
@@ -124,6 +126,7 @@ class TrackedPersonDetail extends Component
             'snapchat_username' => $this->normalizeHandle($validated['snapchat_username'] ?? null),
             'notification_delivery_type' => $validated['notification_delivery_type'],
             'monitoring_enabled' => (bool) $this->monitoring_enabled,
+            'monitoring_interval_minutes' => (int) $validated['monitoring_interval_minutes'],
             'notify_social_changes' => (bool) $this->notify_social_changes,
             'notify_instagram_changes' => (bool) $this->notify_instagram_changes,
             'notify_tiktok_changes' => (bool) $this->notify_tiktok_changes,
@@ -981,6 +984,7 @@ class TrackedPersonDetail extends Component
             ? $trackedPerson->notification_delivery_type
             : 'both';
         $this->monitoring_enabled = (bool) $trackedPerson->monitoring_enabled;
+        $this->monitoring_interval_minutes = max(1, (int) ($trackedPerson->monitoring_interval_minutes ?: 60));
         $this->notify_social_changes = (bool) $trackedPerson->notify_social_changes;
         $this->notify_instagram_changes = (bool) $trackedPerson->notify_instagram_changes;
         $this->notify_tiktok_changes = (bool) $trackedPerson->notify_tiktok_changes;
