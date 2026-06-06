@@ -1274,6 +1274,52 @@ function firstInstagramPostImageUrl(item = {}) {
     .find(Boolean) || null;
 }
 
+function firstInstagramPostVideoUrl(item = {}) {
+  const candidates = [
+    item.video_url,
+    item.video_versions?.[0]?.url,
+  ];
+
+  return candidates
+    .map((candidate) => normalizeText(String(candidate || '')))
+    .find(Boolean) || null;
+}
+
+function normalizeInstagramPostMedia(item = {}, position = 0) {
+  const previewUrl = firstInstagramPostImageUrl(item);
+  const videoUrl = firstInstagramPostVideoUrl(item);
+  const mediaType = videoUrl || Number(item.media_type) === 2 ? 'video' : 'image';
+  const imageCandidate = item.image_versions2?.candidates?.[0] || {};
+  const width = Number(item.original_width || imageCandidate.width || 0);
+  const height = Number(item.original_height || imageCandidate.height || 0);
+  const durationSeconds = Number(item.video_duration || item.duration || 0);
+  const sourceUrl = mediaType === 'video' ? videoUrl : previewUrl;
+
+  if (!sourceUrl && !previewUrl) {
+    return null;
+  }
+
+  return {
+    position,
+    mediaType,
+    sourceUrl: sourceUrl || previewUrl,
+    previewUrl,
+    width: Number.isFinite(width) && width > 0 ? width : null,
+    height: Number.isFinite(height) && height > 0 ? height : null,
+    durationSeconds: Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : null,
+  };
+}
+
+function normalizeInstagramPostMediaCollection(item = {}) {
+  const rawMedia = Array.isArray(item.carousel_media) && item.carousel_media.length > 0
+    ? item.carousel_media
+    : [item];
+
+  return rawMedia
+    .map((media, position) => normalizeInstagramPostMedia(media, position))
+    .filter(Boolean);
+}
+
 function normalizeInstagramTimelinePost(item, username) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) {
     return null;
@@ -1314,16 +1360,19 @@ function normalizeInstagramTimelinePost(item, username) {
     : (hasFiniteNumericValue(item.edge_media_to_comment?.count)
       ? Number(item.edge_media_to_comment.count)
       : null);
+  const media = normalizeInstagramPostMediaCollection(item);
 
   return {
+    mediaPk: normalizeText(String(item.pk || item.id || '')) || null,
     shortcode,
     mediaType,
     postUrl: `https://www.instagram.com/${mediaType === 'reel' ? 'reel' : (mediaType === 'tv' ? 'tv' : 'p')}/${shortcode}/`,
-    thumbnailUrl: firstInstagramPostImageUrl(item),
+    thumbnailUrl: media[0]?.previewUrl || firstInstagramPostImageUrl(item),
     caption,
     publishedAt: normalizeInstagramPostTimestamp(item.taken_at || item.taken_at_timestamp),
     likesCount,
     commentsCount,
+    media,
     ownerUsername: ownerUsername || targetUsername || null,
     source: 'timeline-api',
   };
@@ -1776,6 +1825,17 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
       publishedAt: details.publishedAt || link.publishedAt || null,
       likesCount: likesCount ?? link.likesCount ?? null,
       commentsCount: commentsCount ?? link.commentsCount ?? null,
+      media: Array.isArray(link.media) && link.media.length > 0
+        ? link.media
+        : [{
+          position: 0,
+          mediaType: link.mediaType === 'reel' || link.mediaType === 'tv' ? 'video' : 'image',
+          sourceUrl: details.thumbnailUrl || link.thumbnailUrl || null,
+          previewUrl: details.thumbnailUrl || link.thumbnailUrl || null,
+          width: null,
+          height: null,
+          durationSeconds: null,
+        }].filter((media) => Boolean(media.sourceUrl)),
     });
     rateLimited = rateLimited || Boolean(details.rateLimited);
 

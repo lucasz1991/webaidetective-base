@@ -42,6 +42,8 @@ class InstagramProfileDetail extends Component
                 ->latest('scanned_at')
                 ->limit(10),
             'posts' => fn ($query) => $query
+                ->with('media')
+                ->withCount('metrics')
                 ->latest('published_at')
                 ->latest('last_seen_at')
                 ->limit(24),

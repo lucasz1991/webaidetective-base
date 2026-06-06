@@ -3,15 +3,18 @@
 namespace App\Services\TrackedPeople;
 
 use App\Models\InstagramPost;
+use App\Models\InstagramPostMetric;
 use App\Models\InstagramProfile;
 use App\Models\InstagramPostScan;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Services\Billing\ScanCreditService;
+use App\Services\Social\InstagramPostMediaStorage;
 use App\Services\Social\InstagramScraper;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class TrackedPersonInstagramPostScanService
 {
@@ -20,6 +23,7 @@ class TrackedPersonInstagramPostScanService
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
+        private readonly InstagramPostMediaStorage $postMediaStorage,
     ) {
     }
 
@@ -83,7 +87,7 @@ class TrackedPersonInstagramPostScanService
         $posts = $this->normalizePosts($postPayload['items'] ?? []);
         $scannedAt = now('UTC');
 
-        $scan = DB::transaction(function () use (
+        $stored = DB::transaction(function () use (
             $trackedPerson,
             $profile,
             $snapshot,
@@ -91,7 +95,7 @@ class TrackedPersonInstagramPostScanService
             $postPayload,
             $posts,
             $scannedAt,
-        ): InstagramPostScan {
+        ): array {
             $scan = InstagramPostScan::create([
                 'instagram_profile_id' => $profile->id,
                 'tracked_person_id' => $trackedPerson->id,
@@ -112,14 +116,17 @@ class TrackedPersonInstagramPostScanService
                 'scanned_at' => $scannedAt,
             ]);
             $counts = ['new' => 0, 'updated' => 0, 'unchanged' => 0];
+            $mediaQueue = [];
 
             foreach ($posts as $postData) {
+                $mediaItems = $postData['media_items'] ?? [];
+                unset($postData['media_items']);
                 $post = InstagramPost::withTrashed()
                     ->where('shortcode', $postData['shortcode'])
                     ->first();
 
                 if (! $post) {
-                    InstagramPost::create([
+                    $post = InstagramPost::create([
                         ...$postData,
                         'instagram_profile_id' => $profile->id,
                         'first_seen_scan_id' => $scan->id,
@@ -129,30 +136,49 @@ class TrackedPersonInstagramPostScanService
                         'last_scanned_at' => $scannedAt,
                     ]);
                     $counts['new']++;
+                } else {
+                    $updateData = $this->withoutEmptyReplacementValues($postData);
+                    $changed = collect([
+                        'likes_count',
+                        'comments_count',
+                        'caption',
+                        'published_at',
+                        'media_type',
+                        'media_pk',
+                        'media_count',
+                    ])->contains(function (string $field) use ($post, $updateData): bool {
+                        return array_key_exists($field, $updateData)
+                            && $this->valuesDiffer($post->{$field}, $updateData[$field]);
+                    });
 
-                    continue;
+                    $post->restore();
+                    $post->forceFill([
+                        ...$updateData,
+                        'instagram_profile_id' => $profile->id,
+                        'last_seen_scan_id' => $scan->id,
+                        'first_seen_scan_id' => $post->first_seen_scan_id ?: $scan->id,
+                        'first_seen_at' => $post->first_seen_at ?: $scannedAt,
+                        'last_seen_at' => $scannedAt,
+                        'last_scanned_at' => $scannedAt,
+                    ])->save();
+                    $counts[$changed ? 'updated' : 'unchanged']++;
                 }
 
-                $changed = collect([
-                    'likes_count',
-                    'comments_count',
-                    'caption',
-                    'thumbnail_url',
-                    'published_at',
-                    'media_type',
-                ])->contains(fn (string $field): bool => $this->valuesDiffer($post->{$field}, $postData[$field] ?? null));
+                InstagramPostMetric::updateOrCreate(
+                    [
+                        'instagram_post_id' => $post->id,
+                        'instagram_post_scan_id' => $scan->id,
+                    ],
+                    [
+                        'likes_count' => $postData['likes_count'] ?? null,
+                        'comments_count' => $postData['comments_count'] ?? null,
+                        'observed_at' => $scannedAt,
+                    ],
+                );
 
-                $post->restore();
-                $post->forceFill([
-                    ...$postData,
-                    'instagram_profile_id' => $profile->id,
-                    'last_seen_scan_id' => $scan->id,
-                    'first_seen_scan_id' => $post->first_seen_scan_id ?: $scan->id,
-                    'first_seen_at' => $post->first_seen_at ?: $scannedAt,
-                    'last_seen_at' => $scannedAt,
-                    'last_scanned_at' => $scannedAt,
-                ])->save();
-                $counts[$changed ? 'updated' : 'unchanged']++;
+                if ($mediaItems !== []) {
+                    $mediaQueue[$post->id] = $mediaItems;
+                }
             }
 
             $scan->forceFill([
@@ -161,8 +187,29 @@ class TrackedPersonInstagramPostScanService
                 'unchanged_count' => $counts['unchanged'],
             ])->save();
 
-            return $scan;
+            return [
+                'scan' => $scan,
+                'media_queue' => $mediaQueue,
+            ];
         });
+        /** @var InstagramPostScan $scan */
+        $scan = $stored['scan'];
+
+        foreach ($stored['media_queue'] as $postId => $mediaItems) {
+            try {
+                $post = InstagramPost::with('instagramProfile')->find($postId);
+
+                if ($post) {
+                    $this->postMediaStorage->storeForPost($post, $mediaItems);
+                }
+            } catch (\Throwable $exception) {
+                Log::warning('Lokale Speicherung der Instagram-Beitragsmedien ist fehlgeschlagen.', [
+                    'instagram_post_id' => $postId,
+                    'instagram_post_scan_id' => $scan->id,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
+        }
 
         $trackedPerson->forceFill([
             'last_instagram_status_level' => $scan->status_level,
@@ -206,30 +253,86 @@ class TrackedPersonInstagramPostScanService
 
             $normalized[$shortcode] = [
                 'shortcode' => $shortcode,
+                'media_pk' => $this->nullableString($post['mediaPk'] ?? null),
                 'media_type' => in_array(($post['mediaType'] ?? null), ['post', 'reel', 'tv'], true)
                     ? $post['mediaType']
                     : 'post',
                 'post_url' => trim((string) ($post['postUrl'] ?? 'https://www.instagram.com/p/'.$shortcode.'/')),
                 'thumbnail_url' => $this->nullableString($post['thumbnailUrl'] ?? null),
+                'media_count' => count($this->normalizeMediaItems($post)),
                 'caption' => $this->nullableString($post['caption'] ?? null),
                 'likes_count' => $this->nullableInteger($post['likesCount'] ?? null),
                 'comments_count' => $this->nullableInteger($post['commentsCount'] ?? null),
                 'published_at' => $this->parseTimestamp($post['publishedAt'] ?? null),
                 'raw_post' => $post,
+                'media_items' => $this->normalizeMediaItems($post),
             ];
         }
 
         return array_values($normalized);
     }
 
-    private function valuesDiffer(mixed $before, mixed $after): bool
+    private function normalizeMediaItems(array $post): array
     {
-        if ($before instanceof Carbon) {
-            $before = $before->toIso8601String();
+        $mediaItems = is_array($post['media'] ?? null) ? $post['media'] : [];
+
+        if ($mediaItems === [] && filled($post['thumbnailUrl'] ?? null)) {
+            $mediaItems = [[
+                'position' => 0,
+                'mediaType' => 'image',
+                'sourceUrl' => $post['thumbnailUrl'],
+                'previewUrl' => $post['thumbnailUrl'],
+            ]];
         }
 
-        if ($after instanceof Carbon) {
-            $after = $after->toIso8601String();
+        return collect($mediaItems)
+            ->filter(fn (mixed $media): bool => is_array($media))
+            ->map(function (array $media, int $index): array {
+                return [
+                    'position' => max(0, (int) ($media['position'] ?? $index)),
+                    'media_type' => ($media['mediaType'] ?? null) === 'video' ? 'video' : 'image',
+                    'source_url' => $this->nullableString($media['sourceUrl'] ?? null),
+                    'preview_url' => $this->nullableString($media['previewUrl'] ?? null),
+                    'width' => $this->nullableInteger($media['width'] ?? null),
+                    'height' => $this->nullableInteger($media['height'] ?? null),
+                    'duration_seconds' => is_numeric($media['durationSeconds'] ?? null)
+                        ? max(0, (float) $media['durationSeconds'])
+                        : null,
+                ];
+            })
+            ->filter(fn (array $media): bool => filled($media['source_url']) || filled($media['preview_url']))
+            ->unique('position')
+            ->sortBy('position')
+            ->values()
+            ->all();
+    }
+
+    private function withoutEmptyReplacementValues(array $postData): array
+    {
+        foreach ([
+            'media_pk',
+            'thumbnail_url',
+            'caption',
+            'likes_count',
+            'comments_count',
+            'published_at',
+        ] as $field) {
+            if (($postData[$field] ?? null) === null) {
+                unset($postData[$field]);
+            }
+        }
+
+        if (($postData['media_count'] ?? 0) === 0) {
+            unset($postData['media_count']);
+        }
+
+        return $postData;
+    }
+
+    private function valuesDiffer(mixed $before, mixed $after): bool
+    {
+        if ($before instanceof \DateTimeInterface && $after instanceof \DateTimeInterface) {
+            return $before->getTimestamp() !== $after->getTimestamp();
         }
 
         return $before !== $after;
@@ -242,7 +345,7 @@ class TrackedPersonInstagramPostScanService
         }
 
         try {
-            return Carbon::parse((string) $value)->utc();
+            return Carbon::parse((string) $value)->timezone(config('app.timezone'));
         } catch (\Throwable) {
             return null;
         }

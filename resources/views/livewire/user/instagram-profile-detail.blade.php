@@ -210,13 +210,27 @@
         </div>
         <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             @forelse($profile->posts as $post)
-                <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 transition hover:border-violet-300 hover:bg-violet-50">
-                    @if($post->thumbnail_url)
-                        <img src="{{ $post->thumbnail_url }}" alt="Instagram-Beitrag {{ $post->shortcode }}" class="h-48 w-full object-cover">
+                @php($primaryMedia = $post->media->first())
+                @php($mediaUrl = $primaryMedia?->media_url)
+                @php($previewUrl = $primaryMedia?->preview_media_url ?: $post->thumbnail_storage_url)
+                <article class="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 transition hover:border-violet-300 hover:bg-violet-50">
+                    @if($primaryMedia?->media_type === 'video' && $mediaUrl)
+                        <video controls preload="metadata" playsinline poster="{{ $previewUrl }}" class="h-48 w-full bg-black object-contain">
+                            <source src="{{ $mediaUrl }}" type="{{ $primaryMedia->mime_type ?: 'video/mp4' }}">
+                        </video>
+                    @elseif($mediaUrl || $previewUrl)
+                        <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="block">
+                            <img src="{{ $mediaUrl ?: $previewUrl }}" alt="Instagram-Beitrag {{ $post->shortcode }}" loading="lazy" class="h-48 w-full object-cover">
+                        </a>
                     @endif
                     <div class="p-3">
                         <div class="flex items-center justify-between gap-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            <span>{{ $post->media_type }}</span>
+                            <span>
+                                {{ $post->media_type }}
+                                @if($post->media_count > 1)
+                                    · {{ number_format($post->media_count) }} Medien
+                                @endif
+                            </span>
                             <span>{{ $post->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>
                         </div>
                         @if($post->caption)
@@ -226,8 +240,14 @@
                             <span>{{ $post->likes_count !== null ? number_format($post->likes_count) : '-' }} Likes</span>
                             <span>{{ $post->comments_count !== null ? number_format($post->comments_count) : '-' }} Kommentare</span>
                         </div>
+                        <div class="mt-1 text-xs text-slate-500">
+                            {{ number_format($post->metrics_count ?? 0) }} gespeicherte Messpunkte
+                        </div>
+                        <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs font-semibold text-violet-700 hover:text-violet-900">
+                            Auf Instagram öffnen
+                        </a>
                     </div>
-                </a>
+                </article>
             @empty
                 <p class="text-sm text-slate-500">Noch keine Beitraege gespeichert.</p>
             @endforelse

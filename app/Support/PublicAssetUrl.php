@@ -6,6 +6,8 @@ use App\Models\Setting;
 
 class PublicAssetUrl
 {
+    private static array $settingUrlCache = [];
+
     public static function storage(?string $path): ?string
     {
         $path = trim((string) $path);
@@ -39,19 +41,23 @@ class PublicAssetUrl
 
     private static function settingUrl(string $key): ?string
     {
+        if (array_key_exists($key, self::$settingUrlCache)) {
+            return self::$settingUrlCache[$key];
+        }
+
         $value = Setting::query()
             ->where('type', 'base')
             ->where('key', $key)
             ->value('value');
 
         if (! is_string($value)) {
-            return null;
+            return self::$settingUrlCache[$key] = null;
         }
 
         $value = trim($value);
 
         if ($value === '') {
-            return null;
+            return self::$settingUrlCache[$key] = null;
         }
 
         if (str_starts_with($value, '"') && str_ends_with($value, '"')) {
@@ -62,7 +68,7 @@ class PublicAssetUrl
             }
         }
 
-        return $value !== '' ? rtrim($value, '/') : null;
+        return self::$settingUrlCache[$key] = ($value !== '' ? rtrim($value, '/') : null);
     }
 
     private static function normalizeUrl(?string $url): ?string
