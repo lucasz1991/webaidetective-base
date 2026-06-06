@@ -224,6 +224,16 @@ function bindPublicBadges(root, cy) {
     update();
 }
 
+function schedulePublicBadgeUpdateFromCy(cy) {
+    activeRoots.forEach((root) => {
+        const state = instances.get(root);
+
+        if (state?.cy === cy) {
+            schedulePublicBadgeUpdate(root, cy);
+        }
+    });
+}
+
 function toElements(graph) {
     const nodes = (graph.nodes || []).map((node) => ({
         group: 'nodes',
@@ -650,7 +660,7 @@ function arrangeVisibleGraph(root, cy, animate = true) {
         }
     });
 
-    window.setTimeout(() => fitGraph(cy), animate ? 360 : 30);
+    window.setTimeout(() => fitGraph(cy, { tight: true }), animate ? 360 : 30);
 }
 
 function setSelected(root, cy, nodeId) {
@@ -872,26 +882,31 @@ function applyFilters(root, cy) {
     schedulePublicBadgeUpdate(root, cy);
 }
 
-function fitGraph(cy) {
+function fitGraph(cy, options = {}) {
     cy.resize();
-    const visible = cy.elements().not('.network-filtered');
+    const visibleNodes = cy.nodes().not('.network-filtered');
 
-    if (visible.length) {
-        const padding = Math.max(16, Math.min(56, Math.floor(Math.min(cy.width(), cy.height()) * 0.08)));
-        const bounds = visible.boundingBox();
-        const viewportWidth = Math.max(1, cy.width() - (padding * 2));
-        const viewportHeight = Math.max(1, cy.height() - (padding * 2));
-        const requiredZoom = Math.min(
-            viewportWidth / Math.max(1, bounds.w),
-            viewportHeight / Math.max(1, bounds.h),
-        );
-
-        if (Number.isFinite(requiredZoom) && requiredZoom > 0 && requiredZoom < cy.minZoom()) {
-            cy.minZoom(Math.max(0.002, requiredZoom * 0.85));
-        }
-
-        cy.fit(visible, padding);
+    if (!visibleNodes.length) {
+        return;
     }
+
+    const viewportMin = Math.min(cy.width(), cy.height());
+    const paddingRatio = options.tight ? 0.018 : 0.035;
+    const padding = Math.max(6, Math.min(options.tight ? 22 : 34, Math.floor(viewportMin * paddingRatio)));
+    const bounds = visibleNodes.boundingBox();
+    const viewportWidth = Math.max(1, cy.width() - (padding * 2));
+    const viewportHeight = Math.max(1, cy.height() - (padding * 2));
+    const requiredZoom = Math.min(
+        viewportWidth / Math.max(1, bounds.w),
+        viewportHeight / Math.max(1, bounds.h),
+    );
+
+    if (Number.isFinite(requiredZoom) && requiredZoom > 0 && requiredZoom < cy.minZoom()) {
+        cy.minZoom(Math.max(0.002, requiredZoom * 0.92));
+    }
+
+    cy.fit(visibleNodes, padding);
+    schedulePublicBadgeUpdateFromCy(cy);
 }
 
 function bindControls(root, cy) {
@@ -929,7 +944,7 @@ function bindControls(root, cy) {
             const action = button.dataset.networkAction;
 
             if (action === 'zoom-in') {
-                cy.zoom({ level: Math.min(2.2, cy.zoom() + 0.18), renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
+                cy.zoom({ level: Math.min(4.5, cy.zoom() + 0.18), renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } });
             }
 
             if (action === 'zoom-out') {
@@ -941,7 +956,7 @@ function bindControls(root, cy) {
 
             if (action === 'fit') {
                 setSelected(root, cy, null);
-                fitGraph(cy);
+                fitGraph(cy, { tight: true });
             }
         });
     });
@@ -981,7 +996,7 @@ async function initNetworkMap(root) {
         container,
         elements: initialElements,
         minZoom: 0.02,
-        maxZoom: 2.2,
+        maxZoom: 4.5,
         wheelSensitivity: 0.16,
         style: [
             {
@@ -1130,7 +1145,7 @@ async function initNetworkMap(root) {
             layout: initialLayout,
         });
 
-        const resizeHandler = () => fitGraph(cy);
+        const resizeHandler = () => fitGraph(cy, { tight: true });
 
         const storedFilters = readStoredFilters(root);
         const storedMinDegree = Number.isFinite(Number(storedFilters.minDegree))
@@ -1396,7 +1411,7 @@ async function loadPreparedGraph(root, detail) {
         });
 
         if (index === 0 || index % 4 === 0) {
-            fitGraph(cy);
+            fitGraph(cy, { tight: true });
         }
 
         await new Promise((resolve) => window.requestAnimationFrame(resolve));
@@ -1419,6 +1434,7 @@ async function loadPreparedGraph(root, detail) {
 
     window.requestAnimationFrame(() => {
         arrangeVisibleGraph(root, cy, false);
+        window.setTimeout(() => fitGraph(cy, { tight: true }), 60);
         window.setTimeout(() => updateBuildStatus(root, { visible: false, state: 'done' }), 900);
     });
 }
@@ -1487,6 +1503,7 @@ window.addEventListener('network-map-layout-refresh', (event) => {
     window.requestAnimationFrame(() => {
         state.cy.resize();
         arrangeVisibleGraph(root, state.cy, false);
+        window.setTimeout(() => fitGraph(state.cy, { tight: true }), 60);
     });
 });
 
