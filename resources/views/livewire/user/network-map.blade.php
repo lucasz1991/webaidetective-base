@@ -4,6 +4,7 @@
     data-network-map-id="{{ $mapId }}"
     data-network-filter-scope="{{ $contextTrackedPersonId ? 'person-'.$contextTrackedPersonId : 'global' }}"
     data-network-max-visible-profiles="100"
+    data-network-layout-mode="clusters"
     data-network-lazy="true"
     wire:init="prepareGraph"
     wire:loading.class="cursor-wait"
@@ -272,16 +273,29 @@
                                 <option value="0">Alle</option>
                             </select>
                         </label>
+                        <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-slate-600">
+                            <span>Darstellung</span>
+                            <select data-network-layout-mode class="border-0 bg-transparent p-0 text-xs font-bold text-slate-900 focus:ring-0">
+                                <option value="clusters">Cluster</option>
+                                <option value="spiral">Spirale</option>
+                                <option value="radial">Radial</option>
+                                <option value="concentric">Ringe</option>
+                                <option value="grid">Raster</option>
+                            </select>
+                        </label>
                         <span class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-slate-600">
                             <span data-network-visible-profiles-count>0 sichtbar</span>
                             <span class="text-slate-400">|</span>
                             <span>effektiv min: <span data-network-effective-min-degree>0</span></span>
+                            <span class="text-slate-400">|</span>
+                            <span data-network-layout-state>Nicht gespeichert</span>
                         </span>
                     </div>
                     <div class="flex items-center gap-2 border-t border-slate-200 pt-3 text-xs font-semibold text-slate-600">
                         <button type="button" data-network-action="zoom-out" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">-</button>
                         <button type="button" data-network-action="zoom-in" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">+</button>
                         <button type="button" data-network-action="fit" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">Reset</button>
+                        <button type="button" data-network-layout-reset class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">Neu anordnen</button>
                     </div>
                 </div>
 

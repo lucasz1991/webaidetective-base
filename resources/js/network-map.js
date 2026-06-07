@@ -1,5 +1,8 @@
 const instances = new WeakMap();
 const activeRoots = new Set();
+const DEFAULT_LAYOUT_MODE = 'clusters';
+const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
+const LAYOUT_STORAGE_PREFIX = 'network-map-render:v2';
 let cytoscapeLoader;
 
 function loadCytoscape() {
@@ -303,6 +306,253 @@ function writeStoredFilters(root, state) {
     }));
 }
 
+function normalizeLayoutMode(value) {
+    const mode = String(value || '').trim();
+
+    return LAYOUT_MODES.has(mode) ? mode : DEFAULT_LAYOUT_MODE;
+}
+
+function layoutModeStorageKey(root) {
+    return `network-map-layout-mode:${root.dataset.networkFilterScope || root.dataset.networkMapId || 'default'}`;
+}
+
+function readStoredLayoutMode(root) {
+    try {
+        return normalizeLayoutMode(localStorage.getItem(layoutModeStorageKey(root)) || root.dataset.networkLayoutMode);
+    } catch {
+        return normalizeLayoutMode(root.dataset.networkLayoutMode);
+    }
+}
+
+function writeStoredLayoutMode(root, mode) {
+    try {
+        localStorage.setItem(layoutModeStorageKey(root), normalizeLayoutMode(mode));
+    } catch {
+        // localStorage can be unavailable in hardened browser contexts.
+    }
+}
+
+function updateLayoutControls(root, state) {
+    root.querySelectorAll('[data-network-layout-mode]').forEach((control) => {
+        control.value = normalizeLayoutMode(state?.layoutMode);
+    });
+}
+
+function setLayoutStatus(root, text) {
+    root.querySelectorAll('[data-network-layout-state]').forEach((element) => {
+        element.textContent = text;
+    });
+}
+
+function stableHash(value) {
+    let hash = 2166136261;
+    const text = String(value || '');
+
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+
+    return (hash >>> 0).toString(36);
+}
+
+function graphSignature(cy) {
+    const nodes = cy.nodes().map((node) => node.id()).sort().join(',');
+    const edges = cy.edges()
+        .map((edge) => `${edge.id()}:${edge.source().id()}>${edge.target().id()}:${edge.data('networkType') || ''}`)
+        .sort()
+        .join(',');
+
+    return stableHash(`${nodes}|${edges}`);
+}
+
+function graphIdentity(root, state, cy) {
+    const dataHash = String(state?.graphDataHash || root.dataset.networkGraphHash || '').trim();
+
+    if (dataHash) {
+        return `hash:${dataHash}`;
+    }
+
+    const token = String(state?.graphToken || root.dataset.networkGraphToken || '').trim();
+
+    if (token) {
+        return `token:${token}`;
+    }
+
+    if (!cy?.nodes?.().length) {
+        return '';
+    }
+
+    return `sig:${graphSignature(cy)}`;
+}
+
+function layoutStorageKey(root, state, cy) {
+    const scope = root.dataset.networkFilterScope || root.dataset.networkMapId || 'default';
+    const identity = graphIdentity(root, state, cy);
+
+    return identity ? `${LAYOUT_STORAGE_PREFIX}:${scope}:${identity}` : '';
+}
+
+function updateGraphIdentity(root, state, detail = {}) {
+    state.graphToken = String(detail.token || '').trim();
+    state.graphDataHash = String(detail.dataHash || detail.data_hash || '').trim();
+    root.dataset.networkGraphToken = state.graphToken;
+    root.dataset.networkGraphHash = state.graphDataHash;
+}
+
+function readStoredLayout(root, state, cy) {
+    const key = layoutStorageKey(root, state, cy);
+
+    if (!key) {
+        return null;
+    }
+
+    try {
+        const stored = JSON.parse(localStorage.getItem(key) || 'null');
+
+        return stored && stored.version === 2 ? { key, stored } : null;
+    } catch {
+        return null;
+    }
+}
+
+function isFinitePoint(point) {
+    return Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y));
+}
+
+function writeStoredLayout(root, cy) {
+    const state = instances.get(root);
+
+    if (!state || state.isLoadingGraph || state.suppressLayoutSave || !cy.nodes().length) {
+        return;
+    }
+
+    const key = layoutStorageKey(root, state, cy);
+
+    if (!key) {
+        return;
+    }
+
+    const positions = {};
+
+    cy.nodes().forEach((node) => {
+        const position = node.position();
+
+        if (isFinitePoint(position)) {
+            positions[node.id()] = {
+                x: Math.round(Number(position.x) * 10) / 10,
+                y: Math.round(Number(position.y) * 10) / 10,
+            };
+        }
+    });
+
+    try {
+        localStorage.setItem(key, JSON.stringify({
+            version: 2,
+            savedAt: Date.now(),
+            layoutMode: normalizeLayoutMode(state.layoutMode),
+            nodeCount: cy.nodes().length,
+            edgeCount: cy.edges().length,
+            zoom: Math.round(cy.zoom() * 10000) / 10000,
+            pan: {
+                x: Math.round(cy.pan().x * 10) / 10,
+                y: Math.round(cy.pan().y * 10) / 10,
+            },
+            positions,
+        }));
+        setLayoutStatus(root, 'Positionen gespeichert');
+    } catch (error) {
+        console.warn('Netzwerk-Layout konnte nicht gespeichert werden.', error);
+        setLayoutStatus(root, 'Speichern nicht moeglich');
+    }
+}
+
+function scheduleStoredLayoutSave(root, cy, delay = 420) {
+    const state = instances.get(root);
+
+    if (!state || state.isLoadingGraph || state.suppressLayoutSave || !cy.nodes().length) {
+        return;
+    }
+
+    window.clearTimeout(state.layoutSaveTimer);
+    state.layoutSaveTimer = window.setTimeout(() => writeStoredLayout(root, cy), delay);
+}
+
+function scheduleStoredLayoutSaveFromCy(cy, delay = 420) {
+    activeRoots.forEach((root) => {
+        const state = instances.get(root);
+
+        if (state?.cy === cy) {
+            scheduleStoredLayoutSave(root, cy, delay);
+        }
+    });
+}
+
+function applyStoredLayout(root, cy, options = {}) {
+    const state = instances.get(root);
+    const payload = readStoredLayout(root, state, cy);
+
+    if (!state || !payload?.stored?.positions) {
+        return false;
+    }
+
+    const entries = Object.entries(payload.stored.positions)
+        .filter(([id, position]) => cy.getElementById(id).length && isFinitePoint(position));
+    const minExpected = Math.max(1, Math.floor(cy.nodes().length * (options.minRatio ?? 0.75)));
+
+    if (entries.length < minExpected) {
+        return false;
+    }
+
+    state.suppressLayoutSave = true;
+    state.layoutMode = normalizeLayoutMode(payload.stored.layoutMode || state.layoutMode);
+    updateLayoutControls(root, state);
+    writeStoredLayoutMode(root, state.layoutMode);
+
+    cy.batch(() => {
+        entries.forEach(([id, position]) => {
+            cy.getElementById(id).position({
+                x: Number(position.x),
+                y: Number(position.y),
+            });
+        });
+    });
+
+    if (isFinitePoint(payload.stored.pan) && Number.isFinite(Number(payload.stored.zoom))) {
+        cy.zoom(Math.max(cy.minZoom(), Math.min(cy.maxZoom(), Number(payload.stored.zoom))));
+        cy.pan({
+            x: Number(payload.stored.pan.x),
+            y: Number(payload.stored.pan.y),
+        });
+    }
+
+    window.requestAnimationFrame(() => {
+        state.suppressLayoutSave = false;
+        schedulePublicBadgeUpdate(root, cy);
+    });
+
+    state.layoutRestored = true;
+    state.hasAppliedLayout = true;
+    setLayoutStatus(root, 'Letzter Stand geladen');
+
+    return true;
+}
+
+function clearStoredLayout(root, cy) {
+    const state = instances.get(root);
+    const key = layoutStorageKey(root, state, cy);
+
+    if (!key) {
+        return;
+    }
+
+    try {
+        localStorage.removeItem(key);
+    } catch {
+        // Ignore storage errors.
+    }
+}
+
 function visibleConnectedEdges(node) {
     return node.connectedEdges().not('.network-filtered');
 }
@@ -527,19 +777,29 @@ function bindOpenGestures(element, openCallback) {
     });
 }
 
-function arrangeVisibleGraph(root, cy, animate = true) {
-    const visibleNodes = cy.nodes().not('.network-filtered');
+function layoutSort(a, b) {
+    return visibleDegree(b) - visibleDegree(a)
+        || String(a.data('username') || a.data('handle') || a.id())
+            .localeCompare(String(b.data('username') || b.data('handle') || b.id()));
+}
 
-    if (!visibleNodes.length) {
-        return;
-    }
+function layoutCenter(visibleNodes, minWidth = 1200, minHeight = 820) {
+    const width = Math.max(minWidth, visibleNodes.length * 22);
+    const height = Math.max(minHeight, visibleNodes.length * 16);
 
-    const width = Math.max(1200, visibleNodes.length * 22);
-    const height = Math.max(820, visibleNodes.length * 16);
-    const centerX = width / 2;
-    const centerY = height / 2;
+    return { width, height, centerX: width / 2, centerY: height / 2 };
+}
+
+function primaryLayoutNode(nodes) {
+    return nodes.find((node) => Boolean(node.data('isPrimary')))
+        || nodes.find((node) => node.data('type') === 'person')
+        || nodes[0];
+}
+
+function clusterLayoutUpdates(cy, visibleNodes) {
+    const { centerX, centerY } = layoutCenter(visibleNodes);
     const nodes = visibleNodes.toArray();
-    const primary = nodes.find((node) => Boolean(node.data('isPrimary'))) || nodes.find((node) => node.data('type') === 'person') || nodes[0];
+    const primary = primaryLayoutNode(nodes);
     const anchors = [];
     const children = [];
     const anchorGroups = new Map();
@@ -559,10 +819,7 @@ function arrangeVisibleGraph(root, cy, animate = true) {
         children.push(node);
     });
 
-    anchors.sort((a, b) => (
-        visibleDegree(b) - visibleDegree(a)
-        || String(a.data('username') || a.id()).localeCompare(String(b.data('username') || b.id()))
-    ));
+    anchors.sort(layoutSort);
 
     const updates = [{ node: primary, position: { x: centerX, y: centerY } }];
     const anchorPositions = new Map();
@@ -597,7 +854,7 @@ function arrangeVisibleGraph(root, cy, animate = true) {
     };
 
     children
-        .sort((a, b) => visibleDegree(b) - visibleDegree(a) || String(a.data('username') || a.id()).localeCompare(String(b.data('username') || b.id())))
+        .sort(layoutSort)
         .forEach((node) => {
             const anchor = preferredAnchorForChild(node);
 
@@ -652,15 +909,244 @@ function arrangeVisibleGraph(root, cy, animate = true) {
         updates[0].position = { x: centerX, y: centerY };
     }
 
-    updates.forEach(({ node, position }) => {
-        if (animate) {
-            node.animate({ position }, { duration: 320 });
+    return updates;
+}
+
+function spiralLayoutUpdates(visibleNodes) {
+    const { centerX, centerY } = layoutCenter(visibleNodes, 1000, 760);
+    const nodes = visibleNodes.toArray();
+    const primary = primaryLayoutNode(nodes);
+    const sortedNodes = nodes.filter((node) => node.id() !== primary.id()).sort(layoutSort);
+    const updates = [{ node: primary, position: { x: centerX, y: centerY } }];
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
+    sortedNodes.forEach((node, index) => {
+        const step = index + 1;
+        const radius = 92 + (46 * Math.sqrt(step));
+        const angle = step * goldenAngle;
+
+        updates.push({
+            node,
+            position: {
+                x: centerX + Math.cos(angle) * radius,
+                y: centerY + Math.sin(angle) * radius,
+            },
+        });
+    });
+
+    return updates;
+}
+
+function radialDistances(cy, primary) {
+    const distances = new Map([[primary.id(), 0]]);
+    const queue = [primary];
+
+    while (queue.length) {
+        const node = queue.shift();
+        const distance = distances.get(node.id()) || 0;
+
+        node.connectedEdges()
+            .not('.network-filtered')
+            .connectedNodes()
+            .forEach((connectedNode) => {
+                if (distances.has(connectedNode.id())) {
+                    return;
+                }
+
+                distances.set(connectedNode.id(), distance + 1);
+                queue.push(connectedNode);
+            });
+    }
+
+    return distances;
+}
+
+function ringLayoutUpdates(visibleNodes, groups, options = {}) {
+    const { centerX, centerY } = layoutCenter(visibleNodes, options.minWidth || 1100, options.minHeight || 780);
+    const updates = [];
+    const firstGroup = groups.shift() || [];
+    const centerNode = firstGroup[0] || visibleNodes.first();
+
+    if (centerNode && centerNode.length !== 0) {
+        updates.push({ node: centerNode, position: { x: centerX, y: centerY } });
+    }
+
+    groups
+        .filter((group) => group.length)
+        .forEach((group, ringIndex) => {
+            const radius = (options.baseRadius || 220)
+                + (ringIndex * (options.ringGap || 175))
+                + Math.min(190, Math.max(0, group.length - 18) * 4);
+
+            group.sort(layoutSort).forEach((node, index) => {
+                const angle = (-Math.PI / 2) + ((Math.PI * 2) * (index / Math.max(1, group.length)));
+
+                updates.push({
+                    node,
+                    position: {
+                        x: centerX + Math.cos(angle) * radius,
+                        y: centerY + Math.sin(angle) * radius,
+                    },
+                });
+            });
+        });
+
+    return updates;
+}
+
+function radialLayoutUpdates(cy, visibleNodes) {
+    const nodes = visibleNodes.toArray();
+    const primary = primaryLayoutNode(nodes);
+    const distances = radialDistances(cy, primary);
+    const rings = new Map();
+    const unconnected = [];
+
+    nodes.forEach((node) => {
+        if (node.id() === primary.id()) {
+            return;
+        }
+
+        const distance = distances.get(node.id());
+
+        if (!Number.isFinite(distance)) {
+            unconnected.push(node);
+            return;
+        }
+
+        const key = Math.min(4, Math.max(1, distance));
+        const group = rings.get(key) || [];
+        group.push(node);
+        rings.set(key, group);
+    });
+
+    return ringLayoutUpdates(visibleNodes, [
+        [primary],
+        ...(Array.from(rings.keys()).sort((a, b) => a - b).map((key) => rings.get(key))),
+        unconnected,
+    ], { baseRadius: 210, ringGap: 175 });
+}
+
+function concentricLayoutUpdates(visibleNodes) {
+    const nodes = visibleNodes.toArray();
+    const primary = primaryLayoutNode(nodes);
+    const people = [];
+    const strongProfiles = [];
+    const profiles = [];
+    const candidates = [];
+
+    nodes.forEach((node) => {
+        if (node.id() === primary.id()) {
+            return;
+        }
+
+        if (node.data('type') === 'person') {
+            people.push(node);
+        } else if (visibleDegree(node) >= 3 || visibilityValue(node.data()) === 'public') {
+            strongProfiles.push(node);
+        } else if (node.data('type') === 'candidate') {
+            candidates.push(node);
         } else {
-            node.position(position);
+            profiles.push(node);
         }
     });
 
-    window.setTimeout(() => fitGraph(cy, { tight: true }), animate ? 360 : 30);
+    return ringLayoutUpdates(visibleNodes, [
+        [primary],
+        people,
+        strongProfiles,
+        profiles,
+        candidates,
+    ], { baseRadius: 205, ringGap: 165 });
+}
+
+function gridLayoutUpdates(visibleNodes) {
+    const nodes = visibleNodes.toArray().sort(layoutSort);
+    const primary = primaryLayoutNode(nodes);
+    const sortedNodes = [primary, ...nodes.filter((node) => node.id() !== primary.id())];
+    const columns = Math.max(1, Math.ceil(Math.sqrt(sortedNodes.length * 1.35)));
+    const spacingX = 104;
+    const spacingY = 104;
+    const width = Math.max(820, columns * spacingX);
+    const rows = Math.max(1, Math.ceil(sortedNodes.length / columns));
+    const height = Math.max(680, rows * spacingY);
+    const startX = (width / 2) - (((columns - 1) * spacingX) / 2);
+    const startY = (height / 2) - (((rows - 1) * spacingY) / 2);
+
+    return sortedNodes.map((node, index) => {
+        const row = Math.floor(index / columns);
+        const column = index % columns;
+
+        return {
+            node,
+            position: {
+                x: startX + (column * spacingX),
+                y: startY + (row * spacingY),
+            },
+        };
+    });
+}
+
+function layoutUpdatesForMode(root, cy, visibleNodes, mode) {
+    if (mode === 'spiral') {
+        return spiralLayoutUpdates(visibleNodes);
+    }
+
+    if (mode === 'radial') {
+        return radialLayoutUpdates(cy, visibleNodes);
+    }
+
+    if (mode === 'concentric') {
+        return concentricLayoutUpdates(visibleNodes);
+    }
+
+    if (mode === 'grid') {
+        return gridLayoutUpdates(visibleNodes);
+    }
+
+    return clusterLayoutUpdates(cy, visibleNodes);
+}
+
+function arrangeVisibleGraph(root, cy, animate = true, mode = null) {
+    const state = instances.get(root);
+    const visibleNodes = cy.nodes().not('.network-filtered');
+
+    if (!visibleNodes.length) {
+        return;
+    }
+
+    const layoutMode = normalizeLayoutMode(mode || state?.layoutMode);
+    const updates = layoutUpdatesForMode(root, cy, visibleNodes, layoutMode);
+    const shouldAnimate = animate && updates.length <= 650;
+
+    if (state) {
+        state.layoutMode = layoutMode;
+        state.hasAppliedLayout = true;
+        state.layoutRestored = false;
+        state.suppressLayoutSave = true;
+        updateLayoutControls(root, state);
+        writeStoredLayoutMode(root, layoutMode);
+        setLayoutStatus(root, 'Layout wird berechnet');
+    }
+
+    if (shouldAnimate) {
+        updates.forEach(({ node, position }) => {
+            node.animate({ position }, { duration: 320 });
+        });
+    } else {
+        cy.batch(() => {
+            updates.forEach(({ node, position }) => node.position(position));
+        });
+    }
+
+    window.setTimeout(() => {
+        if (state) {
+            state.suppressLayoutSave = false;
+            state.layoutRestored = true;
+        }
+
+        fitGraph(cy, { tight: true });
+        scheduleStoredLayoutSave(root, cy, 120);
+    }, shouldAnimate ? 360 : 30);
 }
 
 function setSelected(root, cy, nodeId) {
@@ -802,7 +1288,7 @@ function updateSelectionPanel(root, cy) {
     });
 }
 
-function applyFilters(root, cy) {
+function applyFilters(root, cy, options = {}) {
     const state = instances.get(root);
 
     if (!state) {
@@ -888,7 +1374,11 @@ function applyFilters(root, cy) {
     }
 
     writeStoredFilters(root, state);
-    arrangeVisibleGraph(root, cy, true);
+
+    if (options.layout === true) {
+        arrangeVisibleGraph(root, cy, options.animate !== false, state.layoutMode);
+    }
+
     updateSelectionPanel(root, cy);
     schedulePublicBadgeUpdate(root, cy);
 }
@@ -918,6 +1408,7 @@ function fitGraph(cy, options = {}) {
 
     cy.fit(visibleNodes, padding);
     schedulePublicBadgeUpdateFromCy(cy);
+    scheduleStoredLayoutSaveFromCy(cy, 220);
 }
 
 function bindControls(root, cy) {
@@ -936,6 +1427,7 @@ function bindControls(root, cy) {
             }
 
             applyFilters(root, cy);
+            fitGraph(cy, { tight: true });
         });
     });
 
@@ -943,11 +1435,29 @@ function bindControls(root, cy) {
         state.minDegree = Math.max(0, Number(event.target.value) || 0);
         state.hasStoredMinDegree = true;
         applyFilters(root, cy);
+        fitGraph(cy, { tight: true });
     });
 
     root.querySelector('[data-network-filter-max-profiles]')?.addEventListener('change', (event) => {
         state.maxVisibleProfiles = Math.max(0, Number(event.target.value) || 0);
         applyFilters(root, cy);
+        fitGraph(cy, { tight: true });
+    });
+
+    root.querySelectorAll('[data-network-layout-mode]').forEach((control) => {
+        control.addEventListener('change', (event) => {
+            state.layoutMode = normalizeLayoutMode(event.target.value);
+            writeStoredLayoutMode(root, state.layoutMode);
+            clearStoredLayout(root, cy);
+            arrangeVisibleGraph(root, cy, true, state.layoutMode);
+        });
+    });
+
+    root.querySelectorAll('[data-network-layout-reset]').forEach((button) => {
+        button.addEventListener('click', () => {
+            clearStoredLayout(root, cy);
+            arrangeVisibleGraph(root, cy, true, state.layoutMode);
+        });
     });
 
     root.querySelectorAll('[data-network-action]').forEach((button) => {
@@ -970,6 +1480,22 @@ function bindControls(root, cy) {
                 fitGraph(cy, { tight: true });
             }
         });
+    });
+}
+
+function bindLayoutPersistence(root, cy) {
+    const state = instances.get(root);
+
+    cy.on('dragfree', 'node', () => {
+        if (state) {
+            state.layoutRestored = true;
+        }
+
+        scheduleStoredLayoutSave(root, cy, 120);
+    });
+
+    cy.on('pan zoom', () => {
+        scheduleStoredLayoutSave(root, cy, 520);
     });
 }
 
@@ -1192,6 +1718,14 @@ async function initNetworkMap(root) {
             loadedEdges: initialElements.filter((element) => element.group === 'edges').length,
             lastNodeTap: null,
             nodeTapTimer: null,
+            graphToken: String(root.dataset.networkGraphToken || '').trim(),
+            graphDataHash: String(root.dataset.networkGraphHash || '').trim(),
+            layoutMode: readStoredLayoutMode(root),
+            layoutRestored: false,
+            hasAppliedLayout: false,
+            isLoadingGraph: false,
+            suppressLayoutSave: false,
+            layoutSaveTimer: null,
         };
 
         instances.set(root, state);
@@ -1200,6 +1734,9 @@ async function initNetworkMap(root) {
 
         bindControls(root, cy);
         bindPublicBadges(root, cy);
+        bindLayoutPersistence(root, cy);
+        updateLayoutControls(root, state);
+        setLayoutStatus(root, 'Noch nicht gespeichert');
         applyAutoMinDegreeIfNeeded(root, cy);
         applyFilters(root, cy);
 
@@ -1256,7 +1793,11 @@ async function initNetworkMap(root) {
 
         if (initialElements.length) {
             updateBuildStatus(root, { visible: false, state: 'done' });
-            window.setTimeout(() => arrangeVisibleGraph(root, cy, false), 150);
+            window.setTimeout(() => {
+                if (!applyStoredLayout(root, cy)) {
+                    arrangeVisibleGraph(root, cy, false, state.layoutMode);
+                }
+            }, 150);
         } else {
             updateBuildStatus(root, {
                 visible: true,
@@ -1365,6 +1906,10 @@ function resetGraph(root) {
     state.loadedNodes = 0;
     state.loadedEdges = 0;
     state.selectedId = null;
+    state.isLoadingGraph = false;
+    state.layoutRestored = false;
+    state.hasAppliedLayout = false;
+    window.clearTimeout(state.layoutSaveTimer);
     state.cy.elements().remove();
     updateSelectionPanel(root, state.cy);
     schedulePublicBadgeUpdate(root, state.cy);
@@ -1391,10 +1936,14 @@ async function loadPreparedGraph(root, detail) {
     const cy = state.cy;
     const chunkCount = Number(detail.chunkCount);
     const generation = state.loadGeneration + 1;
+    updateGraphIdentity(root, state, detail);
     state.loadGeneration = generation;
     state.loadedNodes = 0;
     state.loadedEdges = 0;
     state.selectedId = null;
+    state.isLoadingGraph = true;
+    state.layoutRestored = false;
+    state.hasAppliedLayout = false;
     cy.elements().remove();
     updateSelectionPanel(root, cy);
     schedulePublicBadgeUpdate(root, cy);
@@ -1425,7 +1974,7 @@ async function loadPreparedGraph(root, detail) {
 
         const chunk = await response.json();
         addGraphChunk(root, cy, chunk);
-        applyFilters(root, cy);
+        applyFilters(root, cy, { layout: false });
         schedulePublicBadgeUpdate(root, cy);
 
         const progress = ((index + 1) / chunkCount) * 100;
@@ -1449,7 +1998,8 @@ async function loadPreparedGraph(root, detail) {
     }
 
     applyAutoMinDegreeIfNeeded(root, cy);
-    applyFilters(root, cy);
+    applyFilters(root, cy, { layout: false });
+    state.isLoadingGraph = false;
     updateBuildStatus(root, {
         visible: true,
         label: 'Netzwerk geladen',
@@ -1460,8 +2010,12 @@ async function loadPreparedGraph(root, detail) {
     });
 
     window.requestAnimationFrame(() => {
-        arrangeVisibleGraph(root, cy, false);
-        window.setTimeout(() => fitGraph(cy, { tight: true }), 60);
+        if (!applyStoredLayout(root, cy)) {
+            arrangeVisibleGraph(root, cy, false, state.layoutMode);
+        } else {
+            schedulePublicBadgeUpdate(root, cy);
+        }
+
         window.setTimeout(() => updateBuildStatus(root, { visible: false, state: 'done' }), 900);
     });
 }
@@ -1479,6 +2033,12 @@ async function handlePreparedGraph(event) {
     try {
         await loadPreparedGraph(root, detail);
     } catch (error) {
+        const state = instances.get(root);
+
+        if (state) {
+            state.isLoadingGraph = false;
+        }
+
         console.error(error);
         updateBuildStatus(root, {
             visible: true,
@@ -1505,6 +2065,7 @@ export function destroyNetworkMaps() {
 
         window.removeEventListener('resize', state.resizeHandler);
         window.clearTimeout(state.nodeTapTimer);
+        window.clearTimeout(state.layoutSaveTimer);
         state.cy.destroy();
         instances.delete(root);
     });
@@ -1530,8 +2091,7 @@ window.addEventListener('network-map-layout-refresh', (event) => {
 
     window.requestAnimationFrame(() => {
         state.cy.resize();
-        arrangeVisibleGraph(root, state.cy, false);
-        window.setTimeout(() => fitGraph(state.cy, { tight: true }), 60);
+        schedulePublicBadgeUpdate(root, state.cy);
     });
 });
 
