@@ -4078,12 +4078,16 @@ async function clickProfileSuggestionsSeeAll(page) {
       return rect.width > 0 && rect.height > 0;
     };
     const seeAllPattern = /^(alle ansehen|alle anzeigen|see all|show all)$/i;
+    const discoverMorePattern = /(?:entdecke mehr konten|weitere konten entdecken|discover more accounts|find more accounts)/i;
     const elements = Array.from(document.querySelectorAll('button, a, div[role="button"], span'))
       .filter(visible);
     const target = elements.find((element) => {
       const text = normalizeElementText(element.innerText || element.textContent || '');
 
-      return text !== '' && text.length <= 60 && seeAllPattern.test(text);
+      return text !== ''
+        && text.length <= 60
+        && seeAllPattern.test(text)
+        && !discoverMorePattern.test(text);
     });
 
     if (!target) {
@@ -4108,6 +4112,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
       .replace(/[^a-z0-9._]/gi, '')
       .toLowerCase();
     const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|zu viele anfragen|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|try again later|too many requests|429|error 429|we restrict certain activity|we limit how often|this action was blocked|rate limit)/i;
+    const discoverMorePattern = /(?:entdecke mehr konten|weitere konten entdecken|discover more accounts|find more accounts)/i;
     const bodyText = normalizeElementText(document.body?.innerText || document.body?.textContent || '');
 
     if (rateLimitPattern.test(bodyText)) {
@@ -4133,6 +4138,19 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
     const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge f(?:u|\u00fc)r dich|vorschl(?:a|\u00e4)ge|suggested for you|suggestions for you|suggested|suggestions)$/i;
     const dialog = document.querySelector('div[role="dialog"]');
     const container = dialog || document.body;
+    const isVisible = (element) => {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none';
+    };
     const getOwnText = (element) => normalizeElementText(
       Array.from(element.childNodes || [])
         .filter((node) => node.nodeType === Node.TEXT_NODE)
@@ -4155,10 +4173,113 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
 
       return Boolean(suggestionHeading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
     };
-    const anchorScope = dialog || suggestionHeading ? container : document.body;
-    const anchors = Array.from(anchorScope.querySelectorAll('a[href]'))
-      .filter((anchor) => dialog || isAfterSuggestionHeading(anchor));
+    const profileUsernameFromAnchor = (anchor) => {
+      try {
+        const parts = new URL(anchor.getAttribute('href'), window.location.origin).pathname
+          .split('/')
+          .filter(Boolean);
+
+        if (parts.length !== 1 || reservedPaths.has(parts[0])) {
+          return '';
+        }
+
+        const username = normalizeUsername(parts[0]);
+
+        return username && username !== currentUsername && /^[a-z0-9._]+$/i.test(username)
+          ? username
+          : '';
+      } catch (error) {
+        return '';
+      }
+    };
+    const profileAnchorsIn = (element) => Array.from(element.querySelectorAll('a[href]'))
+      .filter((anchor) => profileUsernameFromAnchor(anchor));
+    const isDiscoverMoreElement = (element) => {
+      const clickable = element?.closest?.('button, [role="button"], a') || element;
+      const text = normalizeElementText(clickable?.innerText || clickable?.textContent || '');
+
+      return discoverMorePattern.test(text);
+    };
+    const findDialogListScope = () => {
+      if (!dialog) {
+        return null;
+      }
+
+      return Array.from(dialog.querySelectorAll('div, section, ul'))
+        .filter(isVisible)
+        .map((element) => {
+          const profileAnchorCount = profileAnchorsIn(element).length;
+          const verticalOverflow = element.scrollHeight > element.clientHeight + 24;
+          const rect = element.getBoundingClientRect();
+          const text = normalizeElementText(element.innerText || element.textContent || '');
+          const score = (profileAnchorCount * 8)
+            + (verticalOverflow ? 12 : 0)
+            - Math.max(0, Math.floor(text.length / 1600))
+            - (rect.height > window.innerHeight * 0.95 ? 8 : 0);
+
+          return {
+            element,
+            profileAnchorCount,
+            score,
+          };
+        })
+        .filter((entry) => entry.profileAnchorCount > 0)
+        .sort((left, right) => right.score - left.score)[0]?.element || dialog;
+    };
+    const findHorizontalSuggestionScope = () => {
+      const candidateScopes = Array.from(document.querySelectorAll('div, section, ul'))
+        .filter(isVisible)
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          const text = normalizeElementText(element.innerText || element.textContent || '');
+          const profileAnchors = profileAnchorsIn(element);
+          const anchorRects = profileAnchors
+            .map((anchor) => anchor.getBoundingClientRect())
+            .filter((rectEntry) => rectEntry.width > 0 && rectEntry.height > 0);
+          const horizontalOverflow = element.scrollWidth > element.clientWidth + 24;
+          const sameRowProfileAnchors = anchorRects.length >= 2
+            && (Math.max(...anchorRects.map((rectEntry) => rectEntry.top))
+              - Math.min(...anchorRects.map((rectEntry) => rectEntry.top))) <= 120;
+          const closeToHeading = suggestionHeading
+            ? Boolean(suggestionHeading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
+            : false;
+          const suggestionText = suggestionHeadingPattern.test(text)
+            || /(?:vorschl(?:a|\u00e4)ge|suggested|suggestions)/i.test(text);
+          const horizontalList = horizontalOverflow || sameRowProfileAnchors;
+          const score = (profileAnchors.length * 8)
+            + (horizontalOverflow ? 14 : 0)
+            + (sameRowProfileAnchors ? 8 : 0)
+            + (suggestionText ? 10 : 0)
+            + (closeToHeading ? 6 : 0)
+            - Math.max(0, Math.floor(text.length / 1200))
+            - (rect.height > 620 ? 10 : 0);
+
+          return {
+            element,
+            profileAnchorCount: profileAnchors.length,
+            horizontalList,
+            suggestionText,
+            closeToHeading,
+            score,
+          };
+        })
+        .filter((entry) => (
+          entry.profileAnchorCount > 0
+          && entry.horizontalList
+          && (entry.suggestionText || entry.closeToHeading || !suggestionHeading)
+        ))
+        .sort((left, right) => right.score - left.score);
+
+      return candidateScopes[0]?.element || null;
+    };
+    const anchorScope = dialog ? findDialogListScope() : findHorizontalSuggestionScope();
+    const anchors = anchorScope
+      ? Array.from(anchorScope.querySelectorAll('a[href]'))
+        .filter((anchor) => dialog || !suggestionHeading || isAfterSuggestionHeading(anchor) || anchorScope.contains(anchor))
+        .filter((anchor) => !isDiscoverMoreElement(anchor))
+      : [];
     const itemsByUsername = new Map();
+    let profileLinkCandidatesSeen = 0;
 
     for (const anchor of anchors) {
       let pathname = '';
@@ -4181,7 +4302,14 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
         continue;
       }
 
+      profileLinkCandidatesSeen += 1;
+
       const row = anchor.closest('div[role="button"], li, article, div') || anchor;
+
+      if (isDiscoverMoreElement(row)) {
+        continue;
+      }
+
       const rawLines = `${anchor.innerText || ''}\n${row.innerText || ''}`
         .split('\n')
         .map((line) => normalizeElementText(line))
@@ -4209,9 +4337,10 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
 
     return {
       items: Array.from(itemsByUsername.values()),
-      available: Boolean(dialog || suggestionHeading || itemsByUsername.size > 0),
+      available: Boolean(anchorScope || suggestionHeading || itemsByUsername.size > 0),
       rateLimited: false,
       rateLimitText: null,
+      profileLinkCandidatesSeen,
       headingText: suggestionHeading
         ? normalizeElementText(suggestionHeading.innerText || suggestionHeading.textContent || '')
         : null,
@@ -4242,8 +4371,16 @@ async function advanceProfileSuggestionsViewport(page) {
         && style.display !== 'none';
     };
     const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge|suggested|suggestions)/i;
+    const discoverMorePattern = /(?:entdecke mehr konten|weitere konten entdecken|discover more accounts|find more accounts)/i;
     const reservedPaths = new Set(['accounts', 'direct', 'explore', 'p', 'reel', 'reels', 'stories', 'tv']);
+    const isDiscoverMoreElement = (element) => discoverMorePattern.test(
+      normalizeElementText(element?.innerText || element?.textContent || ''),
+    );
     const profileAnchorsIn = (element) => Array.from(element.querySelectorAll('a[href]')).filter((anchor) => {
+      if (isDiscoverMoreElement(anchor.closest('button, [role="button"], a, div') || anchor)) {
+        return false;
+      }
+
       try {
         const parts = new URL(anchor.getAttribute('href'), window.location.origin).pathname
           .split('/')
@@ -4284,7 +4421,7 @@ async function advanceProfileSuggestionsViewport(page) {
       .filter((entry) => entry.profileAnchorCount > 0 && (entry.horizontalOverflow || entry.verticalOverflow || entry.suggestionText))
       .sort((left, right) => right.score - left.score);
 
-    const horizontalTargetEntry = scrollables.find((entry) => entry.horizontalOverflow) || null;
+    const horizontalTargetEntry = dialog ? null : (scrollables.find((entry) => entry.horizontalOverflow) || null);
     const horizontalTarget = horizontalTargetEntry?.element || null;
     const horizontalRect = horizontalTarget ? horizontalTarget.getBoundingClientRect() : null;
     const nextPattern = /(?:weiter|n(?:a|\u00e4)chste|next)/i;
@@ -4303,6 +4440,7 @@ async function advanceProfileSuggestionsViewport(page) {
     const nextControl = Array.from(root.querySelectorAll('button, [role="button"], [aria-label]'))
       .filter(isVisible)
       .filter((element) => !isDisabledControl(element))
+      .filter((element) => !isDiscoverMoreElement(element))
       .map((element) => {
         const label = normalizeElementText([
           element.getAttribute?.('aria-label') || '',
@@ -4357,7 +4495,7 @@ async function advanceProfileSuggestionsViewport(page) {
           && !previousPattern.test(entry.label);
       }) || null;
 
-    if (nextControl) {
+    if (!dialog && nextControl) {
       nextControl.element.click();
 
       return {
@@ -4368,7 +4506,7 @@ async function advanceProfileSuggestionsViewport(page) {
       };
     }
 
-    if (horizontalTarget) {
+    if (!dialog && horizontalTarget) {
       const before = horizontalTarget.scrollLeft;
       const step = Math.max(260, horizontalTarget.clientWidth * 0.82);
       horizontalTarget.scrollLeft = Math.min(horizontalTarget.scrollLeft + step, horizontalTarget.scrollWidth);
@@ -4459,6 +4597,7 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
   let headingText = null;
   let seeAllClicked = false;
   let rounds = 0;
+  let profileLinkCandidatesSeen = 0;
 
   const collectRound = async (phase) => {
     const batch = await collectProfileSuggestionItems(page, currentUsername, collectLimit);
@@ -4468,6 +4607,10 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
     rateLimited = rateLimited || Boolean(batch.rateLimited);
     rateLimitText = batch.rateLimitText || rateLimitText;
     headingText = batch.headingText || headingText;
+    profileLinkCandidatesSeen = Math.max(
+      profileLinkCandidatesSeen,
+      Number(batch.profileLinkCandidatesSeen || 0),
+    );
 
     if (batch.rateLimited) {
       return {
@@ -4578,6 +4721,7 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
     dismissedKnownItems,
     dismissedKnownCount: dismissedKnownItems.length,
     seenKnownCount: seenKnownUsernames.size,
+    profileLinkCandidatesSeen,
   };
 }
 
