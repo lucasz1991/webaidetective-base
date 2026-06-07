@@ -291,6 +291,23 @@
                             <span data-network-layout-state>Nicht gespeichert</span>
                         </span>
                     </div>
+                    <div class="grid gap-2 border-t border-slate-200 pt-3 text-xs font-semibold text-slate-600">
+                        <label class="grid grid-cols-[8rem_1fr_3.5rem] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                            <span>Abstand</span>
+                            <input type="range" min="70" max="190" step="5" value="100" data-network-layout-spacing class="w-full accent-slate-900">
+                            <span class="text-right text-slate-900" data-network-layout-spacing-value>100%</span>
+                        </label>
+                        <label class="grid grid-cols-[8rem_1fr_3.5rem] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                            <span>Icongroesse</span>
+                            <input type="range" min="65" max="170" step="5" value="100" data-network-icon-scale class="w-full accent-slate-900">
+                            <span class="text-right text-slate-900" data-network-icon-scale-value>100%</span>
+                        </label>
+                        <label class="grid grid-cols-[8rem_1fr_3.5rem] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                            <span>Groessenunterschied</span>
+                            <input type="range" min="0" max="200" step="5" value="100" data-network-size-variance class="w-full accent-slate-900">
+                            <span class="text-right text-slate-900" data-network-size-variance-value>100%</span>
+                        </label>
+                    </div>
                     <div class="flex items-center gap-2 border-t border-slate-200 pt-3 text-xs font-semibold text-slate-600">
                         <button type="button" data-network-action="zoom-out" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">-</button>
                         <button type="button" data-network-action="zoom-in" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">+</button>

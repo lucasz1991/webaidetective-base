@@ -2,7 +2,7 @@ const instances = new WeakMap();
 const activeRoots = new Set();
 const DEFAULT_LAYOUT_MODE = 'clusters';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
-const LAYOUT_STORAGE_PREFIX = 'network-map-render:v3';
+const LAYOUT_STORAGE_PREFIX = 'network-map-render:v4';
 let cytoscapeLoader;
 
 function loadCytoscape() {
@@ -258,6 +258,9 @@ function toElements(graph) {
             handle: node.handle || '',
             detail: node.detail || '',
             role: node.role || '',
+            renderNodeSize: Number(node.nodeSize) || baseNodeSizeForData(node),
+            renderNodeFontSize: Number(node.nodeFontSize) || baseNodeFontSizeForData(node),
+            renderTextMaxWidth: 105,
         },
     }));
 
@@ -273,6 +276,67 @@ function toElements(graph) {
     }));
 
     return [...nodes, ...edges];
+}
+
+function baseNodeSizeForData(data) {
+    if (data?.isPrimary || data?.isFocus) {
+        return 112;
+    }
+
+    if (data?.type === 'person') {
+        return 78;
+    }
+
+    if (data?.type === 'candidate') {
+        return 42;
+    }
+
+    return 46;
+}
+
+function baseNodeFontSizeForData(data) {
+    if (data?.isPrimary || data?.isFocus) {
+        return 14;
+    }
+
+    if (data?.type === 'person') {
+        return 12;
+    }
+
+    return 10;
+}
+
+function visualBaselineForNode(node) {
+    return {
+        size: baseNodeSizeForData(node.data()),
+        fontSize: baseNodeFontSizeForData(node.data()),
+    };
+}
+
+function applyVisualSettings(root, cy, nodes = null) {
+    const state = instances.get(root);
+    const iconScale = normalizedScale(state?.nodeSizeScale, 1, 0.65, 1.7);
+    const variance = normalizedScale(state?.nodeSizeVariance, 1, 0, 2);
+    const targetNodes = nodes || cy.nodes();
+
+    targetNodes.forEach((node) => {
+        const baseline = visualBaselineForNode(node);
+        const originalSize = Number(node.data('nodeSize')) || baseline.size;
+        const originalFontSize = Number(node.data('nodeFontSize')) || baseline.fontSize;
+        const variedSize = baseline.size + ((originalSize - baseline.size) * variance);
+        const variedFontSize = baseline.fontSize + ((originalFontSize - baseline.fontSize) * Math.min(1.45, variance));
+        const renderSize = Math.round(Math.max(30, Math.min(190, variedSize * iconScale)));
+        const renderFontSize = Math.round(Math.max(9, Math.min(18, variedFontSize * Math.max(0.88, Math.min(1.18, iconScale)))));
+        const renderTextMaxWidth = Math.round(Math.max(92, Math.min(160, 96 + ((renderSize - 46) * 0.36))));
+
+        node.data({
+            renderNodeSize: renderSize,
+            renderNodeFontSize: renderFontSize,
+            renderTextMaxWidth,
+        });
+    });
+
+    schedulePublicBadgeUpdate(root, cy);
 }
 
 function updateButton(button, active) {
@@ -304,7 +368,28 @@ function writeStoredFilters(root, state) {
         showDirectOnly: state.showDirectOnly,
         minDegree: state.minDegree,
         maxVisibleProfiles: state.maxVisibleProfiles,
+        layoutSpacingScale: state.layoutSpacingScale,
+        nodeSizeScale: state.nodeSizeScale,
+        nodeSizeVariance: state.nodeSizeVariance,
     }));
+}
+
+function normalizedScale(value, fallback, min, max) {
+    const number = Number(value);
+
+    if (!Number.isFinite(number)) {
+        return fallback;
+    }
+
+    return Math.max(min, Math.min(max, number));
+}
+
+function percentLabel(scale) {
+    return `${Math.round(Number(scale || 1) * 100)}%`;
+}
+
+function controlScaleValue(control, fallback, min, max) {
+    return normalizedScale((Number(control?.value) || Math.round(fallback * 100)) / 100, fallback, min, max);
 }
 
 function normalizeLayoutMode(value) {
@@ -333,9 +418,54 @@ function writeStoredLayoutMode(root, mode) {
     }
 }
 
+function layoutSettingsStorageKey(root) {
+    return `network-map-layout-settings:${root.dataset.networkFilterScope || root.dataset.networkMapId || 'default'}`;
+}
+
+function readStoredLayoutSettings(root) {
+    try {
+        return JSON.parse(localStorage.getItem(layoutSettingsStorageKey(root)) || '{}') || {};
+    } catch {
+        return {};
+    }
+}
+
+function writeStoredLayoutSettings(root, state) {
+    try {
+        localStorage.setItem(layoutSettingsStorageKey(root), JSON.stringify({
+            layoutSpacingScale: normalizedScale(state?.layoutSpacingScale, 1, 0.7, 1.9),
+            nodeSizeScale: normalizedScale(state?.nodeSizeScale, 1, 0.65, 1.7),
+            nodeSizeVariance: normalizedScale(state?.nodeSizeVariance, 1, 0, 2),
+        }));
+    } catch {
+        // Ignore storage errors.
+    }
+}
+
 function updateLayoutControls(root, state) {
     root.querySelectorAll('[data-network-layout-mode]').forEach((control) => {
         control.value = normalizeLayoutMode(state?.layoutMode);
+    });
+
+    root.querySelectorAll('[data-network-layout-spacing]').forEach((control) => {
+        control.value = String(Math.round(normalizedScale(state?.layoutSpacingScale, 1, 0.7, 1.9) * 100));
+    });
+    root.querySelectorAll('[data-network-layout-spacing-value]').forEach((element) => {
+        element.textContent = percentLabel(normalizedScale(state?.layoutSpacingScale, 1, 0.7, 1.9));
+    });
+
+    root.querySelectorAll('[data-network-icon-scale]').forEach((control) => {
+        control.value = String(Math.round(normalizedScale(state?.nodeSizeScale, 1, 0.65, 1.7) * 100));
+    });
+    root.querySelectorAll('[data-network-icon-scale-value]').forEach((element) => {
+        element.textContent = percentLabel(normalizedScale(state?.nodeSizeScale, 1, 0.65, 1.7));
+    });
+
+    root.querySelectorAll('[data-network-size-variance]').forEach((control) => {
+        control.value = String(Math.round(normalizedScale(state?.nodeSizeVariance, 1, 0, 2) * 100));
+    });
+    root.querySelectorAll('[data-network-size-variance-value]').forEach((element) => {
+        element.textContent = percentLabel(normalizedScale(state?.nodeSizeVariance, 1, 0, 2));
     });
 }
 
@@ -411,7 +541,7 @@ function readStoredLayout(root, state, cy) {
     try {
         const stored = JSON.parse(localStorage.getItem(key) || 'null');
 
-        return stored && stored.version === 3 ? { key, stored } : null;
+        return stored && stored.version === 4 ? { key, stored } : null;
     } catch {
         return null;
     }
@@ -449,9 +579,12 @@ function writeStoredLayout(root, cy) {
 
     try {
         localStorage.setItem(key, JSON.stringify({
-            version: 3,
+            version: 4,
             savedAt: Date.now(),
             layoutMode: normalizeLayoutMode(state.layoutMode),
+            layoutSpacingScale: normalizedScale(state.layoutSpacingScale, 1, 0.7, 1.9),
+            nodeSizeScale: normalizedScale(state.nodeSizeScale, 1, 0.65, 1.7),
+            nodeSizeVariance: normalizedScale(state.nodeSizeVariance, 1, 0, 2),
             nodeCount: cy.nodes().length,
             edgeCount: cy.edges().length,
             zoom: Math.round(cy.zoom() * 10000) / 10000,
@@ -799,11 +932,12 @@ function primaryLayoutNode(nodes) {
 }
 
 function estimatedNodeBox(node, position) {
-    const size = Math.max(42, Number(node.data('nodeSize')) || 48);
-    const fontSize = Math.max(10, Number(node.data('nodeFontSize')) || 11);
+    const size = Math.max(30, Number(node.data('renderNodeSize') || node.data('nodeSize')) || 48);
+    const fontSize = Math.max(9, Number(node.data('renderNodeFontSize') || node.data('nodeFontSize')) || 11);
+    const maxTextWidth = Math.max(92, Number(node.data('renderTextMaxWidth')) || 105);
     const label = String(node.data('fullLabel') || node.data('label') || node.data('handle') || node.id());
-    const lines = Math.max(1, Math.ceil((label.length * fontSize * 0.54) / 96));
-    const labelWidth = Math.min(132, Math.max(size, Math.min(112, label.length * fontSize * 0.54) + 18));
+    const lines = Math.max(1, Math.ceil((label.length * fontSize * 0.54) / maxTextWidth));
+    const labelWidth = Math.min(maxTextWidth + 28, Math.max(size, Math.min(maxTextWidth, label.length * fontSize * 0.54) + 18));
     const labelHeight = (lines * (fontSize + 5)) + 16;
     const width = Math.max(size, labelWidth) + 34;
     const height = size + labelHeight + 34;
@@ -1057,8 +1191,9 @@ function radialDistancesWithinGroup(root, groupNodes) {
 
 function localRingPositions(root, buckets, options = {}) {
     const updates = [{ node: root, position: { x: 0, y: 0 } }];
-    const baseRadius = options.baseRadius || 180;
-    const ringGap = options.ringGap || 160;
+    const spacingScale = normalizedScale(options.spacingScale, 1, 0.7, 1.9);
+    const baseRadius = (options.baseRadius || 180) * spacingScale;
+    const ringGap = (options.ringGap || 160) * spacingScale;
 
     buckets
         .filter((bucket) => bucket.length)
@@ -1066,7 +1201,7 @@ function localRingPositions(root, buckets, options = {}) {
             const sorted = [...bucket].sort(layoutSort);
             const radius = baseRadius
                 + (ringIndex * ringGap)
-                + Math.max(0, sorted.length - 8) * 18;
+                + Math.max(0, sorted.length - 8) * 18 * spacingScale;
 
             sorted.forEach((node, index) => {
                 const angle = (-Math.PI / 2) + ((Math.PI * 2) * (index / Math.max(1, sorted.length))) + ((ringIndex % 2) * 0.18);
@@ -1084,8 +1219,10 @@ function localRingPositions(root, buckets, options = {}) {
     return updates;
 }
 
-function squareShellOffsets(count, slotX = 170, slotY = 154) {
+function squareShellOffsets(count, slotX = 170, slotY = 154, spacingScale = 1) {
     const offsets = [{ x: 0, y: 0 }];
+    const scaledSlotX = slotX * normalizedScale(spacingScale, 1, 0.7, 1.9);
+    const scaledSlotY = slotY * normalizedScale(spacingScale, 1, 0.7, 1.9);
 
     for (let ring = 1; offsets.length < count; ring += 1) {
         const candidates = [];
@@ -1097,8 +1234,8 @@ function squareShellOffsets(count, slotX = 170, slotY = 154) {
                 }
 
                 candidates.push({
-                    x: column * slotX,
-                    y: row * slotY,
+                    x: column * scaledSlotX,
+                    y: row * scaledSlotY,
                 });
             }
         }
@@ -1115,8 +1252,9 @@ function squareShellOffsets(count, slotX = 170, slotY = 154) {
     return offsets;
 }
 
-function localGroupUpdates(cy, group, mode) {
+function localGroupUpdates(cy, group, mode, spacingScale = 1) {
     const root = group.root;
+    const spacing = normalizedScale(spacingScale, 1, 0.7, 1.9);
     const nodes = [root, ...group.nodes.filter((node) => node.id() !== root.id()).sort(layoutSort)];
 
     if (nodes.length === 1) {
@@ -1129,7 +1267,7 @@ function localGroupUpdates(cy, group, mode) {
 
         nodes.slice(1).forEach((node, index) => {
             const step = index + 1;
-            const radius = 172 + (58 * Math.sqrt(step));
+            const radius = (172 + (58 * Math.sqrt(step))) * spacing;
             const angle = step * goldenAngle;
 
             updates.push({
@@ -1145,7 +1283,7 @@ function localGroupUpdates(cy, group, mode) {
     }
 
     if (mode === 'grid') {
-        const offsets = squareShellOffsets(nodes.length);
+        const offsets = squareShellOffsets(nodes.length, 170, 154, spacing);
 
         return nodes.map((node, index) => ({
             node,
@@ -1171,7 +1309,7 @@ function localGroupUpdates(cy, group, mode) {
             }
         });
 
-        return localRingPositions(root, [people, strongProfiles, profiles, candidates], { baseRadius: 176, ringGap: 155 });
+        return localRingPositions(root, [people, strongProfiles, profiles, candidates], { baseRadius: 176, ringGap: 155, spacingScale: spacing });
     }
 
     const distances = radialDistancesWithinGroup(root, nodes);
@@ -1198,13 +1336,20 @@ function localGroupUpdates(cy, group, mode) {
     ], {
         baseRadius: mode === 'radial' ? 178 : 168,
         ringGap: mode === 'radial' ? 158 : 148,
+        spacingScale: spacing,
     });
 }
 
-function placeGroupedLayout(cy, visibleNodes, mode) {
+function placeGroupedLayout(root, cy, visibleNodes, mode) {
+    const state = instances.get(root);
+    const spacingScale = normalizedScale(state?.layoutSpacingScale, 1, 0.7, 1.9);
     const nodes = visibleNodes.toArray();
     const focus = primaryLayoutNode(nodes);
-    const { centerX, centerY } = layoutCenter(visibleNodes, Math.max(1300, visibleNodes.length * 38), Math.max(900, visibleNodes.length * 28));
+    const { centerX, centerY } = layoutCenter(
+        visibleNodes,
+        Math.max(1300, visibleNodes.length * 38 * spacingScale),
+        Math.max(900, visibleNodes.length * 28 * spacingScale),
+    );
     const groups = connectedLayoutGroups(cy, visibleNodes, focus);
     const updates = [{ node: focus, position: { x: centerX, y: centerY } }];
 
@@ -1213,7 +1358,7 @@ function placeGroupedLayout(cy, visibleNodes, mode) {
     }
 
     const preparedGroups = groups.map((group) => {
-        const localUpdates = localGroupUpdates(cy, group, mode);
+        const localUpdates = localGroupUpdates(cy, group, mode, spacingScale);
         const bounds = updatesBounds(localUpdates);
 
         return {
@@ -1225,7 +1370,7 @@ function placeGroupedLayout(cy, visibleNodes, mode) {
     });
 
     let index = 0;
-    let ringRadius = 430;
+    let ringRadius = 430 * spacingScale;
     let ringIndex = 0;
 
     while (index < preparedGroups.length) {
@@ -1236,7 +1381,7 @@ function placeGroupedLayout(cy, visibleNodes, mode) {
 
         while (index < preparedGroups.length) {
             const item = preparedGroups[index];
-            const arc = Math.max(300, (item.radius * 1.45) + 120);
+            const arc = Math.max(300 * spacingScale, (item.radius * 1.45) + (120 * spacingScale));
 
             if (ring.length && usedArc + arc > circumference) {
                 break;
@@ -1268,14 +1413,14 @@ function placeGroupedLayout(cy, visibleNodes, mode) {
             });
         });
 
-        ringRadius += Math.max(430, (maxRadius * 2) + 260);
+        ringRadius += Math.max(430 * spacingScale, (maxRadius * 2) + (260 * spacingScale));
         ringIndex += 1;
     }
 
-    return preventLayoutOverlaps(updates, focus);
+    return preventLayoutOverlaps(updates, focus, spacingScale);
 }
 
-function preventLayoutOverlaps(updates, focus) {
+function preventLayoutOverlaps(updates, focus, spacingScale = 1) {
     if (updates.length > 900) {
         return updates;
     }
@@ -1312,7 +1457,7 @@ function preventLayoutOverlaps(updates, focus) {
                 }
 
                 const length = Math.max(1, Math.hypot(dx, dy));
-                const push = Math.min(180, Math.max(overlap.x, overlap.y) * 0.58 + 18);
+                const push = Math.min(220 * spacingScale, Math.max(overlap.x, overlap.y) * 0.58 + (18 * spacingScale));
                 const pushX = (dx / length) * push;
                 const pushY = (dy / length) * push;
 
@@ -1639,7 +1784,7 @@ function gridLayoutUpdates(visibleNodes) {
 }
 
 function layoutUpdatesForMode(root, cy, visibleNodes, mode) {
-    return placeGroupedLayout(cy, visibleNodes, normalizeLayoutMode(mode));
+    return placeGroupedLayout(root, cy, visibleNodes, normalizeLayoutMode(mode));
 }
 
 function arrangeVisibleGraph(root, cy, animate = true, mode = null) {
@@ -1947,6 +2092,24 @@ function fitGraph(cy, options = {}) {
     scheduleStoredLayoutSaveFromCy(cy, 220);
 }
 
+function scheduleLayoutSettingsRefresh(root, cy) {
+    const state = instances.get(root);
+
+    if (!state) {
+        return;
+    }
+
+    clearStoredLayout(root, cy);
+    writeStoredFilters(root, state);
+    writeStoredLayoutSettings(root, state);
+    updateLayoutControls(root, state);
+    applyVisualSettings(root, cy);
+    window.clearTimeout(state.layoutSettingsTimer);
+    state.layoutSettingsTimer = window.setTimeout(() => {
+        arrangeVisibleGraph(root, cy, true, state.layoutMode);
+    }, 260);
+}
+
 function bindControls(root, cy) {
     const state = instances.get(root);
 
@@ -1993,6 +2156,27 @@ function bindControls(root, cy) {
         button.addEventListener('click', () => {
             clearStoredLayout(root, cy);
             arrangeVisibleGraph(root, cy, true, state.layoutMode);
+        });
+    });
+
+    root.querySelectorAll('[data-network-layout-spacing]').forEach((control) => {
+        control.addEventListener('input', () => {
+            state.layoutSpacingScale = controlScaleValue(control, 1, 0.7, 1.9);
+            scheduleLayoutSettingsRefresh(root, cy);
+        });
+    });
+
+    root.querySelectorAll('[data-network-icon-scale]').forEach((control) => {
+        control.addEventListener('input', () => {
+            state.nodeSizeScale = controlScaleValue(control, 1, 0.65, 1.7);
+            scheduleLayoutSettingsRefresh(root, cy);
+        });
+    });
+
+    root.querySelectorAll('[data-network-size-variance]').forEach((control) => {
+        control.addEventListener('input', () => {
+            state.nodeSizeVariance = controlScaleValue(control, 1, 0, 2);
+            scheduleLayoutSettingsRefresh(root, cy);
         });
     });
 
@@ -2075,14 +2259,14 @@ async function initNetworkMap(root) {
             {
                 selector: 'node',
                 style: {
-                    width: 'data(nodeSize)',
-                    height: 'data(nodeSize)',
+                    width: 'data(renderNodeSize)',
+                    height: 'data(renderNodeSize)',
                     'background-color': '#eff6ff',
                     'border-color': '#94a3b8',
                     'border-width': 2,
                     color: '#0f172a',
                     label: 'data(label)',
-                    'font-size': 'data(nodeFontSize)',
+                    'font-size': 'data(renderNodeFontSize)',
                     'font-weight': 700,
                     'text-background-color': '#ffffff',
                     'text-background-opacity': 0.88,
@@ -2091,7 +2275,7 @@ async function initNetworkMap(root) {
                     'text-border-width': 1,
                     'text-border-opacity': 0.9,
                     'text-margin-y': 10,
-                    'text-max-width': 105,
+                    'text-max-width': 'data(renderTextMaxWidth)',
                     'text-valign': 'bottom',
                     'text-wrap': 'wrap',
                 },
@@ -2231,6 +2415,7 @@ async function initNetworkMap(root) {
         const resizeHandler = () => fitGraph(cy, { tight: true });
 
         const storedFilters = readStoredFilters(root);
+        const storedLayoutSettings = readStoredLayoutSettings(root);
         const storedMinDegree = Number.isFinite(Number(storedFilters.minDegree))
             ? Math.max(0, Number(storedFilters.minDegree))
             : null;
@@ -2245,6 +2430,9 @@ async function initNetworkMap(root) {
             showDirectOnly: storedFilters.showDirectOnly ?? false,
             minDegree: storedMinDegree ?? 0,
             maxVisibleProfiles: storedMaxVisibleProfiles ?? selectedMaxVisibleProfiles(root),
+            layoutSpacingScale: normalizedScale(storedFilters.layoutSpacingScale ?? storedLayoutSettings.layoutSpacingScale, 1, 0.7, 1.9),
+            nodeSizeScale: normalizedScale(storedFilters.nodeSizeScale ?? storedLayoutSettings.nodeSizeScale, 1, 0.65, 1.7),
+            nodeSizeVariance: normalizedScale(storedFilters.nodeSizeVariance ?? storedLayoutSettings.nodeSizeVariance, 1, 0, 2),
             hasStoredMinDegree: storedMinDegree !== null,
             autoMinDegreeApplied: false,
             selectedId: null,
@@ -2262,6 +2450,7 @@ async function initNetworkMap(root) {
             isLoadingGraph: false,
             suppressLayoutSave: false,
             layoutSaveTimer: null,
+            layoutSettingsTimer: null,
         };
 
         instances.set(root, state);
@@ -2273,6 +2462,7 @@ async function initNetworkMap(root) {
         bindLayoutPersistence(root, cy);
         updateLayoutControls(root, state);
         setLayoutStatus(root, 'Noch nicht gespeichert');
+        applyVisualSettings(root, cy);
         applyAutoMinDegreeIfNeeded(root, cy);
         applyFilters(root, cy);
 
@@ -2420,6 +2610,7 @@ function addGraphChunk(root, cy, chunk) {
     if (state) {
         state.loadedNodes += nodeElements.length;
         state.loadedEdges += edgeElements.length;
+        applyVisualSettings(root, cy);
     }
 }
 
@@ -2446,6 +2637,7 @@ function resetGraph(root) {
     state.layoutRestored = false;
     state.hasAppliedLayout = false;
     window.clearTimeout(state.layoutSaveTimer);
+    window.clearTimeout(state.layoutSettingsTimer);
     state.cy.elements().remove();
     updateSelectionPanel(root, state.cy);
     schedulePublicBadgeUpdate(root, state.cy);
@@ -2602,6 +2794,7 @@ export function destroyNetworkMaps() {
         window.removeEventListener('resize', state.resizeHandler);
         window.clearTimeout(state.nodeTapTimer);
         window.clearTimeout(state.layoutSaveTimer);
+        window.clearTimeout(state.layoutSettingsTimer);
         state.cy.destroy();
         instances.delete(root);
     });
