@@ -2,7 +2,7 @@ const instances = new WeakMap();
 const activeRoots = new Set();
 const DEFAULT_LAYOUT_MODE = 'clusters';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
-const LAYOUT_STORAGE_PREFIX = 'network-map-render:v2';
+const LAYOUT_STORAGE_PREFIX = 'network-map-render:v3';
 let cytoscapeLoader;
 
 function loadCytoscape() {
@@ -169,9 +169,9 @@ function updatePublicBadges(root, cy) {
         .forEach((node) => {
             const position = node.renderedPosition();
             const nodeSize = Number(node.renderedWidth?.() || node.data('nodeSize') || 42);
-            const badgeSize = Math.max(16, Math.min(22, Math.round(nodeSize * 0.34)));
-            const left = position.x + (nodeSize / 2) - (badgeSize * 0.25);
-            const top = position.y - (nodeSize / 2) + (badgeSize * 0.25);
+            const badgeSize = 20;
+            const left = position.x + (nodeSize / 2) - 3;
+            const top = position.y - (nodeSize / 2) + 3;
 
             if (left < -badgeSize || top < -badgeSize || left > width + badgeSize || top > height + badgeSize) {
                 return;
@@ -243,6 +243,7 @@ function toElements(graph) {
         classes: [
             node.hasImage ? 'network-has-image' : '',
             node.isPrimary ? 'network-primary' : '',
+            node.isFocus ? 'network-focus' : '',
             visibilityValue(node) === 'public' ? 'network-profile-public' : '',
             visibilityValue(node) === 'private' ? 'network-profile-private' : '',
         ].filter(Boolean).join(' '),
@@ -410,7 +411,7 @@ function readStoredLayout(root, state, cy) {
     try {
         const stored = JSON.parse(localStorage.getItem(key) || 'null');
 
-        return stored && stored.version === 2 ? { key, stored } : null;
+        return stored && stored.version === 3 ? { key, stored } : null;
     } catch {
         return null;
     }
@@ -448,7 +449,7 @@ function writeStoredLayout(root, cy) {
 
     try {
         localStorage.setItem(key, JSON.stringify({
-            version: 2,
+            version: 3,
             savedAt: Date.now(),
             layoutMode: normalizeLayoutMode(state.layoutMode),
             nodeCount: cy.nodes().length,
@@ -791,9 +792,560 @@ function layoutCenter(visibleNodes, minWidth = 1200, minHeight = 820) {
 }
 
 function primaryLayoutNode(nodes) {
-    return nodes.find((node) => Boolean(node.data('isPrimary')))
+    return nodes.find((node) => Boolean(node.data('isFocus')))
+        || nodes.find((node) => Boolean(node.data('isPrimary')))
         || nodes.find((node) => node.data('type') === 'person')
         || nodes[0];
+}
+
+function estimatedNodeBox(node, position) {
+    const size = Math.max(42, Number(node.data('nodeSize')) || 48);
+    const fontSize = Math.max(10, Number(node.data('nodeFontSize')) || 11);
+    const label = String(node.data('fullLabel') || node.data('label') || node.data('handle') || node.id());
+    const lines = Math.max(1, Math.ceil((label.length * fontSize * 0.54) / 96));
+    const labelWidth = Math.min(132, Math.max(size, Math.min(112, label.length * fontSize * 0.54) + 18));
+    const labelHeight = (lines * (fontSize + 5)) + 16;
+    const width = Math.max(size, labelWidth) + 34;
+    const height = size + labelHeight + 34;
+
+    return {
+        left: position.x - (width / 2),
+        right: position.x + (width / 2),
+        top: position.y - (size / 2) - 14,
+        bottom: position.y + (size / 2) + labelHeight + 20,
+        width,
+        height,
+    };
+}
+
+function boxesOverlap(left, right) {
+    return left.left < right.right
+        && left.right > right.left
+        && left.top < right.bottom
+        && left.bottom > right.top;
+}
+
+function overlapAmount(left, right) {
+    return {
+        x: Math.min(left.right, right.right) - Math.max(left.left, right.left),
+        y: Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top),
+    };
+}
+
+function updatesBounds(updates) {
+    const bounds = updates.reduce((current, update) => {
+        const box = estimatedNodeBox(update.node, update.position);
+
+        return {
+            left: Math.min(current.left, box.left),
+            right: Math.max(current.right, box.right),
+            top: Math.min(current.top, box.top),
+            bottom: Math.max(current.bottom, box.bottom),
+        };
+    }, { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity });
+
+    if (!Number.isFinite(bounds.left)) {
+        return { left: 0, right: 0, top: 0, bottom: 0, width: 0, height: 0, radius: 0 };
+    }
+
+    const width = bounds.right - bounds.left;
+    const height = bounds.bottom - bounds.top;
+
+    return {
+        ...bounds,
+        width,
+        height,
+        radius: Math.max(120, Math.hypot(width, height) / 2),
+    };
+}
+
+function visibleNeighborNodes(node, visibleIds) {
+    const neighbors = [];
+
+    node.connectedEdges()
+        .not('.network-filtered')
+        .forEach((edge) => {
+            const other = edge.source().id() === node.id() ? edge.target() : edge.source();
+
+            if (visibleIds.has(other.id()) && other.id() !== node.id()) {
+                neighbors.push(other);
+            }
+        });
+
+    return neighbors;
+}
+
+function addNodeToLayoutGroup(group, node) {
+    if (group.nodeIds.has(node.id())) {
+        return;
+    }
+
+    group.nodeIds.add(node.id());
+    group.nodes.push(node);
+}
+
+function groupAdjacencyKey(left, right) {
+    return [left, right].sort().join('|');
+}
+
+function groupAdjacencyWeight(adjacency, left, right) {
+    return adjacency.get(groupAdjacencyKey(left, right)) || 0;
+}
+
+function groupScore(group) {
+    return (group.nodes.length * 8)
+        + (visibleDegree(group.root) * 5)
+        + group.nodes.reduce((score, node) => score + visibleDegree(node), 0);
+}
+
+function orderGroupsByAdjacency(groups, adjacency) {
+    const remaining = [...groups].sort((a, b) => groupScore(b) - groupScore(a) || String(a.id).localeCompare(String(b.id)));
+    const ordered = [];
+
+    if (!remaining.length) {
+        return ordered;
+    }
+
+    ordered.push(remaining.shift());
+
+    while (remaining.length) {
+        const last = ordered[ordered.length - 1];
+        let bestIndex = 0;
+        let bestScore = -Infinity;
+
+        remaining.forEach((group, index) => {
+            const lastWeight = groupAdjacencyWeight(adjacency, last.id, group.id);
+            const placedWeight = ordered.reduce((weight, placed) => Math.max(weight, groupAdjacencyWeight(adjacency, placed.id, group.id)), 0);
+            const score = (lastWeight * 40) + (placedWeight * 12) + groupScore(group);
+
+            if (score > bestScore) {
+                bestScore = score;
+                bestIndex = index;
+            }
+        });
+
+        ordered.push(remaining.splice(bestIndex, 1)[0]);
+    }
+
+    return ordered;
+}
+
+function connectedLayoutGroups(cy, visibleNodes, focus) {
+    const visibleIds = new Set(visibleNodes.map((node) => node.id()));
+    const anchors = visibleNeighborNodes(focus, visibleIds).sort(layoutSort);
+    const assignments = new Map();
+    const groups = new Map();
+    const queue = [];
+
+    anchors.forEach((anchor) => {
+        const group = {
+            id: anchor.id(),
+            root: anchor,
+            nodes: [],
+            nodeIds: new Set(),
+        };
+
+        addNodeToLayoutGroup(group, anchor);
+        groups.set(group.id, group);
+        assignments.set(anchor.id(), group.id);
+        queue.push(anchor);
+    });
+
+    while (queue.length) {
+        const node = queue.shift();
+        const groupId = assignments.get(node.id());
+        const group = groups.get(groupId);
+
+        visibleNeighborNodes(node, visibleIds)
+            .sort(layoutSort)
+            .forEach((neighbor) => {
+                if (neighbor.id() === focus.id()) {
+                    return;
+                }
+
+                if (!assignments.has(neighbor.id())) {
+                    assignments.set(neighbor.id(), groupId);
+                    addNodeToLayoutGroup(group, neighbor);
+                    queue.push(neighbor);
+                }
+            });
+    }
+
+    visibleNodes
+        .toArray()
+        .filter((node) => node.id() !== focus.id() && !assignments.has(node.id()))
+        .sort(layoutSort)
+        .forEach((seed) => {
+            if (assignments.has(seed.id())) {
+                return;
+            }
+
+            const group = {
+                id: seed.id(),
+                root: seed,
+                nodes: [],
+                nodeIds: new Set(),
+            };
+            const componentQueue = [seed];
+            assignments.set(seed.id(), group.id);
+            addNodeToLayoutGroup(group, seed);
+
+            while (componentQueue.length) {
+                const node = componentQueue.shift();
+
+                visibleNeighborNodes(node, visibleIds)
+                    .sort(layoutSort)
+                    .forEach((neighbor) => {
+                        if (neighbor.id() === focus.id() || assignments.has(neighbor.id())) {
+                            return;
+                        }
+
+                        assignments.set(neighbor.id(), group.id);
+                        addNodeToLayoutGroup(group, neighbor);
+                        componentQueue.push(neighbor);
+                    });
+            }
+
+            group.nodes.sort((a, b) => (a.id() === group.root.id() ? -1 : 0) - (b.id() === group.root.id() ? -1 : 0) || layoutSort(a, b));
+            groups.set(group.id, group);
+        });
+
+    const adjacency = new Map();
+
+    cy.edges()
+        .not('.network-filtered')
+        .forEach((edge) => {
+            const sourceGroup = assignments.get(edge.source().id());
+            const targetGroup = assignments.get(edge.target().id());
+
+            if (!sourceGroup || !targetGroup || sourceGroup === targetGroup) {
+                return;
+            }
+
+            const key = groupAdjacencyKey(sourceGroup, targetGroup);
+            adjacency.set(key, (adjacency.get(key) || 0) + 1);
+        });
+
+    groups.forEach((group) => {
+        group.nodes.sort((a, b) => (a.id() === group.root.id() ? -1 : 0) - (b.id() === group.root.id() ? -1 : 0) || layoutSort(a, b));
+    });
+
+    return orderGroupsByAdjacency(Array.from(groups.values()), adjacency);
+}
+
+function radialDistancesWithinGroup(root, groupNodes) {
+    const ids = new Set(groupNodes.map((node) => node.id()));
+    const distances = new Map([[root.id(), 0]]);
+    const queue = [root];
+
+    while (queue.length) {
+        const node = queue.shift();
+        const distance = distances.get(node.id()) || 0;
+
+        visibleNeighborNodes(node, ids).forEach((neighbor) => {
+            if (distances.has(neighbor.id())) {
+                return;
+            }
+
+            distances.set(neighbor.id(), distance + 1);
+            queue.push(neighbor);
+        });
+    }
+
+    return distances;
+}
+
+function localRingPositions(root, buckets, options = {}) {
+    const updates = [{ node: root, position: { x: 0, y: 0 } }];
+    const baseRadius = options.baseRadius || 180;
+    const ringGap = options.ringGap || 160;
+
+    buckets
+        .filter((bucket) => bucket.length)
+        .forEach((bucket, ringIndex) => {
+            const sorted = [...bucket].sort(layoutSort);
+            const radius = baseRadius
+                + (ringIndex * ringGap)
+                + Math.max(0, sorted.length - 8) * 18;
+
+            sorted.forEach((node, index) => {
+                const angle = (-Math.PI / 2) + ((Math.PI * 2) * (index / Math.max(1, sorted.length))) + ((ringIndex % 2) * 0.18);
+
+                updates.push({
+                    node,
+                    position: {
+                        x: Math.cos(angle) * radius,
+                        y: Math.sin(angle) * radius,
+                    },
+                });
+            });
+        });
+
+    return updates;
+}
+
+function squareShellOffsets(count, slotX = 170, slotY = 154) {
+    const offsets = [{ x: 0, y: 0 }];
+
+    for (let ring = 1; offsets.length < count; ring += 1) {
+        const candidates = [];
+
+        for (let row = -ring; row <= ring; row += 1) {
+            for (let column = -ring; column <= ring; column += 1) {
+                if (Math.max(Math.abs(row), Math.abs(column)) !== ring) {
+                    continue;
+                }
+
+                candidates.push({
+                    x: column * slotX,
+                    y: row * slotY,
+                });
+            }
+        }
+
+        candidates
+            .sort((a, b) => Math.hypot(a.x, a.y) - Math.hypot(b.x, b.y) || a.y - b.y || a.x - b.x)
+            .forEach((offset) => {
+                if (offsets.length < count) {
+                    offsets.push(offset);
+                }
+            });
+    }
+
+    return offsets;
+}
+
+function localGroupUpdates(cy, group, mode) {
+    const root = group.root;
+    const nodes = [root, ...group.nodes.filter((node) => node.id() !== root.id()).sort(layoutSort)];
+
+    if (nodes.length === 1) {
+        return [{ node: root, position: { x: 0, y: 0 } }];
+    }
+
+    if (mode === 'spiral') {
+        const updates = [{ node: root, position: { x: 0, y: 0 } }];
+        const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
+        nodes.slice(1).forEach((node, index) => {
+            const step = index + 1;
+            const radius = 172 + (58 * Math.sqrt(step));
+            const angle = step * goldenAngle;
+
+            updates.push({
+                node,
+                position: {
+                    x: Math.cos(angle) * radius,
+                    y: Math.sin(angle) * radius,
+                },
+            });
+        });
+
+        return updates;
+    }
+
+    if (mode === 'grid') {
+        const offsets = squareShellOffsets(nodes.length);
+
+        return nodes.map((node, index) => ({
+            node,
+            position: offsets[index],
+        }));
+    }
+
+    if (mode === 'concentric') {
+        const people = [];
+        const strongProfiles = [];
+        const profiles = [];
+        const candidates = [];
+
+        nodes.slice(1).forEach((node) => {
+            if (node.data('type') === 'person') {
+                people.push(node);
+            } else if (visibleDegree(node) >= 3 || visibilityValue(node.data()) === 'public') {
+                strongProfiles.push(node);
+            } else if (node.data('type') === 'candidate') {
+                candidates.push(node);
+            } else {
+                profiles.push(node);
+            }
+        });
+
+        return localRingPositions(root, [people, strongProfiles, profiles, candidates], { baseRadius: 176, ringGap: 155 });
+    }
+
+    const distances = radialDistancesWithinGroup(root, nodes);
+    const buckets = new Map();
+    const unconnected = [];
+
+    nodes.slice(1).forEach((node) => {
+        const distance = distances.get(node.id());
+
+        if (!Number.isFinite(distance)) {
+            unconnected.push(node);
+            return;
+        }
+
+        const key = mode === 'radial' ? Math.min(4, Math.max(1, distance)) : Math.min(3, Math.max(1, distance));
+        const bucket = buckets.get(key) || [];
+        bucket.push(node);
+        buckets.set(key, bucket);
+    });
+
+    return localRingPositions(root, [
+        ...(Array.from(buckets.keys()).sort((a, b) => a - b).map((key) => buckets.get(key))),
+        unconnected,
+    ], {
+        baseRadius: mode === 'radial' ? 178 : 168,
+        ringGap: mode === 'radial' ? 158 : 148,
+    });
+}
+
+function placeGroupedLayout(cy, visibleNodes, mode) {
+    const nodes = visibleNodes.toArray();
+    const focus = primaryLayoutNode(nodes);
+    const { centerX, centerY } = layoutCenter(visibleNodes, Math.max(1300, visibleNodes.length * 38), Math.max(900, visibleNodes.length * 28));
+    const groups = connectedLayoutGroups(cy, visibleNodes, focus);
+    const updates = [{ node: focus, position: { x: centerX, y: centerY } }];
+
+    if (!groups.length) {
+        return updates;
+    }
+
+    const preparedGroups = groups.map((group) => {
+        const localUpdates = localGroupUpdates(cy, group, mode);
+        const bounds = updatesBounds(localUpdates);
+
+        return {
+            group,
+            localUpdates,
+            bounds,
+            radius: Math.max(170, bounds.radius),
+        };
+    });
+
+    let index = 0;
+    let ringRadius = 430;
+    let ringIndex = 0;
+
+    while (index < preparedGroups.length) {
+        const ring = [];
+        let usedArc = 0;
+        let maxRadius = 170;
+        const circumference = Math.PI * 2 * ringRadius;
+
+        while (index < preparedGroups.length) {
+            const item = preparedGroups[index];
+            const arc = Math.max(300, (item.radius * 1.45) + 120);
+
+            if (ring.length && usedArc + arc > circumference) {
+                break;
+            }
+
+            ring.push(item);
+            usedArc += arc;
+            maxRadius = Math.max(maxRadius, item.radius);
+            index += 1;
+        }
+
+        const angleOffset = (-Math.PI / 2) + (ringIndex * 0.23);
+
+        ring.forEach((item, ringItemIndex) => {
+            const angle = angleOffset + ((Math.PI * 2) * (ringItemIndex / Math.max(1, ring.length)));
+            const groupCenter = {
+                x: centerX + Math.cos(angle) * (ringRadius + item.radius * 0.15),
+                y: centerY + Math.sin(angle) * (ringRadius + item.radius * 0.15),
+            };
+
+            item.localUpdates.forEach((update) => {
+                updates.push({
+                    node: update.node,
+                    position: {
+                        x: groupCenter.x + update.position.x,
+                        y: groupCenter.y + update.position.y,
+                    },
+                });
+            });
+        });
+
+        ringRadius += Math.max(430, (maxRadius * 2) + 260);
+        ringIndex += 1;
+    }
+
+    return preventLayoutOverlaps(updates, focus);
+}
+
+function preventLayoutOverlaps(updates, focus) {
+    if (updates.length > 900) {
+        return updates;
+    }
+
+    const items = updates.map((update, index) => ({
+        ...update,
+        index,
+        fixed: update.node.id() === focus.id(),
+        position: { ...update.position },
+    }));
+
+    for (let pass = 0; pass < 10; pass += 1) {
+        let moved = false;
+
+        for (let leftIndex = 0; leftIndex < items.length; leftIndex += 1) {
+            for (let rightIndex = leftIndex + 1; rightIndex < items.length; rightIndex += 1) {
+                const left = items[leftIndex];
+                const right = items[rightIndex];
+                const leftBox = estimatedNodeBox(left.node, left.position);
+                const rightBox = estimatedNodeBox(right.node, right.position);
+
+                if (!boxesOverlap(leftBox, rightBox)) {
+                    continue;
+                }
+
+                const overlap = overlapAmount(leftBox, rightBox);
+                let dx = right.position.x - left.position.x;
+                let dy = right.position.y - left.position.y;
+
+                if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) {
+                    const angle = ((left.index + right.index + 1) * Math.PI) / 5;
+                    dx = Math.cos(angle);
+                    dy = Math.sin(angle);
+                }
+
+                const length = Math.max(1, Math.hypot(dx, dy));
+                const push = Math.min(180, Math.max(overlap.x, overlap.y) * 0.58 + 18);
+                const pushX = (dx / length) * push;
+                const pushY = (dy / length) * push;
+
+                if (left.fixed && right.fixed) {
+                    continue;
+                }
+
+                if (left.fixed) {
+                    right.position.x += pushX;
+                    right.position.y += pushY;
+                } else if (right.fixed) {
+                    left.position.x -= pushX;
+                    left.position.y -= pushY;
+                } else {
+                    left.position.x -= pushX / 2;
+                    left.position.y -= pushY / 2;
+                    right.position.x += pushX / 2;
+                    right.position.y += pushY / 2;
+                }
+
+                moved = true;
+            }
+        }
+
+        if (!moved) {
+            break;
+        }
+    }
+
+    return items.map((item) => ({
+        node: item.node,
+        position: item.position,
+    }));
 }
 
 function clusterLayoutUpdates(cy, visibleNodes) {
@@ -1087,23 +1639,7 @@ function gridLayoutUpdates(visibleNodes) {
 }
 
 function layoutUpdatesForMode(root, cy, visibleNodes, mode) {
-    if (mode === 'spiral') {
-        return spiralLayoutUpdates(visibleNodes);
-    }
-
-    if (mode === 'radial') {
-        return radialLayoutUpdates(cy, visibleNodes);
-    }
-
-    if (mode === 'concentric') {
-        return concentricLayoutUpdates(visibleNodes);
-    }
-
-    if (mode === 'grid') {
-        return gridLayoutUpdates(visibleNodes);
-    }
-
-    return clusterLayoutUpdates(cy, visibleNodes);
+    return placeGroupedLayout(cy, visibleNodes, normalizeLayoutMode(mode));
 }
 
 function arrangeVisibleGraph(root, cy, animate = true, mode = null) {

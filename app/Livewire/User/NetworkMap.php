@@ -132,7 +132,7 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 6;
+        $data['graph_version'] = 7;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
         $data['system_relationships'] = [
             'count' => (int) ($systemRelationshipState?->relationship_count ?? 0),
@@ -571,6 +571,9 @@ class NetworkMap extends Component
             'imageUrl' => $imageUrl,
             'hasImage' => filled($imageUrl),
             'isPrimary' => (bool) $person->is_primary,
+            'isFocus' => $this->contextTrackedPersonId
+                ? (int) $person->id === (int) $this->contextTrackedPersonId
+                : (bool) $person->is_primary,
             'role' => $person->is_primary ? 'Hauptperson' : 'Beobachtete Person',
             'status' => $person->last_instagram_status_level ?: 'neutral',
             'profileVisibility' => $this->profileStatusForTrackedPerson($person),
