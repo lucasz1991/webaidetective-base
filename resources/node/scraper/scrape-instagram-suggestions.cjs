@@ -2,6 +2,27 @@
 
 const { runInstagramScraperEntrypoint } = require('./lib/instagram-scraper-entrypoint.cjs');
 
+function normalizeCandidateErrorMessage(error) {
+  return String(error?.message || error || 'candidate-error').trim() || 'candidate-error';
+}
+
+function isFatalSuggestionCandidateError(error) {
+  const code = String(error?.code || '').trim().toUpperCase();
+  const name = String(error?.name || '').trim();
+  const message = normalizeCandidateErrorMessage(error).toLowerCase();
+
+  return name === 'ScraperAbortError'
+    || [
+      'SCRAPER_ABORTED',
+      'SCRIPT_STALLED',
+      'BROWSER_DISCONNECTED',
+      'PAGE_CLOSED',
+    ].includes(code)
+    || message.includes('node-scraper abgebrochen')
+    || message.includes('browser-seite wurde unerwartet geschlossen')
+    || message.includes('verbindung zu chrome/puppeteer wurde getrennt');
+}
+
 async function runProfileSuggestionConnectionScan(deps, page, runtimeState, notes, targetUsername, profileUrl) {
   const {
     captureLivePreviewScreenshot,
@@ -234,6 +255,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
         ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
       });
 
+      try {
       const candidateNavigation = await navigateWithSoftTimeout(page, candidate.profileUrl, runtimeConfig);
 
       if (!candidateNavigation.ok) {
@@ -241,6 +263,8 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
           ...candidate,
           checked: false,
           error: candidateNavigation.error,
+          skipped: true,
+          skippedReason: 'candidate-navigation-error',
         });
 
         progressLog('suggestions-candidate-error', {
@@ -476,6 +500,36 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
       if (rateLimited || gracefullyStopped) {
         break;
       }
+      } catch (error) {
+        if (isFatalSuggestionCandidateError(error)) {
+          throw error;
+        }
+
+        const errorMessage = normalizeCandidateErrorMessage(error);
+
+        checkedCandidates.push({
+          ...candidate,
+          checked: false,
+          skipped: true,
+          skippedReason: 'candidate-error',
+          error: errorMessage,
+        });
+
+        notes.push(`Vorschlags-Kandidat @${candidate.username} uebersprungen: ${errorMessage}`);
+
+        progressLog('suggestions-candidate-error', {
+          relationship: 'suggestions',
+          loaded: checkedCandidates.length,
+          expectedCount: candidatesToCheck.length,
+          candidateUsername: candidate.username,
+          foundSuggestions: matchedCandidates.length,
+          suggestionConnectionsPreview: matchedCandidates.slice(-40),
+          candidateError: errorMessage,
+          skippedReason: 'candidate-error',
+          message: `@${candidate.username} wurde wegen eines Fehlers uebersprungen; naechster Vorschlag wird geprueft.`,
+          ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+        });
+      }
     }
   }
 
@@ -495,35 +549,48 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
   ));
 
   if (!rateLimited && !gracefullyStopped && candidatesNeedingPostDismissal.length > 0) {
-    await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
-    await sleep(900);
-    await scrollToProfileSuggestions(page, 4);
+    try {
+      await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
+      await sleep(900);
+      await scrollToProfileSuggestions(page, 4);
 
-    for (const candidate of candidatesNeedingPostDismissal) {
-      const dismissed = await dismissVisibleSuggestion(page, candidate.username);
+      for (const candidate of candidatesNeedingPostDismissal) {
+        const dismissed = await dismissVisibleSuggestion(page, candidate.username);
 
-      if (!dismissed) {
-        continue;
+        if (!dismissed) {
+          continue;
+        }
+
+        dismissedCount += 1;
+        dismissedUsernames.add(normalizeInstagramUsername(candidate.username));
+        dismissedCandidates.push({
+          ...candidate,
+          dismissed: true,
+          dismissedBeforeCheck: false,
+          dismissReason: candidate.dismissReason,
+        });
+        await sleep(350);
+      }
+    } catch (error) {
+      if (isFatalSuggestionCandidateError(error)) {
+        throw error;
       }
 
-      dismissedCount += 1;
-      dismissedUsernames.add(normalizeInstagramUsername(candidate.username));
-      dismissedCandidates.push({
-        ...candidate,
-        dismissed: true,
-        dismissedBeforeCheck: false,
-        dismissReason: candidate.dismissReason,
-      });
-      await sleep(350);
+      notes.push(`Vorschlags-Aufraeumen uebersprungen: ${normalizeCandidateErrorMessage(error)}`);
     }
   }
 
-  const statusLevel = gracefullyStopped || rateLimited ? 'partial' : 'success';
+  const candidateErrorCount = checkedCandidates.filter((candidate) => (
+    ['candidate-error', 'candidate-navigation-error'].includes(candidate?.skippedReason)
+  )).length;
+  const statusLevel = gracefullyStopped || rateLimited || candidateErrorCount > 0 ? 'partial' : 'success';
   const statusMessage = gracefullyStopped
     ? 'Profilvorschlag-Verbindungsscan wurde beendet; bisherige Treffer wurden gespeichert.'
     : (rateLimited
       ? 'Profilvorschlag-Verbindungsscan wurde wegen Instagram-Rate-Limit pausiert.'
-      : 'Profilvorschlag-Verbindungsscan abgeschlossen.');
+      : (candidateErrorCount > 0
+        ? `Profilvorschlag-Verbindungsscan abgeschlossen; ${candidateErrorCount} Kandidaten wurden wegen Fehlern uebersprungen.`
+        : 'Profilvorschlag-Verbindungsscan abgeschlossen.'));
 
   progressLog('suggestions-complete', {
     relationship: 'suggestions',
@@ -532,6 +599,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     foundSuggestions: matchedCandidates.length,
     dismissedSuggestions: dismissedCount,
     skippedSuggestions: skippedCandidates.length,
+    failedSuggestions: candidateErrorCount,
     suggestionConnectionsPreview: matchedCandidates.slice(-40),
     gracefullyStopped,
     rateLimited,
@@ -567,6 +635,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     matchCount: matchedCandidates.length,
     dismissedCount,
     skippedCount: skippedCandidates.length,
+    candidateErrorCount,
     rateLimited,
     rateLimitText,
     gracefullyStopped,
