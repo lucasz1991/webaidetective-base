@@ -4,5 +4,13 @@ const { runInstagramScraperEntrypoint } = require('./lib/instagram-scraper-entry
 
 runInstagramScraperEntrypoint({
   defaultMode: 'followers',
-  allowedModes: ['followers', 'following', 'followers-search', 'search-followers', 'following-search', 'search-following'],
+  allowedModes: [
+    'followers',
+    'following',
+    'followers-search',
+    'search-followers',
+    'following-search',
+    'search-following',
+    'public-connections-batch',
+  ],
 });
