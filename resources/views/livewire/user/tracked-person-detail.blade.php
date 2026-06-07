@@ -1961,14 +1961,14 @@
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Analyse-Historie</h3>
                 <div class="mt-3 space-y-2">
-                    @forelse($trackedPerson->instagramSnapshots as $historySnapshot)
-                        @php
-                            $historySnapshotScreenshots = $snapshotScreenshots($historySnapshot);
-                        @endphp
+                    <?php $historySnapshots = $trackedPerson->instagramSnapshots ?? collect(); ?>
+                    <?php if ($historySnapshots->isNotEmpty()): ?>
+                        <?php foreach ($historySnapshots as $historySnapshot): ?>
+                            <?php $historySnapshotScreenshots = $snapshotScreenshots($historySnapshot); ?>
                         <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                             <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div>
-                                    <div class="font-semibold text-slate-900">{{ optional($historySnapshot->analyzed_at)->format('d.m.Y H:i') ?: '—' }}</div>
+                                    <div class="font-semibold text-slate-900">{{ optional($historySnapshot->analyzed_at)->format('d.m.Y H:i') ?: '-' }}</div>
                                     <div class="mt-1">{{ $historySnapshot->status_message }}</div>
                                 </div>
                                 <div class="text-xs text-slate-500">
@@ -1978,41 +1978,42 @@
                             <div class="mt-3 grid grid-cols-3 gap-2 text-xs">
                                 <div class="rounded-xl bg-white px-3 py-2">
                                     <div class="text-slate-500">Follower</div>
-                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshot->followers_count !== null ? number_format($historySnapshot->followers_count) : '—' }}</div>
+                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshot->followers_count !== null ? number_format($historySnapshot->followers_count) : '-' }}</div>
                                 </div>
                                 <div class="rounded-xl bg-white px-3 py-2">
                                     <div class="text-slate-500">Gefolgt</div>
-                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshot->following_count !== null ? number_format($historySnapshot->following_count) : '—' }}</div>
+                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshot->following_count !== null ? number_format($historySnapshot->following_count) : '-' }}</div>
                                 </div>
                                 <div class="rounded-xl bg-white px-3 py-2">
                                     <div class="text-slate-500">Beitraege</div>
-                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshot->posts_count !== null ? number_format($historySnapshot->posts_count) : '—' }}</div>
+                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshot->posts_count !== null ? number_format($historySnapshot->posts_count) : '-' }}</div>
                                 </div>
                             </div>
-                            @if($historySnapshotScreenshots->isNotEmpty())
+                            <?php if ($historySnapshotScreenshots->isNotEmpty()): ?>
                                 <details class="mt-3 rounded-xl border border-slate-200 bg-white p-2">
                                     <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-600">
                                         Screenshots anzeigen ({{ $historySnapshotScreenshots->count() }})
                                     </summary>
                                     <div class="mt-2 grid gap-2 sm:grid-cols-2">
-                                        @foreach($historySnapshotScreenshots->take(4) as $screenshot)
+                                        <?php foreach ($historySnapshotScreenshots->take(4) as $screenshot): ?>
                                             <a href="{{ $screenshot['url'] }}" target="_blank" class="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 shadow-sm">
                                                 <img src="{{ $screenshot['url'] }}" alt="{{ $screenshot['label'] }}" class="h-28 w-full object-cover">
                                                 <div class="border-t border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
                                                     <span class="font-semibold text-slate-800">{{ $screenshot['label'] }}</span>
-                                                    @if($screenshot['meta'])
+                                                    <?php if ($screenshot['meta']): ?>
                                                         <span class="ml-1">{{ $screenshot['meta'] }}</span>
-                                                    @endif
+                                                    <?php endif; ?>
                                                 </div>
                                             </a>
-                                        @endforeach
+                                        <?php endforeach; ?>
                                     </div>
                                 </details>
-                            @endif
+                            <?php endif; ?>
                         </div>
-                    @empty
+                        <?php endforeach; ?>
+                    <?php else: ?>
                         <p class="text-sm text-slate-500">Noch keine Verlaufseintraege mit erkannten Aenderungen vorhanden.</p>
-                    @endforelse
+                    <?php endif; ?>
                 </div>
             </div>
             </div>
