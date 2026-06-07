@@ -263,23 +263,23 @@
 
             return $screenshots->unique('path')->values();
         };
-        $snapshotScreenshots = function ($snapshot) use ($screenshotUrl) {
+        $snapshotScreenshots = function ($instagramSnapshot) use ($screenshotUrl) {
             $screenshots = collect();
 
-            if (! $snapshot) {
+            if (! $instagramSnapshot) {
                 return $screenshots;
             }
 
-            if (is_string($snapshot->screenshot_path) && $snapshot->screenshot_path !== '') {
+            if (is_string($instagramSnapshot->screenshot_path) && $instagramSnapshot->screenshot_path !== '') {
                 $screenshots->push([
                     'label' => 'Debug-Screenshot',
-                    'path' => $snapshot->screenshot_path,
-                    'url' => $snapshot->screenshot_url,
+                    'path' => $instagramSnapshot->screenshot_path,
+                    'url' => $instagramSnapshot->screenshot_url,
                     'meta' => null,
                 ]);
             }
 
-            foreach (data_get($snapshot->raw_payload, 'analysisPolicy.scrapePhases', []) as $phase) {
+            foreach (data_get($instagramSnapshot->raw_payload, 'analysisPolicy.scrapePhases', []) as $phase) {
                 $path = data_get($phase, 'screenshotPath');
 
                 if (! is_string($path) || $path === '') {
