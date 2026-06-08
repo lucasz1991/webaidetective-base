@@ -2,7 +2,7 @@ const instances = new WeakMap();
 const activeRoots = new Set();
 const DEFAULT_LAYOUT_MODE = 'clusters';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
-const LAYOUT_STORAGE_PREFIX = 'network-map-render:v4';
+const LAYOUT_STORAGE_PREFIX = 'network-map-render:v5';
 let cytoscapeLoader;
 
 function loadCytoscape() {
@@ -264,18 +264,169 @@ function toElements(graph) {
         },
     }));
 
-    const edges = (graph.edges || []).map((edge) => ({
+    const edges = combineGraphEdges(graph.edges || []).map((edge) => ({
         group: 'edges',
-        data: {
-            ...edge,
-            source: edge.from,
-            target: edge.to,
-            networkType: edge.type,
-            label: edge.label || (edge.type === 'inferred' ? 'rekonstruiert' : 'Profil'),
-        },
+        data: edge,
     }));
 
     return [...nodes, ...edges];
+}
+
+function edgeEndpointId(value) {
+    return String(value || '').trim();
+}
+
+function canonicalEdgePair(edge) {
+    const from = edgeEndpointId(edge.from || edge.source);
+    const to = edgeEndpointId(edge.to || edge.target);
+    const ordered = [from, to].sort();
+
+    return {
+        from,
+        to,
+        source: ordered[0],
+        target: ordered[1],
+        key: `${ordered[0]}|${ordered[1]}`,
+    };
+}
+
+function edgeEvidenceKind(edge) {
+    const type = String(edge.type || edge.networkType || '').trim();
+    const id = String(edge.id || '').toLowerCase();
+    const label = String(edge.label || '').toLowerCase();
+
+    if (type === 'tracked-list' || type === 'tracked-profile-rel' || type === 'public-profile') {
+        return 'actual';
+    }
+
+    if (type === 'inferred' && (id.includes('suggestion_connection') || label.includes('vorschlag'))) {
+        return 'suggestion';
+    }
+
+    if (type === 'inferred') {
+        return 'reconstructed';
+    }
+
+    return 'reconstructed';
+}
+
+function edgeEvidenceFromEdge(edge) {
+    const pair = canonicalEdgePair(edge);
+    const kind = edgeEvidenceKind(edge);
+    const type = String(edge.type || edge.networkType || 'unknown');
+    const label = edge.label || (kind === 'suggestion' ? 'Vorschlag' : (kind === 'actual' ? 'folgt' : 'rekonstruiert'));
+
+    return {
+        id: String(edge.id || `${type}-${pair.from}-${pair.to}`),
+        type,
+        kind,
+        from: pair.from,
+        to: pair.to,
+        label,
+        directional: kind !== 'suggestion' && pair.from !== pair.to,
+        sourceHandle: edge.sourceHandle || null,
+        evidence: edge.evidence || [],
+        systemWideEvidence: Boolean(edge.systemWideEvidence),
+        ownUserEvidence: Boolean(edge.ownUserEvidence),
+        otherUserEvidence: Boolean(edge.otherUserEvidence),
+        systemEvidenceScanCount: Number(edge.systemEvidenceScanCount || 0),
+        systemEvidenceUserCount: Number(edge.systemEvidenceUserCount || 0),
+    };
+}
+
+function uniqueEdgeEvidences(evidences) {
+    const seen = new Set();
+
+    return (evidences || []).filter((evidence) => {
+        const key = `${evidence.type}:${evidence.kind}:${evidence.from}>${evidence.to}:${evidence.label}`;
+
+        if (seen.has(key)) {
+            return false;
+        }
+
+        seen.add(key);
+        return true;
+    });
+}
+
+function edgeKindPriority(kind) {
+    return { actual: 3, reconstructed: 2, suggestion: 1 }[kind] || 0;
+}
+
+function edgeRenderState(source, target, evidences) {
+    const visibleEvidences = evidences?.length ? evidences : [];
+    const strongest = visibleEvidences
+        .map((evidence) => evidence.kind)
+        .sort((left, right) => edgeKindPriority(right) - edgeKindPriority(left))[0] || 'reconstructed';
+    const lineColor = {
+        actual: '#22c55e',
+        reconstructed: '#ef4444',
+        suggestion: '#f59e0b',
+    }[strongest] || '#ef4444';
+    const directionalEvidences = visibleEvidences.filter((evidence) => evidence.directional);
+    const hasForwardDirection = directionalEvidences.some((evidence) => evidence.from === source && evidence.to === target);
+    const hasReverseDirection = directionalEvidences.some((evidence) => evidence.from === target && evidence.to === source);
+    const labels = [...new Set(visibleEvidences.map((evidence) => evidence.label).filter(Boolean))];
+
+    return {
+        connectionState: strongest,
+        lineColor,
+        sourceArrowColor: lineColor,
+        targetArrowColor: lineColor,
+        sourceArrowShape: hasReverseDirection ? 'triangle' : 'none',
+        targetArrowShape: hasForwardDirection ? 'triangle' : 'none',
+        lineStyle: strongest === 'suggestion' ? 'dotted' : (strongest === 'reconstructed' ? 'dashed' : 'solid'),
+        edgeWidth: strongest === 'actual' ? 1.35 : 1.05,
+        edgeOpacity: strongest === 'suggestion' ? 0.66 : 0.78,
+        label: labels.join(' + ') || (strongest === 'suggestion' ? 'Vorschlag' : (strongest === 'actual' ? 'folgt' : 'rekonstruiert')),
+    };
+}
+
+function combinedEdgeData(source, target, evidences) {
+    const uniqueEvidences = uniqueEdgeEvidences(evidences);
+    const renderState = edgeRenderState(source, target, uniqueEvidences);
+    const networkTypes = [...new Set(uniqueEvidences.map((evidence) => evidence.type).filter(Boolean))];
+
+    return {
+        id: `edge-${stableHash(`${source}|${target}`)}`,
+        source,
+        target,
+        from: source,
+        to: target,
+        type: networkTypes[0] || 'combined',
+        networkType: networkTypes[0] || 'combined',
+        networkTypes,
+        edgeEvidences: uniqueEvidences,
+        systemWideEvidence: uniqueEvidences.some((evidence) => evidence.systemWideEvidence),
+        ownUserEvidence: uniqueEvidences.some((evidence) => evidence.ownUserEvidence),
+        otherUserEvidence: uniqueEvidences.some((evidence) => evidence.otherUserEvidence),
+        systemEvidenceScanCount: uniqueEvidences.reduce((count, evidence) => count + Number(evidence.systemEvidenceScanCount || 0), 0),
+        systemEvidenceUserCount: Math.max(0, ...uniqueEvidences.map((evidence) => Number(evidence.systemEvidenceUserCount || 0))),
+        ...renderState,
+    };
+}
+
+function combineGraphEdges(edges) {
+    const groups = new Map();
+
+    (edges || []).forEach((edge) => {
+        const pair = canonicalEdgePair(edge);
+
+        if (!pair.source || !pair.target || pair.source === pair.target) {
+            return;
+        }
+
+        const group = groups.get(pair.key) || {
+            source: pair.source,
+            target: pair.target,
+            evidences: [],
+        };
+
+        group.evidences.push(edgeEvidenceFromEdge(edge));
+        groups.set(pair.key, group);
+    });
+
+    return Array.from(groups.values()).map((group) => combinedEdgeData(group.source, group.target, group.evidences));
 }
 
 function baseNodeSizeForData(data) {
@@ -315,19 +466,23 @@ function visualBaselineForNode(node) {
 
 function applyVisualSettings(root, cy, nodes = null) {
     const state = instances.get(root);
-    const iconScale = normalizedScale(state?.nodeSizeScale, 1, 0.65, 1.7);
-    const variance = normalizedScale(state?.nodeSizeVariance, 1, 0, 2);
+    const iconScale = normalizedScale(state?.nodeSizeScale, 1, 0.5, 5);
+    const variance = normalizedScale(state?.nodeSizeVariance, 1, 0, 4);
     const targetNodes = nodes || cy.nodes();
+    const degreeNodes = cy.nodes().not('.network-filtered');
+    const maxDegree = Math.max(1, ...degreeNodes.map((node) => visibleDegreeForState(node, state)));
 
     targetNodes.forEach((node) => {
         const baseline = visualBaselineForNode(node);
-        const originalSize = Number(node.data('nodeSize')) || baseline.size;
-        const originalFontSize = Number(node.data('nodeFontSize')) || baseline.fontSize;
-        const variedSize = baseline.size + ((originalSize - baseline.size) * variance);
-        const variedFontSize = baseline.fontSize + ((originalFontSize - baseline.fontSize) * Math.min(1.45, variance));
-        const renderSize = Math.round(Math.max(30, Math.min(190, variedSize * iconScale)));
-        const renderFontSize = Math.round(Math.max(9, Math.min(18, variedFontSize * Math.max(0.88, Math.min(1.18, iconScale)))));
-        const renderTextMaxWidth = Math.round(Math.max(92, Math.min(160, 96 + ((renderSize - 46) * 0.36))));
+        const degreeRatio = Math.max(0, Math.min(1, visibleDegreeForState(node, state) / maxDegree));
+        const typeBonus = node.data('isFocus') || node.data('isPrimary')
+            ? 0
+            : (node.data('type') === 'person' ? 70 : (node.data('type') === 'candidate' ? 48 : 62));
+        const variedSize = baseline.size + (typeBonus * degreeRatio * variance);
+        const variedFontSize = baseline.fontSize + (Math.min(5, typeBonus / 14) * degreeRatio * Math.min(2.6, variance));
+        const renderSize = Math.round(Math.max(24, Math.min(620, variedSize * iconScale)));
+        const renderFontSize = Math.round(Math.max(9, Math.min(34, variedFontSize * Math.max(0.82, Math.min(1.45, iconScale)))));
+        const renderTextMaxWidth = Math.round(Math.max(92, Math.min(430, 96 + ((renderSize - 46) * 0.42))));
 
         node.data({
             renderNodeSize: renderSize,
@@ -433,9 +588,9 @@ function readStoredLayoutSettings(root) {
 function writeStoredLayoutSettings(root, state) {
     try {
         localStorage.setItem(layoutSettingsStorageKey(root), JSON.stringify({
-            layoutSpacingScale: normalizedScale(state?.layoutSpacingScale, 1, 0.7, 1.9),
-            nodeSizeScale: normalizedScale(state?.nodeSizeScale, 1, 0.65, 1.7),
-            nodeSizeVariance: normalizedScale(state?.nodeSizeVariance, 1, 0, 2),
+            layoutSpacingScale: normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5),
+            nodeSizeScale: normalizedScale(state?.nodeSizeScale, 1, 0.5, 5),
+            nodeSizeVariance: normalizedScale(state?.nodeSizeVariance, 1, 0, 4),
         }));
     } catch {
         // Ignore storage errors.
@@ -448,24 +603,24 @@ function updateLayoutControls(root, state) {
     });
 
     root.querySelectorAll('[data-network-layout-spacing]').forEach((control) => {
-        control.value = String(Math.round(normalizedScale(state?.layoutSpacingScale, 1, 0.7, 1.9) * 100));
+        control.value = String(Math.round(normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5) * 100));
     });
     root.querySelectorAll('[data-network-layout-spacing-value]').forEach((element) => {
-        element.textContent = percentLabel(normalizedScale(state?.layoutSpacingScale, 1, 0.7, 1.9));
+        element.textContent = percentLabel(normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5));
     });
 
     root.querySelectorAll('[data-network-icon-scale]').forEach((control) => {
-        control.value = String(Math.round(normalizedScale(state?.nodeSizeScale, 1, 0.65, 1.7) * 100));
+        control.value = String(Math.round(normalizedScale(state?.nodeSizeScale, 1, 0.5, 5) * 100));
     });
     root.querySelectorAll('[data-network-icon-scale-value]').forEach((element) => {
-        element.textContent = percentLabel(normalizedScale(state?.nodeSizeScale, 1, 0.65, 1.7));
+        element.textContent = percentLabel(normalizedScale(state?.nodeSizeScale, 1, 0.5, 5));
     });
 
     root.querySelectorAll('[data-network-size-variance]').forEach((control) => {
-        control.value = String(Math.round(normalizedScale(state?.nodeSizeVariance, 1, 0, 2) * 100));
+        control.value = String(Math.round(normalizedScale(state?.nodeSizeVariance, 1, 0, 4) * 100));
     });
     root.querySelectorAll('[data-network-size-variance-value]').forEach((element) => {
-        element.textContent = percentLabel(normalizedScale(state?.nodeSizeVariance, 1, 0, 2));
+        element.textContent = percentLabel(normalizedScale(state?.nodeSizeVariance, 1, 0, 4));
     });
 }
 
@@ -541,7 +696,7 @@ function readStoredLayout(root, state, cy) {
     try {
         const stored = JSON.parse(localStorage.getItem(key) || 'null');
 
-        return stored && stored.version === 4 ? { key, stored } : null;
+        return stored && stored.version === 5 ? { key, stored } : null;
     } catch {
         return null;
     }
@@ -579,12 +734,12 @@ function writeStoredLayout(root, cy) {
 
     try {
         localStorage.setItem(key, JSON.stringify({
-            version: 4,
+            version: 5,
             savedAt: Date.now(),
             layoutMode: normalizeLayoutMode(state.layoutMode),
-            layoutSpacingScale: normalizedScale(state.layoutSpacingScale, 1, 0.7, 1.9),
-            nodeSizeScale: normalizedScale(state.nodeSizeScale, 1, 0.65, 1.7),
-            nodeSizeVariance: normalizedScale(state.nodeSizeVariance, 1, 0, 2),
+            layoutSpacingScale: normalizedScale(state.layoutSpacingScale, 1, 0.5, 5),
+            nodeSizeScale: normalizedScale(state.nodeSizeScale, 1, 0.5, 5),
+            nodeSizeVariance: normalizedScale(state.nodeSizeVariance, 1, 0, 4),
             nodeCount: cy.nodes().length,
             edgeCount: cy.edges().length,
             zoom: Math.round(cy.zoom() * 10000) / 10000,
@@ -695,22 +850,47 @@ function visibleDegree(node) {
     return visibleConnectedEdges(node).length;
 }
 
-function edgeVisibleForState(edge, state) {
-    const type = edge.data('networkType');
+function evidenceVisibleForState(evidence, state) {
+    const type = evidence?.type;
 
     if (type === 'public-profile') {
-        return state.showPublic;
+        return state?.showPublic !== false;
     }
 
     if (type === 'inferred') {
-        return state.showInferred;
+        return state?.showInferred !== false;
     }
 
     if (type === 'tracked-list' || type === 'tracked-profile-rel') {
-        return state.showTracked;
+        return state?.showTracked !== false;
     }
 
     return true;
+}
+
+function edgeEvidences(edge) {
+    const evidences = edge.data('edgeEvidences');
+
+    if (Array.isArray(evidences) && evidences.length) {
+        return evidences;
+    }
+
+    return [edgeEvidenceFromEdge(edge.data())];
+}
+
+function visibleEdgeEvidences(edge, state) {
+    return edgeEvidences(edge).filter((evidence) => evidenceVisibleForState(evidence, state));
+}
+
+function edgeVisibleForState(edge, state) {
+    return visibleEdgeEvidences(edge, state).length > 0;
+}
+
+function applyEdgeRenderState(cy, state) {
+    cy.edges().forEach((edge) => {
+        const evidences = visibleEdgeEvidences(edge, state);
+        edge.data(edgeRenderState(edge.data('source'), edge.data('target'), evidences));
+    });
 }
 
 function visibleDegreeForState(node, state) {
@@ -724,6 +904,12 @@ function directReferenceNode(cy, state) {
         if (selected.length) {
             return selected;
         }
+    }
+
+    const focus = cy.nodes().filter((node) => Boolean(node.data('isFocus'))).first();
+
+    if (focus.length) {
+        return focus;
     }
 
     const primary = cy.nodes().filter((node) => Boolean(node.data('isPrimary'))).first();
@@ -932,7 +1118,7 @@ function primaryLayoutNode(nodes) {
 }
 
 function estimatedNodeBox(node, position) {
-    const size = Math.max(30, Number(node.data('renderNodeSize') || node.data('nodeSize')) || 48);
+    const size = Math.max(24, Number(node.data('renderNodeSize') || node.data('nodeSize')) || 48);
     const fontSize = Math.max(9, Number(node.data('renderNodeFontSize') || node.data('nodeFontSize')) || 11);
     const maxTextWidth = Math.max(92, Number(node.data('renderTextMaxWidth')) || 105);
     const label = String(node.data('fullLabel') || node.data('label') || node.data('handle') || node.id());
@@ -1191,7 +1377,7 @@ function radialDistancesWithinGroup(root, groupNodes) {
 
 function localRingPositions(root, buckets, options = {}) {
     const updates = [{ node: root, position: { x: 0, y: 0 } }];
-    const spacingScale = normalizedScale(options.spacingScale, 1, 0.7, 1.9);
+    const spacingScale = normalizedScale(options.spacingScale, 1, 0.5, 5);
     const baseRadius = (options.baseRadius || 180) * spacingScale;
     const ringGap = (options.ringGap || 160) * spacingScale;
 
@@ -1221,8 +1407,8 @@ function localRingPositions(root, buckets, options = {}) {
 
 function squareShellOffsets(count, slotX = 170, slotY = 154, spacingScale = 1) {
     const offsets = [{ x: 0, y: 0 }];
-    const scaledSlotX = slotX * normalizedScale(spacingScale, 1, 0.7, 1.9);
-    const scaledSlotY = slotY * normalizedScale(spacingScale, 1, 0.7, 1.9);
+    const scaledSlotX = slotX * normalizedScale(spacingScale, 1, 0.5, 5);
+    const scaledSlotY = slotY * normalizedScale(spacingScale, 1, 0.5, 5);
 
     for (let ring = 1; offsets.length < count; ring += 1) {
         const candidates = [];
@@ -1254,7 +1440,7 @@ function squareShellOffsets(count, slotX = 170, slotY = 154, spacingScale = 1) {
 
 function localGroupUpdates(cy, group, mode, spacingScale = 1) {
     const root = group.root;
-    const spacing = normalizedScale(spacingScale, 1, 0.7, 1.9);
+    const spacing = normalizedScale(spacingScale, 1, 0.5, 5);
     const nodes = [root, ...group.nodes.filter((node) => node.id() !== root.id()).sort(layoutSort)];
 
     if (nodes.length === 1) {
@@ -1342,13 +1528,13 @@ function localGroupUpdates(cy, group, mode, spacingScale = 1) {
 
 function placeGroupedLayout(root, cy, visibleNodes, mode) {
     const state = instances.get(root);
-    const spacingScale = normalizedScale(state?.layoutSpacingScale, 1, 0.7, 1.9);
+    const spacingScale = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5);
     const nodes = visibleNodes.toArray();
     const focus = primaryLayoutNode(nodes);
     const { centerX, centerY } = layoutCenter(
         visibleNodes,
-        Math.max(1300, visibleNodes.length * 38 * spacingScale),
-        Math.max(900, visibleNodes.length * 28 * spacingScale),
+        Math.max(1300 * spacingScale, visibleNodes.length * 38 * spacingScale),
+        Math.max(900 * spacingScale, visibleNodes.length * 28 * spacingScale),
     );
     const groups = connectedLayoutGroups(cy, visibleNodes, focus);
     const updates = [{ node: focus, position: { x: centerX, y: centerY } }];
@@ -1978,18 +2164,12 @@ function applyFilters(root, cy, options = {}) {
 
     cy.elements().removeClass('network-filtered');
 
-    if (!state.showPublic) {
-        cy.edges('[networkType = "public-profile"]').addClass('network-filtered');
-    }
-
-    if (!state.showInferred) {
-        cy.edges('[networkType = "inferred"]').addClass('network-filtered');
-    }
-
-    if (!state.showTracked) {
-        cy.edges('[networkType = "tracked-list"]').addClass('network-filtered');
-        cy.edges('[networkType = "tracked-profile-rel"]').addClass('network-filtered');
-    }
+    cy.edges().forEach((edge) => {
+        if (!edgeVisibleForState(edge, state)) {
+            edge.addClass('network-filtered');
+        }
+    });
+    applyEdgeRenderState(cy, state);
 
     const autoMinDegree = state.maxVisibleProfiles > 0 ? recommendedMinDegree(root, cy, state) : 0;
     const effectiveMinDegree = Math.max(state.minDegree, autoMinDegree);
@@ -2014,6 +2194,8 @@ function applyFilters(root, cy, options = {}) {
             }
         });
     }
+
+    applyVisualSettings(root, cy);
 
     root.querySelectorAll('[data-network-filter]').forEach((button) => {
         const filter = button.dataset.networkFilter;
@@ -2161,21 +2343,21 @@ function bindControls(root, cy) {
 
     root.querySelectorAll('[data-network-layout-spacing]').forEach((control) => {
         control.addEventListener('input', () => {
-            state.layoutSpacingScale = controlScaleValue(control, 1, 0.7, 1.9);
+            state.layoutSpacingScale = controlScaleValue(control, 1, 0.5, 5);
             scheduleLayoutSettingsRefresh(root, cy);
         });
     });
 
     root.querySelectorAll('[data-network-icon-scale]').forEach((control) => {
         control.addEventListener('input', () => {
-            state.nodeSizeScale = controlScaleValue(control, 1, 0.65, 1.7);
+            state.nodeSizeScale = controlScaleValue(control, 1, 0.5, 5);
             scheduleLayoutSettingsRefresh(root, cy);
         });
     });
 
     root.querySelectorAll('[data-network-size-variance]').forEach((control) => {
         control.addEventListener('input', () => {
-            state.nodeSizeVariance = controlScaleValue(control, 1, 0, 2);
+            state.nodeSizeVariance = controlScaleValue(control, 1, 0, 4);
             scheduleLayoutSettingsRefresh(root, cy);
         });
     });
@@ -2334,50 +2516,40 @@ async function initNetworkMap(root) {
             {
                 selector: 'edge',
                 style: {
-                    width: 0.7,
-                    'line-color': '#7dd3fc',
-                    'target-arrow-color': '#7dd3fc',
-                    'target-arrow-shape': 'triangle',
-                    'arrow-scale': 0.65,
+                    width: 'data(edgeWidth)',
+                    'line-color': 'data(lineColor)',
+                    'source-arrow-color': 'data(sourceArrowColor)',
+                    'target-arrow-color': 'data(targetArrowColor)',
+                    'source-arrow-shape': 'data(sourceArrowShape)',
+                    'target-arrow-shape': 'data(targetArrowShape)',
+                    'arrow-scale': 0.78,
                     'curve-style': 'bezier',
-                    opacity: 0.38,
+                    'line-style': 'data(lineStyle)',
+                    opacity: 'data(edgeOpacity)',
                 },
             },
             {
                 selector: 'edge[networkType = "inferred"]',
                 style: {
-                    'line-color': '#f9a8d4',
-                    'target-arrow-color': '#f9a8d4',
-                    'line-style': 'dashed',
+                    width: 'data(edgeWidth)',
                 },
             },
             {
                 selector: 'edge[networkType = "tracked-list"]',
                 style: {
-                    width: 0.9,
-                    'line-color': '#6ee7b7',
-                    'target-arrow-color': '#6ee7b7',
-                    'line-style': 'solid',
-                    opacity: 0.46,
+                    width: 'data(edgeWidth)',
                 },
             },
             {
                 selector: 'edge[networkType = "tracked-profile-rel"]',
                 style: {
-                    width: 0.9,
-                    'line-color': '#a5b4fc',
-                    'target-arrow-color': '#a5b4fc',
-                    'line-style': 'solid',
-                    opacity: 0.46,
+                    width: 'data(edgeWidth)',
                 },
             },
             {
                 selector: 'edge[otherUserEvidence]',
                 style: {
-                    width: 1.1,
-                    'line-color': '#a78bfa',
-                    'target-arrow-color': '#a78bfa',
-                    opacity: 0.58,
+                    width: 1.55,
                 },
             },
             {
@@ -2430,9 +2602,9 @@ async function initNetworkMap(root) {
             showDirectOnly: storedFilters.showDirectOnly ?? false,
             minDegree: storedMinDegree ?? 0,
             maxVisibleProfiles: storedMaxVisibleProfiles ?? selectedMaxVisibleProfiles(root),
-            layoutSpacingScale: normalizedScale(storedFilters.layoutSpacingScale ?? storedLayoutSettings.layoutSpacingScale, 1, 0.7, 1.9),
-            nodeSizeScale: normalizedScale(storedFilters.nodeSizeScale ?? storedLayoutSettings.nodeSizeScale, 1, 0.65, 1.7),
-            nodeSizeVariance: normalizedScale(storedFilters.nodeSizeVariance ?? storedLayoutSettings.nodeSizeVariance, 1, 0, 2),
+            layoutSpacingScale: normalizedScale(storedFilters.layoutSpacingScale ?? storedLayoutSettings.layoutSpacingScale, 1, 0.5, 5),
+            nodeSizeScale: normalizedScale(storedFilters.nodeSizeScale ?? storedLayoutSettings.nodeSizeScale, 1, 0.5, 5),
+            nodeSizeVariance: normalizedScale(storedFilters.nodeSizeVariance ?? storedLayoutSettings.nodeSizeVariance, 1, 0, 4),
             hasStoredMinDegree: storedMinDegree !== null,
             autoMinDegreeApplied: false,
             selectedId: null,
@@ -2585,6 +2757,17 @@ function finalLayoutOptions(cy) {
     return cy.nodes().length > 1200 ? largeGraphLayoutOptions() : coseLayoutOptions(true);
 }
 
+function mergeEdgeData(existingEdge, incomingData) {
+    const source = existingEdge.data('source');
+    const target = existingEdge.data('target');
+    const evidences = uniqueEdgeEvidences([
+        ...edgeEvidences(existingEdge),
+        ...(Array.isArray(incomingData.edgeEvidences) ? incomingData.edgeEvidences : edgeEvidences({ data: () => incomingData })),
+    ]);
+
+    existingEdge.data(combinedEdgeData(source, target, evidences));
+}
+
 function addGraphChunk(root, cy, chunk) {
     const nodeElements = toElements({ nodes: chunk.nodes || [], edges: [] })
         .filter((element) => !cy.getElementById(element.data.id).length);
@@ -2593,13 +2776,25 @@ function addGraphChunk(root, cy, chunk) {
         cy.add(nodeElements);
     }
 
-    const edgeElements = toElements({ nodes: [], edges: chunk.edges || [] })
-        .filter((element) => {
-            const sourceExists = cy.getElementById(element.data.source).length > 0;
-            const targetExists = cy.getElementById(element.data.target).length > 0;
+    const edgeElements = [];
 
-            return sourceExists && targetExists && !cy.getElementById(element.data.id).length;
-        });
+    toElements({ nodes: [], edges: chunk.edges || [] }).forEach((element) => {
+        const sourceExists = cy.getElementById(element.data.source).length > 0;
+        const targetExists = cy.getElementById(element.data.target).length > 0;
+
+        if (!sourceExists || !targetExists) {
+            return;
+        }
+
+        const existingEdge = cy.getElementById(element.data.id);
+
+        if (existingEdge.length) {
+            mergeEdgeData(existingEdge, element.data);
+            return;
+        }
+
+        edgeElements.push(element);
+    });
 
     if (edgeElements.length) {
         cy.add(edgeElements);
@@ -2610,6 +2805,7 @@ function addGraphChunk(root, cy, chunk) {
     if (state) {
         state.loadedNodes += nodeElements.length;
         state.loadedEdges += edgeElements.length;
+        applyEdgeRenderState(cy, state);
         applyVisualSettings(root, cy);
     }
 }
