@@ -596,6 +596,15 @@ class InstagramScraper
                 'publicListSearch' => is_array($item['publicListSearch'] ?? null)
                     ? $item['publicListSearch']
                     : [],
+                'checked' => array_key_exists('checked', $item) ? (bool) $item['checked'] : null,
+                'skipped' => array_key_exists('skipped', $item) ? (bool) $item['skipped'] : null,
+                'matched' => array_key_exists('matched', $item) ? (bool) $item['matched'] : null,
+                'alreadyKnown' => (bool) ($item['alreadyKnown'] ?? false),
+                'dismissedFromSuggestions' => (bool) ($item['dismissedFromSuggestions'] ?? false),
+                'skippedReason' => $this->nullableTrim($item['skippedReason'] ?? null),
+                'previousNoMatchChecks' => is_numeric($item['previousNoMatchChecks'] ?? null)
+                    ? max(0, (int) $item['previousNoMatchChecks'])
+                    : null,
             ];
         }
 
@@ -652,6 +661,9 @@ class InstagramScraper
             ! array_key_exists('suggestionConnectionsPreview', $event)
             && ! array_key_exists('suggestionConnections', $event)
             && ! array_key_exists('foundSuggestions', $event)
+            && ! array_key_exists('observedSuggestionsPreview', $event)
+            && ! array_key_exists('observedSuggestions', $event)
+            && ! array_key_exists('suggestionsObserved', $event)
         ) {
             return [];
         }
@@ -660,6 +672,13 @@ class InstagramScraper
             'foundSuggestions' => (int) ($event['foundSuggestions'] ?? 0),
             'suggestionConnections' => $this->normalizeConnectionProgressItems(
                 $event['suggestionConnectionsPreview'] ?? $event['suggestionConnections'] ?? null,
+            ),
+            'observedSuggestionCount' => (int) ($event['observedSuggestionCount'] ?? $event['suggestionsObserved'] ?? 0),
+            'knownSuggestionCount' => (int) ($event['knownSuggestionCount'] ?? $event['knownObservedSuggestions'] ?? $event['suggestionKnownSeen'] ?? 0),
+            'skippedSuggestions' => (int) ($event['skippedSuggestions'] ?? 0),
+            'dismissedSuggestions' => (int) ($event['dismissedSuggestions'] ?? 0),
+            'observedSuggestions' => $this->normalizeConnectionProgressItems(
+                $event['observedSuggestionsPreview'] ?? $event['observedSuggestions'] ?? null,
             ),
         ];
     }
@@ -711,6 +730,7 @@ class InstagramScraper
             'relationship-complete' => 100,
             'relationship-rate-limited' => 100,
             'suggestions-opening' => 10,
+            'suggestions-scroll-preview' => $expected > 0 ? min(20, max(10, 10 + (int) floor(($loaded / max(1, $expected)) * 10))) : 12,
             'suggestions-target-list' => 20,
             'suggestions-candidate-opening' => $expected > 0 ? min(95, max(20, 20 + (int) floor(($loaded / max(1, $expected)) * 75))) : 35,
             'suggestions-public-list-search' => $expected > 0 ? min(96, max(25, 25 + (int) floor(($loaded / max(1, $expected)) * 75))) : 45,

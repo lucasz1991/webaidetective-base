@@ -4591,6 +4591,30 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
   const continueUntilEnd = options.continueUntilEnd === true;
   const hoverCardUsernames = options.hoverCardUsernames instanceof Set ? options.hoverCardUsernames : new Set();
   const runtimeConfig = options.runtimeConfig || {};
+  const emitScrollPreview = async (phase, round, advanced) => {
+    const livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
+
+    if (!livePreview.liveScreenshotPath) {
+      return;
+    }
+
+    progressLog('suggestions-scroll-preview', {
+      relationship: 'suggestions',
+      suggestionCollectionPhase: phase,
+      round,
+      loaded: itemsByUsername.size,
+      expectedCount: limit,
+      suggestionsObserved: itemsByUsername.size,
+      suggestionKnownSeen: seenKnownUsernames.size,
+      dismissedSuggestions: dismissedKnownItems.length,
+      message: phase === 'see-all-dialog'
+        ? `Vorschlags-Modal gescrollt: ${itemsByUsername.size} Vorschlaege erkannt.`
+        : `Horizontale Vorschlagsliste gescrollt: ${itemsByUsername.size} Vorschlaege erkannt.`,
+      scrollAdvanced: Boolean(advanced?.advanced),
+      scrollAtEnd: Boolean(advanced?.atEnd),
+      ...livePreview,
+    });
+  };
   let available = false;
   let rateLimited = false;
   let rateLimitText = null;
@@ -4688,6 +4712,7 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
 
       const advanced = await advanceProfileSuggestionsViewport(page);
       await sleep(advanced.advanced ? 1150 : 750);
+      await emitScrollPreview(phase, round + 1, advanced);
 
       if (!advanced.advanced && staleRounds >= 2) {
         return;

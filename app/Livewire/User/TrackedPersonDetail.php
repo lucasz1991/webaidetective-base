@@ -309,6 +309,8 @@ class TrackedPersonDetail extends Component
                 'message' => 'Profilvorschlag-Verbindungsscan wird vorbereitet.',
                 'foundSuggestions' => 0,
                 'suggestionConnections' => [],
+                'observedSuggestionCount' => 0,
+                'observedSuggestions' => [],
             ]);
 
             $scan = app(TrackedPersonInstagramWorkflowService::class)->runSuggestionScan($trackedPerson, $progress);
@@ -332,14 +334,23 @@ class TrackedPersonDetail extends Component
             return;
         }
 
-        $this->setDetailStatus(
-            ($scan->gracefully_stopped
+        $suggestionStatusMessage = trim((string) $scan->status_message);
+
+        if (
+            $suggestionStatusMessage === ''
+            || $suggestionStatusMessage === 'Profilvorschlag-Verbindungsscan abgeschlossen.'
+        ) {
+            $suggestionStatusMessage = ($scan->gracefully_stopped
                 ? 'Profilvorschlag-Verbindungsscan wurde beendet und gespeichert: '
                 : 'Profilvorschlag-Verbindungsscan abgeschlossen: ')
-            .number_format((int) $scan->suggestions_checked_count, 0, ',', '.')
-            .' Kandidaten geprueft, '
-            .number_format((int) $scan->suggestion_matches_count, 0, ',', '.')
-            .' Vorschlag-Verbindungen gefunden.',
+                .number_format((int) $scan->suggestions_checked_count, 0, ',', '.')
+                .' Kandidaten geprueft, '
+                .number_format((int) $scan->suggestion_matches_count, 0, ',', '.')
+                .' Vorschlag-Verbindungen gefunden.';
+        }
+
+        $this->setDetailStatus(
+            $suggestionStatusMessage,
             $scan->status_level === 'success' && ! $scan->gracefully_stopped ? 'success' : 'partial',
         );
         $this->dispatch('tracked-person-refresh');
@@ -567,9 +578,19 @@ class TrackedPersonDetail extends Component
         $foundFollowers = $state['foundFollowers'] ?? null;
         $foundFollowing = $state['foundFollowing'] ?? null;
         $foundSuggestions = $state['foundSuggestions'] ?? null;
+        $observedSuggestionCount = $state['observedSuggestionCount'] ?? null;
+        $knownSuggestionCount = $state['knownSuggestionCount'] ?? null;
+        $skippedSuggestions = $state['skippedSuggestions'] ?? null;
         $liveCounts = '';
 
-        if ($loaded !== null || $expected !== null || $foundFollowers !== null || $foundFollowing !== null || $foundSuggestions !== null) {
+        if (
+            $loaded !== null
+            || $expected !== null
+            || $foundFollowers !== null
+            || $foundFollowing !== null
+            || $foundSuggestions !== null
+            || $observedSuggestionCount !== null
+        ) {
             $liveParts = [];
 
             if ($loaded !== null && $expected !== null) {
@@ -592,7 +613,20 @@ class TrackedPersonDetail extends Component
                     .number_format((int) $foundSuggestions, 0, ',', '.');
             }
 
-            $liveCounts = implode(' · ', $liveParts);
+            if ($observedSuggestionCount !== null) {
+                $suggestionCountText = 'Vorschlaege gesehen: '
+                    .number_format((int) $observedSuggestionCount, 0, ',', '.');
+
+                if ($knownSuggestionCount !== null || $skippedSuggestions !== null) {
+                    $suggestionCountText .= ' (bekannt/uebersprungen: '
+                        .number_format((int) max((int) $knownSuggestionCount, (int) $skippedSuggestions), 0, ',', '.')
+                        .')';
+                }
+
+                $liveParts[] = $suggestionCountText;
+            }
+
+            $liveCounts = implode(' | ', $liveParts);
         }
 
         $this->stream('instagram-progress-phase', e($phase), true);
@@ -658,8 +692,9 @@ class TrackedPersonDetail extends Component
         $hasFollowers = array_key_exists('inferredFollowers', $state);
         $hasFollowing = array_key_exists('inferredFollowing', $state);
         $hasSuggestions = array_key_exists('suggestionConnections', $state);
+        $hasObservedSuggestions = array_key_exists('observedSuggestions', $state);
 
-        if (! $hasFollowers && ! $hasFollowing && ! $hasSuggestions) {
+        if (! $hasFollowers && ! $hasFollowing && ! $hasSuggestions && ! $hasObservedSuggestions) {
             if (! in_array(($state['phase'] ?? null), ['public-connections', 'suggestions'], true)) {
                 $this->stream('instagram-progress-connection-results', '', true);
             }
@@ -670,10 +705,11 @@ class TrackedPersonDetail extends Component
         $followers = $this->normalizeProgressConnectionItems($state['inferredFollowers'] ?? []);
         $following = $this->normalizeProgressConnectionItems($state['inferredFollowing'] ?? []);
         $suggestions = $this->normalizeProgressConnectionItems($state['suggestionConnections'] ?? []);
+        $observedSuggestions = $this->normalizeProgressSuggestionItems($state['observedSuggestions'] ?? []);
 
         $this->stream(
             'instagram-progress-connection-results',
-            $this->renderProgressConnectionResults($followers, $following, $suggestions, $hasSuggestions),
+            $this->renderProgressConnectionResults($followers, $following, $suggestions, $hasSuggestions, $observedSuggestions),
             true,
         );
     }
@@ -712,9 +748,46 @@ class TrackedPersonDetail extends Component
         return $normalizedItems;
     }
 
-    private function renderProgressConnectionResults(array $followers, array $following, array $suggestions = [], bool $showSuggestions = false): string
+    private function normalizeProgressSuggestionItems(mixed $items): array
     {
-        $gridClass = $showSuggestions ? 'lg:grid-cols-3' : 'sm:grid-cols-2';
+        if (! is_array($items)) {
+            return [];
+        }
+
+        $normalizedItems = [];
+
+        foreach (array_slice($items, 0, 60) as $item) {
+            if (! is_array($item) || ! is_scalar($item['username'] ?? null)) {
+                continue;
+            }
+
+            $username = trim((string) $item['username']);
+
+            if ($username === '') {
+                continue;
+            }
+
+            $normalizedItems[] = [
+                'username' => ltrim($username, '@'),
+                'displayName' => is_scalar($item['displayName'] ?? null) ? trim((string) $item['displayName']) : '',
+                'profileUrl' => is_scalar($item['profileUrl'] ?? null) ? trim((string) $item['profileUrl']) : '',
+                'checked' => (bool) ($item['checked'] ?? false),
+                'skipped' => (bool) ($item['skipped'] ?? false),
+                'matched' => (bool) ($item['matched'] ?? false),
+                'alreadyKnown' => (bool) ($item['alreadyKnown'] ?? false),
+                'skippedReason' => is_scalar($item['skippedReason'] ?? null) ? trim((string) $item['skippedReason']) : '',
+            ];
+        }
+
+        return $normalizedItems;
+    }
+
+    private function renderProgressConnectionResults(array $followers, array $following, array $suggestions = [], bool $showSuggestions = false, array $observedSuggestions = []): string
+    {
+        $showObservedSuggestions = $observedSuggestions !== [];
+        $gridClass = $showSuggestions && $showObservedSuggestions
+            ? 'lg:grid-cols-4'
+            : (($showSuggestions || $showObservedSuggestions) ? 'lg:grid-cols-3' : 'sm:grid-cols-2');
 
         return '<div class="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left">'
             .'<div class="flex items-center justify-between gap-3 text-xs">'
@@ -723,12 +796,14 @@ class TrackedPersonDetail extends Component
             .number_format(count($followers), 0, ',', '.').' Follower / '
             .number_format(count($following), 0, ',', '.').' Gefolgt'
             .($showSuggestions ? ' / '.number_format(count($suggestions), 0, ',', '.').' Vorschlaege' : '')
+            .($showObservedSuggestions ? ' / '.number_format(count($observedSuggestions), 0, ',', '.').' gesehen' : '')
             .'</span>'
             .'</div>'
             .'<div class="mt-3 grid gap-3 '.$gridClass.'">'
             .$this->renderProgressConnectionList('Moegliche Follower', $followers)
             .$this->renderProgressConnectionList('Moeglich gefolgt', $following)
             .($showSuggestions ? $this->renderProgressConnectionList('Vorschlag-Verbindungen', $suggestions) : '')
+            .($showObservedSuggestions ? $this->renderProgressSuggestionList('Gefundene Vorschlaege', $observedSuggestions) : '')
             .'</div>'
             .'</div>';
     }
@@ -773,6 +848,73 @@ class TrackedPersonDetail extends Component
         }
 
         return $html.'</div></div>';
+    }
+
+    private function renderProgressSuggestionList(string $label, array $items): string
+    {
+        $html = '<div class="rounded-lg border border-slate-200 bg-white p-2">'
+            .'<div class="flex items-center justify-between gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">'
+            .'<span>'.e($label).'</span>'
+            .'<span>'.number_format(count($items), 0, ',', '.').'</span>'
+            .'</div>';
+
+        if ($items === []) {
+            return $html.'<div class="mt-2 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-500">Noch keine Vorschlaege erkannt.</div></div>';
+        }
+
+        $html .= '<div class="mt-2 max-h-48 space-y-1 overflow-y-auto pr-1">';
+
+        foreach (array_slice($items, 0, 24) as $item) {
+            $username = e($item['username']);
+            $displayName = trim((string) ($item['displayName'] ?? ''));
+            $status = $this->progressSuggestionStatusLabel($item);
+
+            $html .= '<div class="rounded-md bg-slate-50 px-3 py-2 text-xs">'
+                .'<div class="flex items-start justify-between gap-2">'
+                .'<div class="min-w-0">'
+                .'<div class="font-semibold text-slate-900">@'.$username.'</div>';
+
+            if ($displayName !== '') {
+                $html .= '<div class="truncate text-slate-500">'.e($displayName).'</div>';
+            }
+
+            $html .= '</div>'
+                .'<span class="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700">'
+                .e($status)
+                .'</span>'
+                .'</div>'
+                .'</div>';
+        }
+
+        if (count($items) > 24) {
+            $html .= '<div class="px-2 py-1 text-[11px] font-semibold text-slate-500">+'
+                .number_format(count($items) - 24, 0, ',', '.')
+                .' weitere Vorschlaege</div>';
+        }
+
+        return $html.'</div></div>';
+    }
+
+    private function progressSuggestionStatusLabel(array $item): string
+    {
+        if ((bool) ($item['matched'] ?? false)) {
+            return 'Treffer';
+        }
+
+        if ((bool) ($item['alreadyKnown'] ?? false)) {
+            return 'bekannt';
+        }
+
+        $reason = (string) ($item['skippedReason'] ?? '');
+
+        return match ($reason) {
+            'already-dismissed-no-match' => 'kein Treffer',
+            'already-scanned-suggestion' => 'bereits gescannt',
+            'candidate-error', 'candidate-navigation-error' => 'Fehler',
+            default => (bool) ($item['checked'] ?? false)
+                ? 'geprueft'
+                : ((bool) ($item['skipped'] ?? false) ? 'uebersprungen' : 'gesehen'),
+        };
     }
 
     private function cancelInstagramScanWhenClientDisconnects(int $trackedPersonId): void

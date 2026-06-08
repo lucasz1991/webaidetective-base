@@ -50,6 +50,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
   const skippedCandidates = [];
   const dismissedCandidates = [];
   const dismissedUsernames = new Set();
+  const observedSuggestionsByUsername = new Map();
   const candidateHistory = normalizeSuggestionCandidateHistory(runtimeConfig.suggestionCandidateHistory || {});
   const alreadyScannedSuggestionUsernames = new Set(Object.entries(candidateHistory)
     .filter(([, history]) => (
@@ -63,6 +64,24 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
   let rateLimited = false;
   let rateLimitText = null;
   let dismissedCount = 0;
+
+  const rememberObservedSuggestion = (candidate, extra = {}) => {
+    const username = normalizeInstagramUsername(candidate?.username || '');
+
+    if (!username) {
+      return;
+    }
+
+    const previous = observedSuggestionsByUsername.get(username) || {};
+    observedSuggestionsByUsername.set(username, {
+      ...previous,
+      ...candidate,
+      ...extra,
+      username,
+      profileUrl: candidate?.profileUrl || previous.profileUrl || `https://www.instagram.com/${username}/`,
+    });
+  };
+  const observedSuggestionsPreview = () => Array.from(observedSuggestionsByUsername.values()).slice(-60);
 
   progressLog('suggestions-opening', {
     relationship: 'suggestions',
@@ -116,6 +135,17 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
 
     dismissedCount += 1;
     dismissedUsernames.add(candidateUsername);
+    rememberObservedSuggestion(dismissedKnown, {
+      checked: false,
+      skipped: true,
+      skippedReason: Boolean(history.hasMatch)
+        ? 'already-saved-match'
+        : (Boolean(history.permanentlyDismissed) ? 'already-dismissed-no-match' : 'already-scanned-suggestion'),
+      alreadyKnown: Boolean(history.hasMatch),
+      dismissedFromSuggestions: true,
+      previousNoMatchChecks: Number(history.noMatchChecks || 0),
+      previousTargetFoundAsSuggestion: Boolean(history.hasMatch),
+    });
     dismissedCandidates.push({
       ...dismissedKnown,
       previousNoMatchChecks: Number(history.noMatchChecks || 0),
@@ -147,6 +177,14 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
       && !shouldDismissAsFinalMiss
       && Number(history.noMatchChecks || 0) >= 1;
 
+    rememberObservedSuggestion(candidate, {
+      checked: false,
+      skipped: false,
+      alreadyKnown: shouldDismissAsKnownMatch,
+      previousNoMatchChecks: Number(history.noMatchChecks || 0),
+      previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
+    });
+
     if (shouldDismissAsKnownMatch || shouldDismissAsFinalMiss || shouldDismissBeforeRetry) {
       const dismissed = await dismissVisibleSuggestion(page, candidate.username);
 
@@ -168,6 +206,17 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     }
 
     if (shouldDismissAsKnownMatch || shouldDismissAsFinalMiss) {
+      rememberObservedSuggestion(candidate, {
+        checked: false,
+        skipped: true,
+        skippedReason: shouldDismissAsKnownMatch
+          ? 'already-saved-match'
+          : 'already-dismissed-no-match',
+        alreadyKnown: shouldDismissAsKnownMatch,
+        dismissedFromSuggestions: dismissedUsernames.has(candidateUsername),
+        previousNoMatchChecks: Number(history.noMatchChecks || 0),
+        previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
+      });
       skippedCandidates.push({
         ...candidate,
         checked: false,
@@ -195,6 +244,8 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     loaded: 0,
     expectedCount: candidatesToCheck.length,
     suggestionsObserved: candidates.length,
+    observedSuggestionCount: observedSuggestionsByUsername.size,
+    observedSuggestionsPreview: observedSuggestionsPreview(),
     profileLinkCandidatesSeen: targetSuggestions.profileLinkCandidatesSeen || 0,
     suggestionCollectionRounds: targetSuggestions.rounds || 0,
     suggestionKnownSeen: targetSuggestions.seenKnownCount || 0,
@@ -202,7 +253,9 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     skippedSuggestions: skippedCandidates.length,
     message: rateLimited
       ? 'Instagram hat die Profilvorschlaege per Rate-Limit blockiert.'
-      : `${candidates.length} neue Profilvorschlaege gefunden. ${candidatesToCheck.length} Kandidaten werden geprueft.`,
+      : (candidates.length > 0 && candidatesToCheck.length === 0 && skippedCandidates.length > 0
+        ? `${candidates.length} Profilvorschlaege gefunden; alle waren bereits bekannt oder endgueltig uebersprungen.`
+        : `${candidates.length} Profilvorschlaege gefunden. ${candidatesToCheck.length} Kandidaten werden geprueft.`),
     ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
   });
 
@@ -250,6 +303,8 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
         candidateUsername: candidate.username,
         foundSuggestions: matchedCandidates.length,
         suggestionConnectionsPreview: matchedCandidates.slice(-40),
+        observedSuggestionCount: observedSuggestionsByUsername.size,
+        observedSuggestionsPreview: observedSuggestionsPreview(),
         message: Number(candidate.previousNoMatchChecks || 0) > 0
           ? `@${candidate.username} wird nach frueherem Nichttreffer erneut geprueft.`
           : `@${candidate.username} wird auf Verbindung zu @${targetUsername} geprueft.`,
@@ -260,12 +315,18 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
       const candidateNavigation = await navigateWithSoftTimeout(page, candidate.profileUrl, runtimeConfig);
 
       if (!candidateNavigation.ok) {
-        checkedCandidates.push({
+          checkedCandidates.push({
           ...candidate,
           checked: false,
           error: candidateNavigation.error,
           skipped: true,
           skippedReason: 'candidate-navigation-error',
+        });
+        rememberObservedSuggestion(candidate, {
+          checked: false,
+          skipped: true,
+          skippedReason: 'candidate-navigation-error',
+          error: candidateNavigation.error,
         });
 
         progressLog('suggestions-candidate-error', {
@@ -275,6 +336,8 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
           candidateUsername: candidate.username,
           foundSuggestions: matchedCandidates.length,
           suggestionConnectionsPreview: matchedCandidates.slice(-40),
+          observedSuggestionCount: observedSuggestionsByUsername.size,
+          observedSuggestionsPreview: observedSuggestionsPreview(),
           message: `@${candidate.username} konnte nicht stabil geladen werden.`,
           ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
         });
@@ -303,6 +366,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
           candidateUsername: candidate.username,
           foundSuggestions: matchedCandidates.length,
           suggestionConnectionsPreview: matchedCandidates.slice(-40),
+          observedSuggestionCount: observedSuggestionsByUsername.size,
           message: `@${candidate.username} ist oeffentlich; Follower und Gefolgt werden nach @${targetUsername} durchsucht.`,
           ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
         });
@@ -484,6 +548,15 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
       }
 
       checkedCandidates.push(checkedCandidate);
+      rememberObservedSuggestion(checkedCandidate, {
+        checked: true,
+        skipped: false,
+        matched: targetFound,
+        targetFoundAsSuggestion: Boolean(checkedCandidate.targetFoundAsSuggestion),
+        targetFoundInPublicLists: Boolean(checkedCandidate.targetFoundInPublicLists),
+        targetFoundInFollowers: Boolean(checkedCandidate.targetFoundInFollowers),
+        targetFoundInFollowing: Boolean(checkedCandidate.targetFoundInFollowing),
+      });
 
       progressLog(rateLimited ? 'suggestions-rate-limited' : 'suggestions-candidate-checked', {
         relationship: 'suggestions',
@@ -494,6 +567,8 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
         dismissedSuggestions: dismissedCount,
         foundSuggestions: matchedCandidates.length,
         suggestionConnectionsPreview: matchedCandidates.slice(-40),
+        observedSuggestionCount: observedSuggestionsByUsername.size,
+        observedSuggestionsPreview: observedSuggestionsPreview(),
         message: progressMessage,
         ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
       });
@@ -515,6 +590,12 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
           skippedReason: 'candidate-error',
           error: errorMessage,
         });
+        rememberObservedSuggestion(candidate, {
+          checked: false,
+          skipped: true,
+          skippedReason: 'candidate-error',
+          error: errorMessage,
+        });
 
         notes.push(`Vorschlags-Kandidat @${candidate.username} uebersprungen: ${errorMessage}`);
 
@@ -525,6 +606,8 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
           candidateUsername: candidate.username,
           foundSuggestions: matchedCandidates.length,
           suggestionConnectionsPreview: matchedCandidates.slice(-40),
+          observedSuggestionCount: observedSuggestionsByUsername.size,
+          observedSuggestionsPreview: observedSuggestionsPreview(),
           candidateError: errorMessage,
           skippedReason: 'candidate-error',
           message: `@${candidate.username} wurde wegen eines Fehlers uebersprungen; naechster Vorschlag wird geprueft.`,
@@ -584,6 +667,20 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
   const candidateErrorCount = checkedCandidates.filter((candidate) => (
     ['candidate-error', 'candidate-navigation-error'].includes(candidate?.skippedReason)
   )).length;
+  const observedSuggestions = Array.from(observedSuggestionsByUsername.values());
+  const alreadyKnownObservedCount = observedSuggestions.filter((candidate) => (
+    Boolean(candidate.alreadyKnown) || candidate.skippedReason === 'already-saved-match'
+  )).length;
+  const knownOrSkippedObservedCount = observedSuggestions.filter((candidate) => (
+    Boolean(candidate.alreadyKnown)
+    || Boolean(candidate.skipped)
+    || [
+      'already-saved-match',
+      'already-dismissed-no-match',
+      'already-scanned-suggestion',
+    ].includes(candidate.skippedReason)
+    || Number(candidate.previousNoMatchChecks || 0) > 0
+  )).length;
   const statusLevel = gracefullyStopped || rateLimited || candidateErrorCount > 0 ? 'partial' : 'success';
   const statusMessage = gracefullyStopped
     ? 'Profilvorschlag-Verbindungsscan wurde beendet; bisherige Treffer wurden gespeichert.'
@@ -591,7 +688,9 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
       ? 'Profilvorschlag-Verbindungsscan wurde wegen Instagram-Rate-Limit pausiert.'
       : (candidateErrorCount > 0
         ? `Profilvorschlag-Verbindungsscan abgeschlossen; ${candidateErrorCount} Kandidaten wurden wegen Fehlern uebersprungen.`
-        : 'Profilvorschlag-Verbindungsscan abgeschlossen.'));
+        : (matchedCandidates.length === 0 && observedSuggestions.length > 0 && checkedCandidates.length === 0 && knownOrSkippedObservedCount === observedSuggestions.length
+          ? `Profilvorschlag-Verbindungsscan abgeschlossen; keine neuen Verbindungen, weil alle ${observedSuggestions.length} gefundenen Vorschlaege bereits bekannt waren.`
+          : 'Profilvorschlag-Verbindungsscan abgeschlossen.')));
 
   progressLog('suggestions-complete', {
     relationship: 'suggestions',
@@ -602,6 +701,10 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     skippedSuggestions: skippedCandidates.length,
     failedSuggestions: candidateErrorCount,
     suggestionConnectionsPreview: matchedCandidates.slice(-40),
+    observedSuggestionCount: observedSuggestions.length,
+    observedSuggestionsPreview: observedSuggestionsPreview(),
+    knownSuggestionCount: alreadyKnownObservedCount,
+    knownObservedSuggestions: alreadyKnownObservedCount,
     gracefullyStopped,
     rateLimited,
     message: statusMessage,
@@ -611,6 +714,10 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
   notes.push(
     `Profilvorschlag-Verbindungsscan: ${checkedCandidates.length} von ${candidatesToCheck.length} Kandidaten geprueft, ${matchedCandidates.length} Treffer.`,
   );
+
+  if (observedSuggestions.length > 0) {
+    notes.push(`${observedSuggestions.length} Vorschlaege wurden in der sichtbaren Vorschlagsliste erkannt.`);
+  }
 
   if (dismissedCount > 0) {
     notes.push(`${dismissedCount} Vorschlaege wurden aus der sichtbaren Vorschlagsliste entfernt.`);
@@ -628,11 +735,14 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     attempted: true,
     available: Boolean(targetSuggestions.available),
     seeAllClicked: targetSeeAllClicked,
-    observedCount: candidates.length,
+    observedCount: observedSuggestions.length,
     collectionRounds: targetSuggestions.rounds || 0,
     profileLinkCandidatesSeen: targetSuggestions.profileLinkCandidatesSeen || 0,
     dismissedKnownCount: targetSuggestions.dismissedKnownCount || 0,
     seenKnownCount: targetSuggestions.seenKnownCount || 0,
+    observedSuggestions,
+    knownObservedCount: alreadyKnownObservedCount,
+    knownOrSkippedObservedCount,
     checkedCount: checkedCandidates.length,
     matchCount: matchedCandidates.length,
     dismissedCount,

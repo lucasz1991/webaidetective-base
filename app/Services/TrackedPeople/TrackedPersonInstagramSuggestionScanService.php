@@ -69,6 +69,7 @@ class TrackedPersonInstagramSuggestionScanService
         $this->profileRelationshipStore->syncTrackedPersonProfile($trackedPerson);
 
         $liveConnections = [];
+        $liveObservedSuggestions = [];
 
         $this->reportProgress($progress, [
             'phase' => 'suggestions',
@@ -76,12 +77,14 @@ class TrackedPersonInstagramSuggestionScanService
             'message' => 'Profilvorschlag-Verbindungsscan wird vorbereitet.',
             'foundSuggestions' => 0,
             'suggestionConnections' => [],
+            'observedSuggestionCount' => 0,
+            'observedSuggestions' => [],
         ]);
 
         $payload = $this->scraper->scrape(
             $targetUsername,
             'suggestions',
-            function (array $state) use ($trackedPerson, $targetUsername, $progress, &$liveConnections): void {
+            function (array $state) use ($trackedPerson, $targetUsername, $progress, &$liveConnections, &$liveObservedSuggestions): void {
                 if (array_key_exists('suggestionConnections', $state)) {
                     $liveConnections = $this->mergeSuggestionConnections(
                         $liveConnections,
@@ -100,11 +103,25 @@ class TrackedPersonInstagramSuggestionScanService
                     }
                 }
 
+                if (array_key_exists('observedSuggestions', $state)) {
+                    $liveObservedSuggestions = $this->mergeObservedSuggestionItems(
+                        $liveObservedSuggestions,
+                        $this->normalizeObservedSuggestionItems($state['observedSuggestions']),
+                    );
+                }
+
+                $observedSuggestionCount = max(
+                    count($liveObservedSuggestions),
+                    (int) ($state['observedSuggestionCount'] ?? 0),
+                );
+
                 $this->reportProgress($progress, [
                     ...$state,
                     'phase' => 'suggestions',
                     'foundSuggestions' => count($liveConnections),
                     'suggestionConnections' => $liveConnections,
+                    'observedSuggestionCount' => $observedSuggestionCount,
+                    'observedSuggestions' => $liveObservedSuggestions,
                 ]);
             },
             $this->withActiveScanControl([
@@ -493,6 +510,82 @@ class TrackedPersonInstagramSuggestionScanService
                     ...($merged[$username] ?? []),
                     ...$connection,
                     'username' => $username,
+                ];
+            }
+        }
+
+        return array_values($merged);
+    }
+
+    private function normalizeObservedSuggestionItems(mixed $items): array
+    {
+        if (! is_array($items)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($items as $item) {
+            if (! is_array($item) || ! is_scalar($item['username'] ?? null)) {
+                continue;
+            }
+
+            $username = $this->scraper->normalizeInstagramUsername((string) $item['username']);
+
+            if ($username === null) {
+                continue;
+            }
+
+            $skippedReason = $this->nullableTrim($item['skippedReason'] ?? null);
+            $alreadyKnown = (bool) ($item['alreadyKnown'] ?? false)
+                || in_array($skippedReason, ['already-saved-match', 'already-scanned-suggestion'], true)
+                || (bool) ($item['previousTargetFoundAsSuggestion'] ?? false);
+
+            $normalized[$username] = [
+                'username' => $username,
+                'displayName' => $this->nullableTrim($item['displayName'] ?? null),
+                'profileUrl' => $this->nullableTrim($item['profileUrl'] ?? null)
+                    ?: 'https://www.instagram.com/'.$username.'/',
+                'profileImageUrl' => $this->nullableTrim($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null),
+                'profileVisibility' => in_array(($item['profileVisibility'] ?? null), ['public', 'private', 'unknown'], true)
+                    ? $item['profileVisibility']
+                    : null,
+                'isPrivate' => is_bool($item['isPrivate'] ?? null) ? $item['isPrivate'] : null,
+                'checked' => array_key_exists('checked', $item) ? (bool) $item['checked'] : false,
+                'skipped' => array_key_exists('skipped', $item) ? (bool) $item['skipped'] : false,
+                'matched' => array_key_exists('matched', $item) ? (bool) $item['matched'] : false,
+                'alreadyKnown' => $alreadyKnown,
+                'dismissedFromSuggestions' => (bool) ($item['dismissedFromSuggestions'] ?? false),
+                'skippedReason' => $skippedReason,
+                'previousNoMatchChecks' => is_numeric($item['previousNoMatchChecks'] ?? null)
+                    ? max(0, (int) $item['previousNoMatchChecks'])
+                    : null,
+            ];
+        }
+
+        return array_values($normalized);
+    }
+
+    private function mergeObservedSuggestionItems(array ...$itemGroups): array
+    {
+        $merged = [];
+
+        foreach ($itemGroups as $items) {
+            foreach ($items as $item) {
+                $username = $this->scraper->normalizeInstagramUsername((string) ($item['username'] ?? ''));
+
+                if ($username === null) {
+                    continue;
+                }
+
+                $merged[$username] = [
+                    ...($merged[$username] ?? []),
+                    ...$item,
+                    'username' => $username,
+                    'alreadyKnown' => (bool) (($merged[$username]['alreadyKnown'] ?? false) || ($item['alreadyKnown'] ?? false)),
+                    'checked' => (bool) (($merged[$username]['checked'] ?? false) || ($item['checked'] ?? false)),
+                    'skipped' => (bool) (($merged[$username]['skipped'] ?? false) || ($item['skipped'] ?? false)),
+                    'matched' => (bool) (($merged[$username]['matched'] ?? false) || ($item['matched'] ?? false)),
                 ];
             }
         }

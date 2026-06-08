@@ -2280,6 +2280,7 @@ class NetworkMap extends Component
                 'message' => 'Profil-Vollanalyse wird vorbereitet.',
                 'foundFollowers' => 0,
                 'foundFollowing' => 0,
+                'observedSuggestionCount' => 0,
             ]);
 
             $this->runNetworkMapProfileFullAnalysis($trackedPerson, $profile, $progress);
@@ -2336,6 +2337,10 @@ class NetworkMap extends Component
         $expected = $state['expected'] ?? null;
         $foundFollowers = $state['foundFollowers'] ?? null;
         $foundFollowing = $state['foundFollowing'] ?? null;
+        $foundSuggestions = $state['foundSuggestions'] ?? null;
+        $observedSuggestionCount = $state['observedSuggestionCount'] ?? null;
+        $knownSuggestionCount = $state['knownSuggestionCount'] ?? null;
+        $skippedSuggestions = $state['skippedSuggestions'] ?? null;
         $liveCounts = [];
 
         if ($loaded !== null && $expected !== null) {
@@ -2346,6 +2351,22 @@ class NetworkMap extends Component
             $liveCounts[] = 'Gefunden: '
                 .number_format((int) $foundFollowers, 0, ',', '.').' Follower / '
                 .number_format((int) $foundFollowing, 0, ',', '.').' Gefolgt';
+        }
+
+        if ($foundSuggestions !== null) {
+            $liveCounts[] = 'Vorschlag-Verbindungen: '.number_format((int) $foundSuggestions, 0, ',', '.');
+        }
+
+        if ($observedSuggestionCount !== null) {
+            $suggestionCountText = 'Vorschlaege gesehen: '.number_format((int) $observedSuggestionCount, 0, ',', '.');
+
+            if ($knownSuggestionCount !== null || $skippedSuggestions !== null) {
+                $suggestionCountText .= ' (bekannt/uebersprungen: '
+                    .number_format((int) max((int) $knownSuggestionCount, (int) $skippedSuggestions), 0, ',', '.')
+                    .')';
+            }
+
+            $liveCounts[] = $suggestionCountText;
         }
 
         $this->stream('network-map-scan-phase', e($phase), true);
