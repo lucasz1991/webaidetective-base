@@ -1,4 +1,3 @@
-<div>
 <div class="container mx-auto space-y-4" wire:poll.visible.4000ms x-data="{ toasts: [] }" x-init="window.addEventListener('toast', e => { toasts.push(e.detail); setTimeout(() => toasts.shift(), 3000); })" x-cloak>
     <div class="fixed top-4 right-4 z-50 space-y-2">
         <template x-for="(t, i) in toasts" :key="i">
@@ -475,6 +474,54 @@
             </div>
 
             <div class="mt-4 flex flex-wrap items-center gap-2">
+                @if($latestProfileIsPublic)
+                    <button
+                        type="button"
+                        wire:click="scanInstagramFollowersList"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramFollowersList"
+                        @disabled(! $trackedPerson->instagram_username)
+                        class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Follower scannen
+                    </button>
+                    <button
+                        type="button"
+                        wire:click="scanInstagramPosts"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramPosts"
+                        @disabled(! $trackedPerson->instagram_username)
+                        class="inline-flex h-9 items-center justify-center rounded-3xl border border-violet-200 bg-violet-50 px-3 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Beitraege scannen
+                    </button>
+                @endif
+                <button
+                    type="button"
+                    wire:click="$set('showFollowersModal', true)"
+                    class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50"
+                >
+                    Follower-Liste
+                </button>
+                @if($latestProfileIsPublic)
+                    <button
+                        type="button"
+                        wire:click="scanInstagramFollowingList"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramFollowingList"
+                        @disabled(! $trackedPerson->instagram_username)
+                        class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                        Gefolgt scannen
+                    </button>
+                @endif
+                <button
+                    type="button"
+                    wire:click="$set('showFollowingModal', true)"
+                    class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50"
+                >
+                    Gefolgt-Liste
+                </button>
                 <span class="rounded-2xl bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">{{ $instagramStatusLabel }}</span>
                 <span class="rounded-2xl bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">{{ $latestProfileVisibilityLabel }}</span>
                 @if($trackedPerson->monitoring_enabled)
@@ -534,183 +581,11 @@
                 </div>
             </div>
 
-            <div class="mt-4 rounded-3xl border border-slate-200 bg-white p-3 shadow-sm">
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                        <h3 class="text-sm font-bold text-slate-950">Listen & Scans</h3>
-                        <p class="mt-0.5 text-xs text-slate-500">Follower, Gefolgt, Beitraege und Verbindungspruefungen.</p>
-                    </div>
-                    <span class="rounded-2xl bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">
-                        {{ $latestProfileVisibilityLabel }}
-                    </span>
-                </div>
-
-                <div class="mt-3 grid gap-3 lg:grid-cols-3">
-                    <div class="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                        <div class="flex items-center justify-between gap-2">
-                            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</span>
-                            <span class="text-xs font-semibold text-slate-700">{{ number_format($latestFollowerStats['activeCount']) }}</span>
-                        </div>
-                        <div class="mt-3 grid grid-cols-2 gap-2">
-                            <button
-                                type="button"
-                                wire:click="$set('showFollowersModal', true)"
-                                class="inline-flex h-9 items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-50"
-                            >
-                                Liste oeffnen
-                            </button>
-                            <button
-                                type="button"
-                                wire:click="scanInstagramFollowersList"
-                                wire:loading.attr="disabled"
-                                wire:target="scanInstagramFollowersList"
-                                @disabled(! $trackedPerson->instagram_username || ! $latestProfileIsPublic)
-                                class="inline-flex h-9 items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                Scannen
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                        <div class="flex items-center justify-between gap-2">
-                            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gefolgt</span>
-                            <span class="text-xs font-semibold text-slate-700">{{ number_format($latestFollowingStats['activeCount']) }}</span>
-                        </div>
-                        <div class="mt-3 grid grid-cols-2 gap-2">
-                            <button
-                                type="button"
-                                wire:click="$set('showFollowingModal', true)"
-                                class="inline-flex h-9 items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-50"
-                            >
-                                Liste oeffnen
-                            </button>
-                            <button
-                                type="button"
-                                wire:click="scanInstagramFollowingList"
-                                wire:loading.attr="disabled"
-                                wire:target="scanInstagramFollowingList"
-                                @disabled(! $trackedPerson->instagram_username || ! $latestProfileIsPublic)
-                                class="inline-flex h-9 items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-900 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                Scannen
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                        <div class="flex items-center justify-between gap-2">
-                            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500">Beitraege</span>
-                            <span class="text-xs font-semibold text-slate-700">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-' }}</span>
-                        </div>
-                        <div class="mt-3 grid gap-2">
-                            <button
-                                type="button"
-                                wire:click="scanInstagramPosts"
-                                wire:loading.attr="disabled"
-                                wire:target="scanInstagramPosts"
-                                @disabled(! $trackedPerson->instagram_username || ! $latestProfileIsPublic)
-                                class="inline-flex h-9 items-center justify-center rounded-xl border border-violet-200 bg-violet-50 px-3 text-xs font-semibold text-violet-700 shadow-sm hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                Beitraege scannen
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="mt-3 flex flex-wrap gap-2">
-                    <button
-                        type="button"
-                        wire:click="scanPublicProfileConnections"
-                        wire:loading.attr="disabled"
-                        wire:target="scanPublicProfileConnections"
-                        @disabled($trackedPerson->publicProfiles->isEmpty() || ! $trackedPerson->instagram_username)
-                        class="inline-flex h-9 items-center justify-center rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        Listenverbindungen pruefen
-                    </button>
-                    <button
-                        type="button"
-                        wire:click="scanInstagramSuggestions"
-                        wire:loading.attr="disabled"
-                        wire:target="scanInstagramSuggestions"
-                        @disabled(! $trackedPerson->instagram_username || ! $latestProfileIsPrivate)
-                        class="inline-flex h-9 items-center justify-center rounded-xl border border-pink-200 bg-pink-50 px-3 text-xs font-semibold text-pink-700 shadow-sm hover:bg-pink-100 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        Profilvorschlaege pruefen
-                    </button>
-                </div>
-            </div>
-
             @if($detailStatus)
                 <div class="mt-4 rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm {{ $detailStatusClass }}">
                     {{ $detailStatus }}
                 </div>
             @endif
-        </div>
-    </section>
-
-    <section id="instagram-posts" class="scroll-mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div class="flex flex-wrap items-center justify-between gap-2">
-            <div>
-                <h3 class="text-lg font-bold text-slate-900">Instagram-Beitraege</h3>
-                <p class="mt-1 text-sm text-slate-500">Aktuelle gespeicherte Posts direkt aus dem Profilscan.</p>
-            </div>
-            @if($trackedPerson->currentInstagramProfile?->postScans?->isNotEmpty())
-                <span class="text-xs text-slate-500">
-                    Letzter Scan:
-                    {{ $trackedPerson->currentInstagramProfile->postScans->first()->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
-                </span>
-            @endif
-        </div>
-
-        <div class="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            @forelse($trackedPerson->currentInstagramProfile?->posts ?? collect() as $post)
-                @php($primaryMedia = $post->media->first())
-                @php($mediaUrl = $primaryMedia?->media_url)
-                @php($previewUrl = $primaryMedia?->preview_media_url ?: $post->thumbnail_storage_url)
-                <article class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:border-violet-300 hover:bg-violet-50">
-                    @if($primaryMedia?->media_type === 'video' && $mediaUrl)
-                        <video controls preload="metadata" playsinline poster="{{ $previewUrl }}" class="aspect-square w-full bg-black object-contain">
-                            <source src="{{ $mediaUrl }}" type="{{ $primaryMedia->mime_type ?: 'video/mp4' }}">
-                        </video>
-                    @elseif($mediaUrl || $previewUrl)
-                        <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="block">
-                            <img src="{{ $mediaUrl ?: $previewUrl }}" alt="Instagram-Beitrag {{ $post->shortcode }}" loading="lazy" class="aspect-square w-full object-cover">
-                        </a>
-                    @else
-                        <div class="flex aspect-square w-full items-center justify-center bg-slate-100 text-xs font-semibold text-slate-500">
-                            Kein Medium
-                        </div>
-                    @endif
-                    <div class="p-3">
-                        <div class="flex justify-between gap-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            <span>
-                                {{ $post->media_type }}
-                                @if($post->media_count > 1)
-                                    &middot; {{ number_format($post->media_count) }} Medien
-                                @endif
-                            </span>
-                            <span>{{ $post->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>
-                        </div>
-                        @if($post->caption)
-                            <p class="mt-2 line-clamp-2 text-sm text-slate-700">{{ $post->caption }}</p>
-                        @endif
-                        <div class="mt-3 flex flex-wrap gap-3 text-sm font-semibold text-slate-800">
-                            <span>{{ $post->likes_count !== null ? number_format($post->likes_count) : '-' }} Likes</span>
-                            <span>{{ $post->comments_count !== null ? number_format($post->comments_count) : '-' }} Kommentare</span>
-                        </div>
-                        <div class="mt-1 text-xs text-slate-500">
-                            {{ number_format($post->metrics_count ?? 0) }} gespeicherte Messpunkte
-                        </div>
-                        <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs font-semibold text-violet-700 hover:text-violet-900">
-                            Auf Instagram oeffnen
-                        </a>
-                    </div>
-                </article>
-            @empty
-                <p class="text-sm text-slate-500">Noch keine Instagram-Beitraege gespeichert.</p>
-            @endforelse
         </div>
     </section>
 
@@ -1382,6 +1257,30 @@
                         <p class="mt-1 text-sm text-slate-600">
                             Hier verknuepfst du andere bereits beobachtete Instagram-Profile, die mit diesem Profil eng verbunden sind.
                         </p>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        @if($latestProfileIsPrivate)
+                            <button
+                                type="button"
+                                wire:click="scanInstagramSuggestions"
+                                wire:loading.attr="disabled"
+                                wire:target="scanInstagramSuggestions"
+                                @disabled(! $trackedPerson->instagram_username)
+                                class="rounded-xl border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-100 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Profilvorschlaege pruefen
+                            </button>
+                        @endif
+                        <button
+                            type="button"
+                            wire:click="scanPublicProfileConnections"
+                            wire:loading.attr="disabled"
+                            wire:target="scanPublicProfileConnections"
+                            @disabled($trackedPerson->publicProfiles->isEmpty() || ! $trackedPerson->instagram_username)
+                            class="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Listenverbindungen pruefen
+                        </button>
                     </div>
                 </div>
 
@@ -2151,6 +2050,63 @@
             </div>
 
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <h3 class="text-lg font-bold text-slate-900">Instagram-Beitraege</h3>
+                    @if($trackedPerson->currentInstagramProfile?->postScans?->isNotEmpty())
+                        <span class="text-xs text-slate-500">
+                            Letzter Scan:
+                            {{ $trackedPerson->currentInstagramProfile->postScans->first()->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+                        </span>
+                    @endif
+                </div>
+
+                <div class="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    @forelse($trackedPerson->currentInstagramProfile?->posts ?? collect() as $post)
+                        @php($primaryMedia = $post->media->first())
+                        @php($mediaUrl = $primaryMedia?->media_url)
+                        @php($previewUrl = $primaryMedia?->preview_media_url ?: $post->thumbnail_storage_url)
+                        <article class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:border-violet-300 hover:bg-violet-50">
+                            @if($primaryMedia?->media_type === 'video' && $mediaUrl)
+                                <video controls preload="metadata" playsinline poster="{{ $previewUrl }}" class="h-44 w-full bg-black object-contain">
+                                    <source src="{{ $mediaUrl }}" type="{{ $primaryMedia->mime_type ?: 'video/mp4' }}">
+                                </video>
+                            @elseif($mediaUrl || $previewUrl)
+                                <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="block">
+                                    <img src="{{ $mediaUrl ?: $previewUrl }}" alt="Instagram-Beitrag {{ $post->shortcode }}" loading="lazy" class="h-44 w-full object-cover">
+                                </a>
+                            @endif
+                            <div class="p-3">
+                                <div class="flex justify-between gap-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    <span>
+                                        {{ $post->media_type }}
+                                        @if($post->media_count > 1)
+                                            · {{ number_format($post->media_count) }} Medien
+                                        @endif
+                                    </span>
+                                    <span>{{ $post->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>
+                                </div>
+                                @if($post->caption)
+                                    <p class="mt-2 line-clamp-2 text-sm text-slate-700">{{ $post->caption }}</p>
+                                @endif
+                                <div class="mt-3 flex gap-4 text-sm font-semibold text-slate-800">
+                                    <span>{{ $post->likes_count !== null ? number_format($post->likes_count) : '-' }} Likes</span>
+                                    <span>{{ $post->comments_count !== null ? number_format($post->comments_count) : '-' }} Kommentare</span>
+                                </div>
+                                <div class="mt-1 text-xs text-slate-500">
+                                    {{ number_format($post->metrics_count ?? 0) }} gespeicherte Messpunkte
+                                </div>
+                                <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs font-semibold text-violet-700 hover:text-violet-900">
+                                    Auf Instagram öffnen
+                                </a>
+                            </div>
+                        </article>
+                    @empty
+                        <p class="text-sm text-slate-500">Noch keine Instagram-Beitraege gespeichert.</p>
+                    @endforelse
+                </div>
+            </div>
+
+            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Profilbild-Historie</h3>
                 <p class="mt-1 text-sm text-slate-600">
                     Gespeichert werden nur eindeutig dem analysierten Profil zuordenbare Profilbilder, keine Vorschlagsbilder oder Bilder des eingeloggten Such-Profils.
@@ -2233,5 +2189,4 @@
             </div>
         </div>
     </section>
-</div>
 </div>
