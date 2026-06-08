@@ -112,6 +112,7 @@ const runtimeConfigDefaults = {
   suggestionDialogMaxRounds: 48,
   suggestionCandidateInlineMaxRounds: 24,
   suggestionCandidateDialogMaxRounds: 36,
+  suggestionMaxScraperProfileSwitches: 3,
   postScanMaxItems: 100,
   postScanMaxScrollRounds: 40,
   profileHoverCardsEnabled: true,
@@ -3895,6 +3896,7 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
     collectProfileInfo,
     collectProfileSuggestionItemsDeep,
     collectSuggestionCandidatePublicListConnection,
+    detectInstagramHttp429Page,
     dismissVisibleSuggestion,
     hasFiniteNumericValue,
     markGracefulStopIfRequested,
@@ -3903,6 +3905,7 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
     normalizeSuggestionCandidateHistory,
     progressLog,
     scrollToProfileSuggestions,
+    switchScraperAccountAfterRateLimit,
     sleep,
   }, page, runtimeState, notes, targetUsername, profileUrl);
 }
@@ -3941,6 +3944,30 @@ function isSuggestionPublicListSearchConclusive(result = {}) {
     && Boolean(result.searchInputAvailable)
     && !Boolean(result.rateLimited)
     && !Boolean(result.gracefullyStopped);
+}
+
+async function detectInstagramHttp429Page(page) {
+  const diagnostics = await page.evaluate(() => {
+    const text = String(document.body?.innerText || document.body?.textContent || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return {
+      title: String(document.title || ''),
+      text: text.slice(0, 1000),
+      url: String(window.location.href || ''),
+    };
+  }).catch(() => ({
+    title: '',
+    text: '',
+    url: '',
+  }));
+  const haystack = `${diagnostics.title} ${diagnostics.text}`.toLowerCase();
+
+  return {
+    ...diagnostics,
+    detected: /http\s*error\s*429|error\s*429|this page isn'?t working|too many requests|status\s*429/.test(haystack),
+  };
 }
 
 async function collectSuggestionCandidatePublicListConnection(

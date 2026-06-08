@@ -51,6 +51,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     collectProfileInfo,
     collectProfileSuggestionItemsDeep,
     collectSuggestionCandidatePublicListConnection,
+    detectInstagramHttp429Page,
     dismissVisibleSuggestion,
     hasFiniteNumericValue,
     markGracefulStopIfRequested,
@@ -59,6 +60,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     normalizeSuggestionCandidateHistory,
     progressLog,
     scrollToProfileSuggestions,
+    switchScraperAccountAfterRateLimit,
     sleep,
   } = deps;
 
@@ -84,6 +86,8 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
   let rateLimited = false;
   let rateLimitText = null;
   let dismissedCount = 0;
+  let scraperProfileSwitchCount = 0;
+  const maxScraperProfileSwitches = Math.max(0, Math.min(3, Number(runtimeConfig.suggestionMaxScraperProfileSwitches || 3)));
 
   const rememberObservedSuggestion = (candidate, extra = {}) => {
     const username = normalizeInstagramUsername(candidate?.username || '');
@@ -102,6 +106,70 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     });
   };
   const observedSuggestionsPreview = () => Array.from(observedSuggestionsByUsername.values()).slice(-60);
+  const switchScraperProfileFor429 = async (context, retryUrl) => {
+    if (!switchScraperAccountAfterRateLimit || scraperProfileSwitchCount >= maxScraperProfileSwitches) {
+      return false;
+    }
+
+    scraperProfileSwitchCount += 1;
+
+    progressLog('suggestions-rate-limit-account-switch', {
+      relationship: 'suggestions',
+      loaded: checkedCandidates.length,
+      expectedCount: 0,
+      scraperProfileSwitchCount,
+      maxScraperProfileSwitches,
+      message: `HTTP 429 erkannt (${context}); Scraper-Profil wird gewechselt (${scraperProfileSwitchCount}/${maxScraperProfileSwitches}).`,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+    });
+
+    const switchResult = await switchScraperAccountAfterRateLimit(
+      page,
+      runtimeConfig,
+      notes,
+      'suggestions',
+      `HTTP 429 bei ${context}`,
+      runtimeState.usedAccountKeys,
+    );
+
+    if (!switchResult?.sessionEstablished) {
+      scraperProfileSwitchCount = maxScraperProfileSwitches;
+      return false;
+    }
+
+    runtimeConfig = switchResult.runtimeConfig;
+    runtimeState.runtimeConfig = switchResult.runtimeConfig;
+    runtimeState.cookieDiagnostics = switchResult.cookieDiagnostics;
+    runtimeState.loginDiagnostics = switchResult.loginDiagnostics;
+
+    const navigation = await navigateWithSoftTimeout(page, retryUrl, runtimeConfig);
+    const navigationHit429 = Number(navigation?.status || 0) === 429
+      || /http\s*error\s*429|error\s*429|http\s*429|\b429\b|too many requests/i.test(String(navigation?.error || ''));
+
+    if (!navigation.ok && !navigationHit429) {
+      notes.push(`Nach Scraper-Profilwechsel konnte ${retryUrl} nicht stabil geladen werden: ${navigation.error}`);
+      return false;
+    }
+
+    await sleep(1600);
+    return true;
+  };
+  const pageHas429 = async () => {
+    if (!detectInstagramHttp429Page) {
+      return { detected: false };
+    }
+
+    return detectInstagramHttp429Page(page);
+  };
+  const looksLikeHttp429 = (value) => (
+    /http\s*error\s*429|error\s*429|http\s*429|\b429\b|too many requests/i.test(String(value || ''))
+  );
+  const resultLooksLikeHttp429 = (result = {}) => (
+    Number(result?.status || 0) === 429
+    || looksLikeHttp429(result?.error)
+    || looksLikeHttp429(result?.rateLimitText)
+    || looksLikeHttp429(result?.text)
+  );
 
   progressLog('suggestions-opening', {
     relationship: 'suggestions', 
@@ -111,22 +179,51 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
   });
 
-  await scrollToProfileSuggestions(page, 6);
+  let targetSuggestions = null;
 
-  const targetSuggestions = await collectProfileSuggestionItemsDeep(
-    page,
-    targetUsername,
-    maxTargetSuggestions,
-    {
-      dismissUsernames: alreadyScannedSuggestionUsernames,
-      includeSeeAll: true,
-      forceSeeAll: true,
-      continueUntilEnd: true,
-      runtimeConfig,
-      maxInlineRounds: runtimeConfig.suggestionInlineMaxRounds || 36,
-      maxDialogRounds: runtimeConfig.suggestionDialogMaxRounds || 48,
-    },
-  );
+  while (!targetSuggestions) {
+    await scrollToProfileSuggestions(page, 6);
+
+    targetSuggestions = await collectProfileSuggestionItemsDeep(
+      page,
+      targetUsername,
+      maxTargetSuggestions,
+      {
+        dismissUsernames: alreadyScannedSuggestionUsernames,
+        includeSeeAll: true,
+        forceSeeAll: true,
+        continueUntilEnd: true,
+        runtimeConfig,
+        maxInlineRounds: runtimeConfig.suggestionInlineMaxRounds || 36,
+        maxDialogRounds: runtimeConfig.suggestionDialogMaxRounds || 48,
+      },
+    );
+
+    const http429 = await pageHas429();
+    const collectionHit429 = Boolean(targetSuggestions.rateLimited)
+      && resultLooksLikeHttp429(targetSuggestions);
+
+    if (!http429.detected && !collectionHit429) {
+      break;
+    }
+
+    targetSuggestions = null;
+
+    const switched = await switchScraperProfileFor429('Zielprofil-Vorschlaege', profileUrl);
+
+    if (!switched) {
+      rateLimited = true;
+      rateLimitText = http429.text || 'HTTP ERROR 429';
+      targetSuggestions = {
+        items: [],
+        available: false,
+        rateLimited: true,
+        rateLimitText,
+        dismissedKnownItems: [],
+      };
+      break;
+    }
+  }
   const targetSeeAllClicked = Boolean(targetSuggestions.seeAllClicked);
 
   if (targetSeeAllClicked) {
@@ -332,9 +429,60 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
       });
 
       try {
-      const candidateNavigation = await navigateWithSoftTimeout(page, candidate.profileUrl, runtimeConfig);
+        let candidateNavigation = null;
+        let candidateHttp429 = { detected: false };
 
-      if (!candidateNavigation.ok) {
+        while (true) {
+          candidateNavigation = await navigateWithSoftTimeout(page, candidate.profileUrl, runtimeConfig);
+          candidateHttp429 = await pageHas429();
+
+          if (!resultLooksLikeHttp429(candidateNavigation) && !candidateHttp429.detected) {
+            break;
+          }
+
+          const switched = await switchScraperProfileFor429(`Kandidat @${candidate.username}`, candidate.profileUrl);
+
+          if (!switched) {
+            rateLimited = true;
+            rateLimitText = candidateHttp429.text || candidateNavigation.error || 'HTTP ERROR 429';
+            break;
+          }
+        }
+
+        if (rateLimited) {
+          checkedCandidates.push({
+            ...candidate,
+            checked: false,
+            error: rateLimitText,
+            skipped: true,
+            skippedReason: 'candidate-http-429',
+          });
+          rememberObservedSuggestion(candidate, {
+            checked: false,
+            skipped: true,
+            skippedReason: 'candidate-http-429',
+            error: rateLimitText,
+          });
+
+          progressLog('suggestions-rate-limited', {
+            relationship: 'suggestions',
+            loaded: checkedCandidates.length,
+            expectedCount: candidatesToCheck.length,
+            candidateUsername: candidate.username,
+            foundSuggestions: matchedCandidates.length,
+            suggestionConnectionsPreview: matchedCandidates.slice(-40),
+            observedSuggestionCount: observedSuggestionsByUsername.size,
+            observedSuggestionsPreview: observedSuggestionsPreview(),
+            scraperProfileSwitchCount,
+            maxScraperProfileSwitches,
+            message: `HTTP 429 blieb nach ${scraperProfileSwitchCount} Scraper-Profilwechseln bestehen; Vorschlags-Scan wird pausiert.`,
+            ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+          });
+
+          break;
+        }
+
+        if (!candidateNavigation.ok) {
           checkedCandidates.push({
           ...candidate,
           checked: false,
@@ -391,13 +539,35 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
           ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
         });
 
-        const publicListSearch = await collectSuggestionCandidatePublicListConnection(
-          page,
-          candidate,
-          candidateProfile,
-          targetUsername,
-          runtimeConfig,
-        );
+        let publicListSearch = null;
+
+        while (!publicListSearch) {
+          publicListSearch = await collectSuggestionCandidatePublicListConnection(
+            page,
+            candidate,
+            candidateProfile,
+            targetUsername,
+            runtimeConfig,
+          );
+
+          const listHttp429 = await pageHas429();
+          const listHit429 = listHttp429.detected
+            || (Boolean(publicListSearch.rateLimited) && resultLooksLikeHttp429(publicListSearch));
+
+          if (!listHit429) {
+            break;
+          }
+
+          const switched = await switchScraperProfileFor429(`Listenpruefung @${candidate.username}`, candidate.profileUrl);
+
+          if (!switched) {
+            rateLimited = true;
+            rateLimitText = listHttp429.text || publicListSearch.rateLimitText || 'HTTP ERROR 429';
+            break;
+          }
+
+          publicListSearch = null;
+        }
 
         if (publicListSearch.rateLimited) {
           rateLimited = true;
@@ -491,19 +661,42 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
           await sleep(1300);
         }
 
-        const candidateSuggestions = await collectProfileSuggestionItemsDeep(
-          page,
-          candidate.username,
-          maxCandidateSuggestions,
-          {
-            includeSeeAll: true,
-            forceSeeAll: true,
-            continueUntilEnd: true,
-            runtimeConfig,
-            maxInlineRounds: runtimeConfig.suggestionCandidateInlineMaxRounds || 24,
-            maxDialogRounds: runtimeConfig.suggestionCandidateDialogMaxRounds || 36,
-          },
-        );
+        let candidateSuggestions = null;
+
+        while (!candidateSuggestions) {
+          candidateSuggestions = await collectProfileSuggestionItemsDeep(
+            page,
+            candidate.username,
+            maxCandidateSuggestions,
+            {
+              includeSeeAll: true,
+              forceSeeAll: true,
+              continueUntilEnd: true,
+              runtimeConfig,
+              maxInlineRounds: runtimeConfig.suggestionCandidateInlineMaxRounds || 24,
+              maxDialogRounds: runtimeConfig.suggestionCandidateDialogMaxRounds || 36,
+            },
+          );
+
+          const suggestionsHttp429 = await pageHas429();
+          const suggestionsHit429 = suggestionsHttp429.detected
+            || (Boolean(candidateSuggestions.rateLimited) && resultLooksLikeHttp429(candidateSuggestions));
+
+          if (!suggestionsHit429) {
+            break;
+          }
+
+          const switched = await switchScraperProfileFor429(`Kandidaten-Vorschlaege @${candidate.username}`, candidate.profileUrl);
+
+          if (!switched) {
+            rateLimited = true;
+            rateLimitText = suggestionsHttp429.text || candidateSuggestions.rateLimitText || 'HTTP ERROR 429';
+            break;
+          }
+
+          candidateSuggestions = null;
+          await scrollToProfileSuggestions(page, 5);
+        }
 
         if (candidateSuggestions.rateLimited) {
           rateLimited = true;
