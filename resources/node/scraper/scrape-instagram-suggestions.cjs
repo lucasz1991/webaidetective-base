@@ -23,6 +23,26 @@ function isFatalSuggestionCandidateError(error) {
     || message.includes('verbindung zu chrome/puppeteer wurde getrennt');
 }
 
+function suggestionCandidateErrorRequiresAbort(error, page) {
+  if (!isFatalSuggestionCandidateError(error)) {
+    return false;
+  }
+
+  if (typeof page?.isClosed === 'function' && page.isClosed()) {
+    return true;
+  }
+
+  const code = String(error?.code || '').trim().toUpperCase();
+  const name = String(error?.name || '').trim();
+  const message = normalizeCandidateErrorMessage(error).toLowerCase();
+
+  return name === 'ScraperAbortError'
+    || code === 'SCRAPER_ABORTED'
+    || code === 'SCRIPT_STALLED'
+    || message.includes('node-scraper abgebrochen')
+    || message.includes('verbindung zu chrome/puppeteer wurde getrennt');
+}
+
 async function runProfileSuggestionConnectionScan(deps, page, runtimeState, notes, targetUsername, profileUrl) {
   const {
     captureLivePreviewScreenshot,
@@ -577,7 +597,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
         break;
       }
       } catch (error) {
-        if (isFatalSuggestionCandidateError(error)) {
+        if (suggestionCandidateErrorRequiresAbort(error, page)) {
           throw error;
         }
 

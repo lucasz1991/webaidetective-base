@@ -127,7 +127,7 @@ class TrackedPersonInstagramSuggestionScanService
             $this->withActiveScanControl([
                 'suggestionScanMaxItems' => 500,
                 'suggestionCandidateMaxItems' => 300,
-                'suggestionPublicListSearchMaxScrollRounds' => 140,
+                'suggestionPublicListSearchMaxScrollRounds' => 60,
                 'suggestionInlineMaxRounds' => 60,
                 'suggestionDialogMaxRounds' => 100,
                 'suggestionCandidateInlineMaxRounds' => 40,

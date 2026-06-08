@@ -4294,6 +4294,93 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
             && rect.right <= window.innerWidth + 180;
         });
     };
+    const fallbackVisibleSuggestionTextItems = () => {
+      if (!suggestionHeading) {
+        return [];
+      }
+
+      const headingRect = suggestionHeading.getBoundingClientRect();
+      const ignoredTextPattern = /^(folgen|abonniert|entfernen|remove|follow|following|x|alle ansehen|alle anzeigen|see all|show all)$/i;
+      const usernamePattern = /^[a-z0-9._]{3,30}$/;
+      const textElements = Array.from(container.querySelectorAll('span, div, a'))
+        .filter(isVisible)
+        .filter((element) => isAfterSuggestionHeading(element))
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+
+          return rect.top >= headingRect.bottom - 20
+            && rect.top <= window.innerHeight + 180
+            && rect.left >= 0
+            && rect.right <= window.innerWidth + 180;
+        });
+      const items = [];
+      const seen = new Set();
+
+      for (const element of textElements) {
+        const rawText = normalizeElementText(element.innerText || element.textContent || '');
+
+        if (
+          rawText === ''
+          || rawText.length > 40
+          || ignoredTextPattern.test(rawText)
+          || /[\s@]/.test(rawText)
+        ) {
+          continue;
+        }
+
+        const username = normalizeUsername(rawText);
+
+        if (
+          !username
+          || username === currentUsername
+          || !usernamePattern.test(username)
+          || reservedPaths.has(username)
+          || seen.has(username)
+        ) {
+          continue;
+        }
+
+        const rawLooksLikeUsername = rawText === rawText.toLowerCase()
+          || /[0-9._]/.test(rawText);
+
+        if (!rawLooksLikeUsername) {
+          continue;
+        }
+
+        const card = element.closest('div[role="button"], li, article, div') || element;
+
+        if (isDiscoverMoreElement(card)) {
+          continue;
+        }
+
+        const lines = Array.from(new Set(
+          normalizeElementText(card.innerText || card.textContent || '')
+            .split(' ')
+            .map((line) => normalizeElementText(line))
+            .filter(Boolean),
+        ));
+        const displayName = lines.find((line) => (
+          line.toLowerCase() !== username
+          && !ignoredTextPattern.test(line)
+          && !usernamePattern.test(line.toLowerCase())
+          && line.length <= 120
+        )) || null;
+
+        seen.add(username);
+        items.push({
+          username,
+          displayName,
+          profileUrl: `https://www.instagram.com/${username}/`,
+          detectedFromVisibleText: true,
+        });
+
+        if (items.length >= limit) {
+          break;
+        }
+      }
+
+      return items;
+    };
     const anchorScope = dialog ? findDialogListScope() : findHorizontalSuggestionScope();
     const scopedAnchors = anchorScope
       ? Array.from(anchorScope.querySelectorAll('a[href]'))
@@ -4362,6 +4449,14 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
       }
     }
 
+    const textFallbackItems = fallbackVisibleSuggestionTextItems();
+
+    for (const item of textFallbackItems) {
+      if (!itemsByUsername.has(item.username) && itemsByUsername.size < limit) {
+        itemsByUsername.set(item.username, item);
+      }
+    }
+
     return {
       items: Array.from(itemsByUsername.values()),
       available: Boolean(anchorScope || suggestionHeading || itemsByUsername.size > 0),
@@ -4377,6 +4472,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
         anchorScopeFound: Boolean(anchorScope),
         scopedAnchorsSeen: scopedAnchors.length,
         fallbackAnchorsSeen: fallbackAnchors.length,
+        textFallbackItemsSeen: textFallbackItems.length,
         anchorsUsed: anchors.length,
         itemsFound: itemsByUsername.size,
         usernames: Array.from(itemsByUsername.keys()).slice(0, 12),
@@ -4699,6 +4795,7 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
         `Heading ${debug.headingFound ? 'ja' : 'nein'}`,
         `Scope ${debug.anchorScopeFound ? 'ja' : 'nein'}`,
         `sichtbare Links ${Number(debug.fallbackAnchorsSeen || 0)}`,
+        `Textfallback ${Number(debug.textFallbackItemsSeen || 0)}`,
         `genutzt ${Number(debug.anchorsUsed || 0)}`,
       ].join(' | ');
 
