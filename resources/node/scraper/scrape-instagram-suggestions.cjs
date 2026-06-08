@@ -84,7 +84,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
   const observedSuggestionsPreview = () => Array.from(observedSuggestionsByUsername.values()).slice(-60);
 
   progressLog('suggestions-opening', {
-    relationship: 'suggestions',
+    relationship: 'suggestions', 
     loaded: 0,
     expectedCount: maxTargetSuggestions,
     message: `Profilvorschlaege fuer @${targetUsername} werden gesucht.`,
