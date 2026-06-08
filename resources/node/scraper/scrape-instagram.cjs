@@ -4490,9 +4490,13 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
   }));
 }
 
-async function advanceProfileSuggestionsViewport(page) {
-  return page.evaluate(() => {
+async function advanceProfileSuggestionsViewport(page, options = {}) {
+  return page.evaluate(({ mode }) => {
     const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const normalizeUsername = (value = '') => String(value || '')
+      .replace(/^@/, '')
+      .replace(/[^a-z0-9._]/gi, '')
+      .toLowerCase();
     const isVisible = (element) => {
       if (!element) {
         return false;
@@ -4507,10 +4511,19 @@ async function advanceProfileSuggestionsViewport(page) {
         && style.display !== 'none';
     };
     const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge|suggested|suggestions)/i;
+    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge f(?:u|\u00fc)r dich|vorschl(?:a|\u00e4)ge|suggested for you|suggestions for you|suggested|suggestions)$/i;
     const discoverMorePattern = /(?:entdecke mehr konten|weitere konten entdecken|discover more accounts|find more accounts)/i;
     const reservedPaths = new Set(['accounts', 'direct', 'explore', 'p', 'reel', 'reels', 'stories', 'tv']);
+    const ignoredTextPattern = /^(folgen|abonniert|entfernen|remove|follow|following|x|alle ansehen|alle anzeigen|see all|show all)$/i;
+    const usernamePattern = /^[a-z0-9._]{3,30}$/;
     const isDiscoverMoreElement = (element) => discoverMorePattern.test(
       normalizeElementText(element?.innerText || element?.textContent || ''),
+    );
+    const getOwnText = (element) => normalizeElementText(
+      Array.from(element.childNodes || [])
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent || '')
+        .join(' '),
     );
     const profileAnchorsIn = (element) => Array.from(element.querySelectorAll('a[href]')).filter((anchor) => {
       if (isDiscoverMoreElement(anchor.closest('button, [role="button"], a, div') || anchor)) {
@@ -4529,6 +4542,68 @@ async function advanceProfileSuggestionsViewport(page) {
     });
     const dialog = document.querySelector('div[role="dialog"]');
     const root = dialog || document.body;
+    const suggestionHeading = Array.from(root.querySelectorAll('span, div, h1, h2, h3, h4, p'))
+      .find((element) => {
+        if (!isVisible(element)) {
+          return false;
+        }
+
+        const ownText = getOwnText(element);
+        const fullText = normalizeElementText(element.innerText || element.textContent || '');
+        const text = ownText || fullText;
+
+        return text !== '' && text.length <= 80 && suggestionHeadingPattern.test(text);
+      }) || null;
+    const isAfterSuggestionHeading = (element) => !suggestionHeading
+      || Boolean(suggestionHeading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const visibleUsernameTextRectsIn = (element) => {
+      if (dialog) {
+        return [];
+      }
+
+      const headingRect = suggestionHeading?.getBoundingClientRect?.() || null;
+
+      return Array.from(element.querySelectorAll('span, div, a'))
+        .filter(isVisible)
+        .filter((textElement) => isAfterSuggestionHeading(textElement))
+        .map((textElement) => {
+          const rawText = normalizeElementText(textElement.innerText || textElement.textContent || '');
+
+          if (
+            rawText === ''
+            || rawText.length > 40
+            || ignoredTextPattern.test(rawText)
+            || /[\s@]/.test(rawText)
+          ) {
+            return null;
+          }
+
+          const username = normalizeUsername(rawText);
+          const rawLooksLikeUsername = rawText === rawText.toLowerCase() || /[0-9._]/.test(rawText);
+
+          if (
+            !username
+            || !usernamePattern.test(username)
+            || reservedPaths.has(username)
+            || !rawLooksLikeUsername
+            || isDiscoverMoreElement(textElement.closest('button, [role="button"], a, div') || textElement)
+          ) {
+            return null;
+          }
+
+          const rect = textElement.getBoundingClientRect();
+
+          if (
+            headingRect
+            && (rect.top < headingRect.bottom - 20 || rect.top > window.innerHeight + 180)
+          ) {
+            return null;
+          }
+
+          return rect;
+        })
+        .filter(Boolean);
+    };
     const scrollables = Array.from(root.querySelectorAll('div, section, ul'))
       .filter(isVisible)
       .map((element) => {
@@ -4539,23 +4614,30 @@ async function advanceProfileSuggestionsViewport(page) {
         const anchorRects = profileAnchors
           .map((anchor) => anchor.getBoundingClientRect())
           .filter((anchorRect) => anchorRect.width > 0 && anchorRect.height > 0);
+        const textRects = visibleUsernameTextRectsIn(element)
+          .filter((textRect) => textRect.width > 0 && textRect.height > 0);
+        const profileCandidateCount = profileAnchorCount + textRects.length;
+        const rowRects = [...anchorRects, ...textRects];
         const horizontalOverflow = element.scrollWidth > element.clientWidth + 30;
         const verticalOverflow = element.scrollHeight > element.clientHeight + 30;
-        const sameRowProfileAnchors = anchorRects.length >= 2
-          && (Math.max(...anchorRects.map((anchorRect) => anchorRect.top))
-            - Math.min(...anchorRects.map((anchorRect) => anchorRect.top))) <= 130;
+        const sameRowProfileAnchors = rowRects.length >= 2
+          && (Math.max(...rowRects.map((entryRect) => entryRect.top))
+            - Math.min(...rowRects.map((entryRect) => entryRect.top))) <= 130;
         const suggestionText = suggestionPattern.test(text);
-        const score = (profileAnchorCount * 4)
+        const score = (profileCandidateCount * 4)
           + (horizontalOverflow ? 8 : 0)
           + (sameRowProfileAnchors ? 7 : 0)
           + (verticalOverflow ? 3 : 0)
           + (suggestionText ? 5 : 0)
+          + (suggestionHeading && isAfterSuggestionHeading(element) ? 4 : 0)
           - Math.max(0, Math.floor(text.length / 1200));
 
         return {
           element,
           rect,
           profileAnchorCount,
+          textUsernameCount: textRects.length,
+          profileCandidateCount,
           horizontalOverflow,
           sameRowProfileAnchors,
           verticalOverflow,
@@ -4563,10 +4645,12 @@ async function advanceProfileSuggestionsViewport(page) {
           score,
         };
       })
-      .filter((entry) => entry.profileAnchorCount > 0 && (entry.horizontalOverflow || entry.sameRowProfileAnchors || entry.verticalOverflow || entry.suggestionText))
+      .filter((entry) => entry.profileCandidateCount > 0 && (entry.horizontalOverflow || entry.sameRowProfileAnchors || entry.verticalOverflow || entry.suggestionText))
       .sort((left, right) => right.score - left.score);
 
-    const horizontalTargetEntry = dialog ? null : (
+    const inlineOnly = mode === 'inline-carousel';
+    const dialogOnly = mode === 'see-all-dialog';
+    const horizontalTargetEntry = dialog || dialogOnly ? null : (
       scrollables.find((entry) => entry.horizontalOverflow)
       || scrollables.find((entry) => entry.sameRowProfileAnchors)
       || null
@@ -4617,6 +4701,10 @@ async function advanceProfileSuggestionsViewport(page) {
           inHorizontalBand,
           onRightSide,
           nearHorizontalRightEdge,
+          verticalMiddle: horizontalRect
+            ? centerY >= horizontalRect.top + (horizontalRect.height * 0.25)
+              && centerY <= horizontalRect.bottom - (horizontalRect.height * 0.10)
+            : true,
         };
       })
       .find((entry) => {
@@ -4636,6 +4724,7 @@ async function advanceProfileSuggestionsViewport(page) {
           && entry.inHorizontalBand
           && entry.onRightSide
           && entry.nearHorizontalRightEdge
+          && entry.verticalMiddle
           && entry.rect.width >= 28
           && entry.rect.height >= 28
           && entry.rect.width <= 72
@@ -4671,6 +4760,15 @@ async function advanceProfileSuggestionsViewport(page) {
       }
     }
 
+    if (inlineOnly) {
+      return {
+        advanced: false,
+        mode: 'inline-carousel-end',
+        atEnd: true,
+        rightNavigationVisible: false,
+      };
+    }
+
     const verticalTarget = scrollables.find((entry) => entry.verticalOverflow)?.element || null;
 
     if (verticalTarget) {
@@ -4688,6 +4786,14 @@ async function advanceProfileSuggestionsViewport(page) {
       }
     }
 
+    if (dialogOnly) {
+      return {
+        advanced: false,
+        mode: 'dialog-list-end',
+        atEnd: true,
+      };
+    }
+
     const before = window.scrollY;
     window.scrollBy(0, Math.max(520, window.innerHeight * 0.72));
     const after = window.scrollY;
@@ -4697,7 +4803,7 @@ async function advanceProfileSuggestionsViewport(page) {
       mode: 'window-scroll',
       atEnd: after + window.innerHeight >= document.documentElement.scrollHeight - 12,
     };
-  }).catch(() => ({
+  }, { mode: String(options.mode || '') }).catch(() => ({
     advanced: false,
     mode: 'error',
     atEnd: true,
@@ -4888,7 +4994,7 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
         ? staleRounds + 1
         : 0;
 
-      const advanced = await advanceProfileSuggestionsViewport(page);
+      const advanced = await advanceProfileSuggestionsViewport(page, { mode: phase });
       await sleep(advanced.advanced ? 1150 : 750);
       await emitScrollPreview(phase, round + 1, advanced);
 
