@@ -72,7 +72,9 @@ function avatarElement(data, large = false) {
     const imageUrl = String(data?.imageUrl || '').trim();
     const element = document.createElement(imageUrl ? 'img' : 'div');
     const sizeClass = large ? 'h-12 w-12' : 'h-9 w-9';
-    const commonClasses = `${sizeClass} shrink-0 rounded-full border border-slate-200`;
+    const visibility = visibilityValue(data);
+    const borderClass = visibility === 'public' ? 'border-emerald-400' : 'border-slate-400';
+    const commonClasses = `${sizeClass} shrink-0 rounded-full border ${borderClass}`;
 
     if (imageUrl) {
         element.src = imageUrl;
@@ -80,6 +82,10 @@ function avatarElement(data, large = false) {
         element.loading = 'lazy';
         element.referrerPolicy = 'no-referrer';
         element.className = `${commonClasses} object-cover bg-slate-100`;
+
+        if (visibility !== 'public') {
+            element.style.filter = 'grayscale(50%)';
+        }
 
         return element;
     }
@@ -148,7 +154,8 @@ function updateBuildStatus(root, options = {}) {
 }
 
 function publicBadgeLayer(root) {
-    return root.querySelector('[data-network-public-badges]');
+    return root.querySelector('[data-network-profile-overlays]')
+        || root.querySelector('[data-network-public-badges]');
 }
 
 function updatePublicBadges(root, cy) {
@@ -163,46 +170,39 @@ function updatePublicBadges(root, cy) {
     const height = cy.height();
     const fragment = document.createDocumentFragment();
 
-    cy.nodes('.network-profile-public')
+    cy.nodes('.network-profile-muted-image')
         .not('.network-filtered')
-        .filter((node) => node.data('type') !== 'person' && Boolean(node.data('hasImage')))
+        .filter((node) => node.data('type') !== 'person' && Boolean(node.data('hasImage')) && Boolean(node.data('imageUrl')))
         .forEach((node) => {
             const position = node.renderedPosition();
             const nodeSize = Number(node.renderedWidth?.() || node.data('renderNodeSize') || node.data('nodeSize') || 42);
-            const badgeSize = Math.max(14, Math.min(46, Math.round(nodeSize * 0.26)));
-            const badgeFontSize = Math.max(10, Math.min(22, Math.round(badgeSize * 0.58)));
-            const badgeBorderWidth = Math.max(2, Math.min(4, Math.round(badgeSize * 0.12)));
-            const left = position.x + (nodeSize / 2) - (badgeSize * 0.18);
-            const top = position.y - (nodeSize / 2) + (badgeSize * 0.18);
+            const imageSize = Math.max(12, Math.round(nodeSize - Math.max(6, nodeSize * 0.13)));
+            const left = position.x - (imageSize / 2);
+            const top = position.y - (imageSize / 2);
 
-            if (left < -badgeSize || top < -badgeSize || left > width + badgeSize || top > height + badgeSize) {
+            if (left < -imageSize || top < -imageSize || left > width + imageSize || top > height + imageSize) {
                 return;
             }
 
-            const badge = document.createElement('span');
-            badge.className = 'network-public-profile-badge';
-            badge.textContent = '\u2713';
-            badge.title = 'Oeffentlich erkannt';
-            badge.style.cssText = [
+            const image = document.createElement('img');
+            image.className = 'network-muted-profile-image';
+            image.src = String(node.data('imageUrl') || '');
+            image.alt = node.data('handle') || node.data('fullLabel') || 'Instagram-Profilbild';
+            image.loading = 'lazy';
+            image.referrerPolicy = 'no-referrer';
+            image.style.cssText = [
                 'position:absolute',
                 `left:${left}px`,
                 `top:${top}px`,
-                `width:${badgeSize}px`,
-                `height:${badgeSize}px`,
-                'transform:translate(-50%,-50%)',
-                'display:flex',
-                'align-items:center',
-                'justify-content:center',
+                `width:${imageSize}px`,
+                `height:${imageSize}px`,
                 'border-radius:9999px',
-                `border:${badgeBorderWidth}px solid #ffffff`,
-                'background:#10b981',
-                'color:#ffffff',
-                `font-size:${badgeFontSize}px`,
-                'font-weight:900',
-                'line-height:1',
-                'box-shadow:0 6px 14px rgba(15,23,42,0.22)',
+                'object-fit:cover',
+                'filter:grayscale(50%)',
+                'pointer-events:none',
+                `opacity:${node.hasClass('network-faded') ? '0.18' : '1'}`,
             ].join(';');
-            fragment.append(badge);
+            fragment.append(image);
         });
 
     layer.replaceChildren(fragment);
@@ -240,31 +240,38 @@ function schedulePublicBadgeUpdateFromCy(cy) {
 }
 
 function toElements(graph) {
-    const nodes = (graph.nodes || []).map((node) => ({
-        group: 'nodes',
-        classes: [
-            node.hasImage ? 'network-has-image' : '',
-            node.isPrimary ? 'network-primary' : '',
-            node.isFocus ? 'network-focus' : '',
-            visibilityValue(node) === 'public' ? 'network-profile-public' : '',
-            visibilityValue(node) === 'private' ? 'network-profile-private' : '',
-        ].filter(Boolean).join(' '),
-        position: Number.isFinite(Number(node.x)) && Number.isFinite(Number(node.y))
-            ? { x: Number(node.x), y: Number(node.y) }
-            : undefined,
-        locked: Boolean(node.isPrimary),
-        data: {
-            ...node,
-            label: truncate(node.label || node.handle || node.id),
-            fullLabel: node.label || node.handle || node.id,
-            handle: node.handle || '',
-            detail: node.detail || '',
-            role: node.role || '',
-            renderNodeSize: Number(node.nodeSize) || baseNodeSizeForData(node),
-            renderNodeFontSize: Number(node.nodeFontSize) || baseNodeFontSizeForData(node),
-            renderTextMaxWidth: 105,
-        },
-    }));
+    const nodes = (graph.nodes || []).map((node) => {
+        const visibility = visibilityValue(node);
+        const isProfileNode = node.type !== 'person';
+
+        return {
+            group: 'nodes',
+            classes: [
+                node.hasImage ? 'network-has-image' : '',
+                node.isPrimary ? 'network-primary' : '',
+                node.isFocus ? 'network-focus' : '',
+                isProfileNode && visibility === 'public' ? 'network-profile-public' : '',
+                isProfileNode && visibility === 'private' ? 'network-profile-private' : '',
+                isProfileNode && visibility === 'unknown' ? 'network-profile-unknown' : '',
+                isProfileNode && node.hasImage && visibility !== 'public' ? 'network-profile-muted-image' : '',
+            ].filter(Boolean).join(' '),
+            position: Number.isFinite(Number(node.x)) && Number.isFinite(Number(node.y))
+                ? { x: Number(node.x), y: Number(node.y) }
+                : undefined,
+            locked: Boolean(node.isPrimary),
+            data: {
+                ...node,
+                label: truncate(node.label || node.handle || node.id),
+                fullLabel: node.label || node.handle || node.id,
+                handle: node.handle || '',
+                detail: node.detail || '',
+                role: node.role || '',
+                renderNodeSize: Number(node.nodeSize) || baseNodeSizeForData(node),
+                renderNodeFontSize: Number(node.nodeFontSize) || baseNodeFontSizeForData(node),
+                renderTextMaxWidth: 105,
+            },
+        };
+    });
 
     const edges = combineGraphEdges(graph.edges || []).map((edge) => ({
         group: 'edges',
@@ -2622,13 +2629,22 @@ async function initNetworkMap(root) {
             {
                 selector: '.network-profile-public',
                 style: {
-                    'border-color': '#34d399',
+                    'border-color': '#22c55e',
+                    'border-width': 4,
                 },
             },
             {
                 selector: '.network-profile-private',
                 style: {
                     'border-color': '#64748b',
+                    'border-width': 4,
+                },
+            },
+            {
+                selector: '.network-profile-unknown',
+                style: {
+                    'border-color': '#64748b',
+                    'border-width': 4,
                 },
             },
             {
@@ -2639,6 +2655,13 @@ async function initNetworkMap(root) {
                     'background-clip': 'node',
                     'background-color': '#f8fafc',
                     'background-opacity': 1,
+                },
+            },
+            {
+                selector: '.network-profile-muted-image',
+                style: {
+                    'background-color': '#e2e8f0',
+                    'background-opacity': 0,
                 },
             },
             {
@@ -3153,9 +3176,16 @@ window.addEventListener('network-map-layout-refresh', (event) => {
         return;
     }
 
-    window.requestAnimationFrame(() => {
+    const refreshAndFit = () => {
         state.cy.resize();
+        fitGraph(state.cy, { tight: true });
         schedulePublicBadgeUpdate(root, state.cy);
+    };
+
+    window.requestAnimationFrame(() => {
+        refreshAndFit();
+        window.requestAnimationFrame(refreshAndFit);
+        window.setTimeout(refreshAndFit, 180);
     });
 });
 

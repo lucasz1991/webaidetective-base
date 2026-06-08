@@ -328,7 +328,7 @@
                         wire:ignore
                     >
                         <div data-network-canvas class="absolute inset-0"></div>
-                        <div data-network-public-badges class="pointer-events-none absolute inset-0 z-[4]"></div>
+                        <div data-network-profile-overlays class="pointer-events-none absolute inset-0 z-[4]"></div>
                         <div
                             x-show="!mapFullscreen"
                             class="absolute inset-0 z-[5] flex items-center justify-center bg-slate-950/10 backdrop-blur-[1px]"
