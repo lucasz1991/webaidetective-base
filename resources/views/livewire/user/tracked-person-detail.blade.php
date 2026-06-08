@@ -1652,6 +1652,7 @@
                                             <div class="mt-1 space-y-0.5 text-[11px] text-slate-600">
                                                 <div>Runden: {{ number_format((int) data_get($suggestionDebug, 'rounds', 0), 0, ',', '.') }}</div>
                                                 <div>Profil-Link-Kandidaten: {{ number_format((int) data_get($suggestionDebug, 'profileLinkCandidatesSeen', data_get($suggestionScanPayload, 'profileLinkCandidatesSeen', 0)), 0, ',', '.') }}</div>
+                                                <div>Vorschlagstext im Body: {{ data_get($suggestionLastDebug, 'bodyContainsSuggestionText') ? 'ja' : 'nein' }}</div>
                                                 <div>Heading: {{ data_get($suggestionLastDebug, 'headingFound') ? 'ja' : 'nein' }}{{ data_get($suggestionLastDebug, 'headingText') ? ' - '.data_get($suggestionLastDebug, 'headingText') : '' }}</div>
                                                 <div>Scope: {{ data_get($suggestionLastDebug, 'anchorScopeFound') ? 'ja' : 'nein' }}</div>
                                                 <div>Links/Textfallback: {{ number_format((int) data_get($suggestionLastDebug, 'fallbackAnchorsSeen', 0), 0, ',', '.') }} / {{ number_format((int) data_get($suggestionLastDebug, 'textFallbackItemsSeen', 0), 0, ',', '.') }}</div>
@@ -1714,6 +1715,58 @@
                                                         @if(! empty($debugEvent['usernames']) && is_array($debugEvent['usernames']))
                                                             - {{ implode(', ', array_map(fn ($username) => '@'.$username, array_slice($debugEvent['usernames'], 0, 8))) }}
                                                         @endif
+                                                    </div>
+                                                @endforeach
+                                            </div>
+                                        </div>
+                                    @endif
+                                    @if(collect(data_get($suggestionLastDebug, 'textSamples', []))->isNotEmpty() || collect(data_get($suggestionLastDebug, 'anchorSamples', []))->isNotEmpty())
+                                        <div class="mt-2 grid gap-2 lg:grid-cols-2">
+                                            <div class="rounded-md bg-white p-2">
+                                                <div class="font-semibold text-slate-900">Sichtbare Texte unter Vorschlaegen</div>
+                                                <div class="mt-1 max-h-44 space-y-1 overflow-y-auto pr-1">
+                                                    @forelse(collect(data_get($suggestionLastDebug, 'textSamples', []))->take(20) as $sample)
+                                                        <div class="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                                                            <span class="font-semibold text-slate-800">{{ $sample['text'] ?? '-' }}</span>
+                                                            @if(! empty($sample['normalizedUsername']))
+                                                                <span class="text-slate-500"> -> {{ $sample['normalizedUsername'] }}</span>
+                                                            @endif
+                                                            <span class="text-slate-400"> ({{ $sample['tag'] ?? '?' }}, {{ $sample['left'] ?? '?' }}/{{ $sample['top'] ?? '?' }})</span>
+                                                        </div>
+                                                    @empty
+                                                        <div class="text-[11px] text-slate-500">Keine sichtbaren Text-Samples gespeichert.</div>
+                                                    @endforelse
+                                                </div>
+                                            </div>
+                                            <div class="rounded-md bg-white p-2">
+                                                <div class="font-semibold text-slate-900">Sichtbare Links unter Vorschlaegen</div>
+                                                <div class="mt-1 max-h-44 space-y-1 overflow-y-auto pr-1">
+                                                    @forelse(collect(data_get($suggestionLastDebug, 'anchorSamples', []))->take(20) as $sample)
+                                                        <div class="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                                                            <span class="font-semibold text-slate-800">{{ $sample['parsedUsername'] ? '@'.$sample['parsedUsername'] : ($sample['text'] ?? '-') }}</span>
+                                                            @if(! empty($sample['href']))
+                                                                <span class="block truncate text-slate-400">{{ $sample['href'] }}</span>
+                                                            @endif
+                                                        </div>
+                                                    @empty
+                                                        <div class="text-[11px] text-slate-500">Keine sichtbaren Link-Samples gespeichert.</div>
+                                                    @endforelse
+                                                </div>
+                                            </div>
+                                        </div>
+                                    @endif
+                                    @if(collect(data_get($suggestionLastDebug, 'scopeSamples', []))->isNotEmpty())
+                                        <div class="mt-2 rounded-md bg-white p-2">
+                                            <div class="font-semibold text-slate-900">Moegliche Vorschlags-Container</div>
+                                            <div class="mt-1 space-y-1">
+                                                @foreach(collect(data_get($suggestionLastDebug, 'scopeSamples', []))->take(8) as $sample)
+                                                    <div class="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                                                        <span class="font-semibold text-slate-800">
+                                                            Links {{ number_format((int) ($sample['profileAnchorCount'] ?? 0), 0, ',', '.') }}
+                                                            / {{ ! empty($sample['horizontalOverflow']) ? 'horizontal' : 'kein horizontal' }}
+                                                            / {{ ! empty($sample['verticalOverflow']) ? 'vertikal' : 'kein vertikal' }}
+                                                        </span>
+                                                        <span class="block truncate text-slate-500">{{ $sample['textPreview'] ?? '' }}</span>
                                                     </div>
                                                 @endforeach
                                             </div>

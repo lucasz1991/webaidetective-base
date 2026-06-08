@@ -686,6 +686,7 @@ class InstagramScraper
 
         if (array_key_exists('suggestionDebug', $event) || array_key_exists('suggestionCollectionPhase', $event)) {
             $debug = is_array($event['suggestionDebug'] ?? null) ? $event['suggestionDebug'] : [];
+            $diagnostics = is_array($debug['diagnostics'] ?? null) ? $debug['diagnostics'] : [];
             $progress['suggestionCollectionDebug'] = [
                 'type' => ($event['stage'] ?? null) === 'suggestions-scroll-preview' ? 'scroll' : 'collection',
                 'phase' => $this->nullableTrim($event['suggestionCollectionPhase'] ?? null),
@@ -707,11 +708,36 @@ class InstagramScraper
                 )),
                 'scrollAdvanced' => (bool) ($event['scrollAdvanced'] ?? false),
                 'scrollAtEnd' => (bool) ($event['scrollAtEnd'] ?? false),
+                'scrollMode' => $this->nullableTrim($event['scrollMode'] ?? null),
+                'rightNavigationVisible' => (bool) ($event['rightNavigationVisible'] ?? false),
+                'bodyContainsSuggestionText' => (bool) ($diagnostics['bodyContainsSuggestionText'] ?? false),
+                'textSamples' => $this->normalizeSuggestionDebugSamples($diagnostics['textSamples'] ?? null, 30),
+                'anchorSamples' => $this->normalizeSuggestionDebugSamples($diagnostics['anchorSamples'] ?? null, 30),
+                'scopeSamples' => $this->normalizeSuggestionDebugSamples($diagnostics['scopeSamples'] ?? null, 10),
                 'liveScreenshotUrl' => $this->nullableTrim($progress['liveScreenshotUrl'] ?? null),
             ];
         }
 
         return $progress;
+    }
+
+    private function normalizeSuggestionDebugSamples(mixed $samples, int $limit): array
+    {
+        if (! is_array($samples)) {
+            return [];
+        }
+
+        return collect($samples)
+            ->filter(fn ($sample): bool => is_array($sample))
+            ->take($limit)
+            ->map(function (array $sample): array {
+                return collect($sample)
+                    ->filter(fn ($value): bool => is_scalar($value) || $value === null)
+                    ->map(fn ($value) => is_string($value) ? Str::limit($value, 220, '') : $value)
+                    ->all();
+            })
+            ->values()
+            ->all();
     }
 
     private function normalizeScraperProfileProgress(array $event): array

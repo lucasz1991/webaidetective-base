@@ -187,9 +187,18 @@ class TrackedPersonInstagramAnalysisService
             );
 
             $isMiniScan = ($attemptInfo['scan_mode'] ?? null) === 'mini';
-            $mediaUrls = $isMiniScan
-                ? array_values(array_filter([$extracted['profile_image_url'] ?? null]))
-                : ($extracted['image_urls'] ?? []);
+            $profileMediaCanBeUpdated = $this->scanCanUpdateProfileMedia($payload, $attemptInfo);
+            $mediaUrls = $profileMediaCanBeUpdated
+                ? ($isMiniScan
+                    ? array_values(array_filter([$extracted['profile_image_url'] ?? null]))
+                    : ($extracted['image_urls'] ?? []))
+                : [];
+
+            if (! $profileMediaCanBeUpdated) {
+                $extracted['profile_image_url'] = $previousSnapshot?->profile_image_url;
+                $persistedWarnings[] = 'Profilbild wurde nicht aktualisiert, weil der Instagram-Profilscan nicht verlaesslich geladen wurde.';
+            }
+
             $storedMedia = $this->storeSnapshotMedia(
                 $trackedPerson,
                 $snapshot,
@@ -220,6 +229,7 @@ class TrackedPersonInstagramAnalysisService
             );
 
             $snapshot->forceFill([
+                'profile_image_url' => $extracted['profile_image_url'],
                 'profile_image_path' => $profileImagePath,
                 'profile_image_hash' => $profileImageHash,
                 'has_changes' => $detectedChanges !== [],
@@ -412,10 +422,18 @@ class TrackedPersonInstagramAnalysisService
                 $previousSnapshot,
             );
 
+            $profileMediaCanBeUpdated = $this->scanCanUpdateProfileMedia($payload, $attemptInfo);
+            $mediaUrls = $profileMediaCanBeUpdated ? ($extracted['image_urls'] ?? []) : [];
+
+            if (! $profileMediaCanBeUpdated) {
+                $extracted['profile_image_url'] = $previousSnapshot?->profile_image_url;
+                $persistedWarnings[] = 'Profilbild wurde nicht aktualisiert, weil der Instagram-Profilscan nicht verlaesslich geladen wurde.';
+            }
+
             $storedMedia = $this->storeSnapshotMedia(
                 $trackedPerson,
                 $snapshot,
-                $extracted['image_urls'] ?? [],
+                $mediaUrls,
                 $persistedWarnings,
                 $previousSnapshot,
             );
@@ -440,6 +458,7 @@ class TrackedPersonInstagramAnalysisService
             );
 
             $snapshot->forceFill([
+                'profile_image_url' => $extracted['profile_image_url'],
                 'profile_image_path' => $profileImagePath,
                 'profile_image_hash' => $profileImageHash,
                 'has_changes' => $detectedChanges !== [],
@@ -1232,6 +1251,55 @@ class TrackedPersonInstagramAnalysisService
         }
 
         return true;
+    }
+
+    private function scanCanUpdateProfileMedia(array $payload, array $attemptInfo): bool
+    {
+        $statusLevel = Str::lower(trim((string) ($payload['statusLevel'] ?? '')));
+
+        if ($statusLevel === 'error' || (array_key_exists('ok', $payload) && ! (bool) $payload['ok'])) {
+            return false;
+        }
+
+        if ((bool) ($payload['gracefullyStopped'] ?? false) || (bool) ($attemptInfo['gracefully_stopped'] ?? false)) {
+            return false;
+        }
+
+        $profilePhase = collect($attemptInfo['phases'] ?? [])
+            ->first(fn ($phase): bool => is_array($phase) && ($phase['phase'] ?? null) === 'profile');
+
+        if (is_array($profilePhase)) {
+            $phaseStatus = Str::lower(trim((string) ($profilePhase['statusLevel'] ?? '')));
+
+            if ($phaseStatus === 'error' || (array_key_exists('ok', $profilePhase) && ! (bool) $profilePhase['ok'])) {
+                return false;
+            }
+        }
+
+        if (! (bool) data_get($payload, 'profile.usernameSeen', false)) {
+            return false;
+        }
+
+        $imageUrl = (string) (data_get($payload, 'profile.ogImage') ?: data_get($payload, 'profile.profileImageUrl') ?: '');
+
+        return filled($imageUrl) && ! $this->isGenericInstagramImageUrl($imageUrl);
+    }
+
+    private function isGenericInstagramImageUrl(?string $imageUrl): bool
+    {
+        $imageUrl = Str::lower(trim((string) $imageUrl));
+
+        if ($imageUrl === '') {
+            return false;
+        }
+
+        return str_contains($imageUrl, '/static/images/ico/')
+            || str_contains($imageUrl, '/static/images/web/')
+            || str_contains($imageUrl, 'instagram_logo')
+            || str_contains($imageUrl, 'glyph-logo')
+            || str_contains($imageUrl, 'default_profile')
+            || str_contains($imageUrl, 'anonymoususer')
+            || str_contains($imageUrl, 'profile_anonymous_user');
     }
 
     private function profileComparisonFields(): array

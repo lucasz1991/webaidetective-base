@@ -4242,7 +4242,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
       .find(isSuggestionHeading) || null;
     const isAfterSuggestionHeading = (element) => {
       if (!suggestionHeading) {
-        return false;
+        return true;
       }
 
       return Boolean(suggestionHeading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
@@ -4347,6 +4347,125 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
 
       return candidateScopes[0]?.element || null;
     };
+    const visibleElementDiagnostics = () => {
+      const headingRect = suggestionHeading?.getBoundingClientRect?.() || null;
+      const isRelevantVisibleElement = (element) => {
+        if (!isVisible(element)) {
+          return false;
+        }
+
+        if (suggestionHeading && !isAfterSuggestionHeading(element)) {
+          return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+
+        return rect.top >= (headingRect ? headingRect.bottom - 28 : 0)
+          && rect.top <= window.innerHeight + 220
+          && rect.right >= -40
+          && rect.left <= window.innerWidth + 220;
+      };
+      const textSamples = [];
+      const seenTexts = new Set();
+
+      for (const element of Array.from(container.querySelectorAll('span, div, a, button'))) {
+        if (!isRelevantVisibleElement(element)) {
+          continue;
+        }
+
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+
+        if (
+          text === ''
+          || text.length > 90
+          || seenTexts.has(text.toLowerCase())
+          || discoverMorePattern.test(text)
+        ) {
+          continue;
+        }
+
+        const rect = element.getBoundingClientRect();
+        seenTexts.add(text.toLowerCase());
+        textSamples.push({
+          text,
+          tag: element.tagName?.toLowerCase?.() || '',
+          role: element.getAttribute?.('role') || null,
+          top: Math.round(rect.top),
+          left: Math.round(rect.left),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          normalizedUsername: normalizeUsername(text),
+          usernamePatternMatch: /^[a-z0-9._]{3,30}$/.test(normalizeUsername(text)),
+        });
+
+        if (textSamples.length >= 40) {
+          break;
+        }
+      }
+
+      const anchorSamples = Array.from(container.querySelectorAll('a[href]'))
+        .filter(isRelevantVisibleElement)
+        .filter((anchor) => !isDiscoverMoreElement(anchor))
+        .slice(0, 40)
+        .map((anchor) => {
+          const rect = anchor.getBoundingClientRect();
+          let href = anchor.getAttribute('href') || '';
+          let parsedUsername = '';
+
+          try {
+            const parts = new URL(href, window.location.origin).pathname.split('/').filter(Boolean);
+            parsedUsername = parts.length === 1 ? normalizeUsername(parts[0]) : '';
+          } catch (error) {
+            href = '';
+          }
+
+          return {
+            href,
+            text: normalizeElementText(anchor.innerText || anchor.textContent || ''),
+            parsedUsername,
+            top: Math.round(rect.top),
+            left: Math.round(rect.left),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          };
+        });
+
+      const scopeSamples = Array.from(document.querySelectorAll('div, section, ul'))
+        .filter(isVisible)
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          const text = normalizeElementText(element.innerText || element.textContent || '');
+          const profileAnchors = profileAnchorsIn(element);
+
+          return {
+            textPreview: text.slice(0, 180),
+            profileAnchorCount: profileAnchors.length,
+            scrollWidth: Math.round(element.scrollWidth || 0),
+            clientWidth: Math.round(element.clientWidth || 0),
+            scrollHeight: Math.round(element.scrollHeight || 0),
+            clientHeight: Math.round(element.clientHeight || 0),
+            horizontalOverflow: element.scrollWidth > element.clientWidth + 24,
+            verticalOverflow: element.scrollHeight > element.clientHeight + 24,
+            top: Math.round(rect.top),
+            left: Math.round(rect.left),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          };
+        })
+        .filter((entry) => (
+          /(?:vorschl(?:a|\u00e4)ge|suggested|suggestions|folgen|follow)/i.test(entry.textPreview)
+          || entry.profileAnchorCount > 0
+          || entry.horizontalOverflow
+        ))
+        .slice(0, 12);
+
+      return {
+        bodyContainsSuggestionText: /(?:vorschl(?:a|\u00e4)ge|f(?:u|\u00fc)r dich vorgeschlagen|suggested|suggestions)/i.test(bodyText),
+        textSamples,
+        anchorSamples,
+        scopeSamples,
+      };
+    };
     const fallbackVisibleSuggestionAnchors = () => {
       const headingRect = suggestionHeading?.getBoundingClientRect?.() || null;
 
@@ -4355,10 +4474,6 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
         .filter(isVisible)
         .filter((anchor) => !isDiscoverMoreElement(anchor))
         .filter((anchor) => {
-          if (!suggestionHeading) {
-            return false;
-          }
-
           const rect = anchor.getBoundingClientRect();
 
           return isAfterSuggestionHeading(anchor)
@@ -4369,11 +4484,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
         });
     };
     const fallbackVisibleSuggestionTextItems = () => {
-      if (!suggestionHeading) {
-        return [];
-      }
-
-      const headingRect = suggestionHeading.getBoundingClientRect();
+      const headingRect = suggestionHeading?.getBoundingClientRect?.() || null;
       const ignoredTextPattern = /^(folgen|abonniert|entfernen|remove|follow|following|x|alle ansehen|alle anzeigen|see all|show all)$/i;
       const usernamePattern = /^[a-z0-9._]{3,30}$/;
       const textElements = Array.from(container.querySelectorAll('span, div, a'))
@@ -4382,7 +4493,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
         .filter((element) => {
           const rect = element.getBoundingClientRect();
 
-          return rect.top >= headingRect.bottom - 20
+          return rect.top >= (headingRect ? headingRect.bottom - 20 : 0)
             && rect.top <= window.innerHeight + 180
             && rect.left >= 0
             && rect.right <= window.innerWidth + 180;
@@ -4550,6 +4661,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
         anchorsUsed: anchors.length,
         itemsFound: itemsByUsername.size,
         usernames: Array.from(itemsByUsername.keys()).slice(0, 12),
+        diagnostics: visibleElementDiagnostics(),
       },
       headingText: suggestionHeading
         ? normalizeElementText(suggestionHeading.innerText || suggestionHeading.textContent || '')
@@ -4931,7 +5043,7 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
   };
   const emitScrollPreview = async (phase, round, advanced) => {
     const livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
-    rememberDebugEvent(scrollDebugEvents, {
+    const scrollDebugEvent = {
       phase,
       round,
       loaded: itemsByUsername.size,
@@ -4942,11 +5054,11 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
       scrollMode: advanced?.mode || null,
       rightNavigationVisible: Boolean(advanced?.rightNavigationVisible),
       liveScreenshotPath: livePreview.liveScreenshotPath || null,
-    });
+    };
 
-    if (!livePreview.liveScreenshotPath) {
-      return;
-    }
+    rememberDebugEvent(scrollDebugEvents, {
+      ...scrollDebugEvent,
+    });
 
     progressLog('suggestions-scroll-preview', {
       relationship: 'suggestions',
@@ -4962,6 +5074,9 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
         : `Horizontale Vorschlagsliste gescrollt: ${itemsByUsername.size} Vorschlaege erkannt.`,
       scrollAdvanced: Boolean(advanced?.advanced),
       scrollAtEnd: Boolean(advanced?.atEnd),
+      scrollMode: advanced?.mode || null,
+      rightNavigationVisible: Boolean(advanced?.rightNavigationVisible),
+      suggestionScrollDebug: scrollDebugEvent,
       ...livePreview,
     });
   };
@@ -5017,6 +5132,7 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
         usernames: Array.isArray(debug.usernames) ? debug.usernames.slice(0, 20) : [],
         rateLimited: Boolean(batch.rateLimited),
         rateLimitText: batch.rateLimitText || null,
+        diagnostics: debug.diagnostics || null,
       };
 
       rememberDebugEvent(collectionDebugEvents, debugEvent);
