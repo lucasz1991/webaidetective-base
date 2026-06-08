@@ -4256,6 +4256,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
 
           return {
             element,
+            rect,
             profileAnchorCount: profileAnchors.length,
             horizontalList,
             suggestionText,
@@ -4272,12 +4273,38 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
 
       return candidateScopes[0]?.element || null;
     };
+    const fallbackVisibleSuggestionAnchors = () => {
+      const headingRect = suggestionHeading?.getBoundingClientRect?.() || null;
+
+      return Array.from(container.querySelectorAll('a[href]'))
+        .filter((anchor) => profileUsernameFromAnchor(anchor))
+        .filter(isVisible)
+        .filter((anchor) => !isDiscoverMoreElement(anchor))
+        .filter((anchor) => {
+          if (!suggestionHeading) {
+            return false;
+          }
+
+          const rect = anchor.getBoundingClientRect();
+
+          return isAfterSuggestionHeading(anchor)
+            && rect.top >= (headingRect ? headingRect.bottom - 20 : 0)
+            && rect.top <= window.innerHeight + 180
+            && rect.left >= 0
+            && rect.right <= window.innerWidth + 180;
+        });
+    };
     const anchorScope = dialog ? findDialogListScope() : findHorizontalSuggestionScope();
-    const anchors = anchorScope
+    const scopedAnchors = anchorScope
       ? Array.from(anchorScope.querySelectorAll('a[href]'))
+        .filter((anchor) => profileUsernameFromAnchor(anchor))
         .filter((anchor) => dialog || !suggestionHeading || isAfterSuggestionHeading(anchor) || anchorScope.contains(anchor))
         .filter((anchor) => !isDiscoverMoreElement(anchor))
       : [];
+    const fallbackAnchors = fallbackVisibleSuggestionAnchors();
+    const anchors = scopedAnchors.length > 0
+      ? scopedAnchors
+      : fallbackAnchors;
     const itemsByUsername = new Map();
     let profileLinkCandidatesSeen = 0;
 
@@ -4341,6 +4368,19 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
       rateLimited: false,
       rateLimitText: null,
       profileLinkCandidatesSeen,
+      debug: {
+        dialogOpen: Boolean(dialog),
+        headingFound: Boolean(suggestionHeading),
+        headingText: suggestionHeading
+          ? normalizeElementText(suggestionHeading.innerText || suggestionHeading.textContent || '')
+          : null,
+        anchorScopeFound: Boolean(anchorScope),
+        scopedAnchorsSeen: scopedAnchors.length,
+        fallbackAnchorsSeen: fallbackAnchors.length,
+        anchorsUsed: anchors.length,
+        itemsFound: itemsByUsername.size,
+        usernames: Array.from(itemsByUsername.keys()).slice(0, 12),
+      },
       headingText: suggestionHeading
         ? normalizeElementText(suggestionHeading.innerText || suggestionHeading.textContent || '')
         : null,
@@ -4398,12 +4438,20 @@ async function advanceProfileSuggestionsViewport(page) {
       .map((element) => {
         const rect = element.getBoundingClientRect();
         const text = normalizeElementText(element.innerText || element.textContent || '');
-        const profileAnchorCount = profileAnchorsIn(element).length;
+        const profileAnchors = profileAnchorsIn(element);
+        const profileAnchorCount = profileAnchors.length;
+        const anchorRects = profileAnchors
+          .map((anchor) => anchor.getBoundingClientRect())
+          .filter((anchorRect) => anchorRect.width > 0 && anchorRect.height > 0);
         const horizontalOverflow = element.scrollWidth > element.clientWidth + 30;
         const verticalOverflow = element.scrollHeight > element.clientHeight + 30;
+        const sameRowProfileAnchors = anchorRects.length >= 2
+          && (Math.max(...anchorRects.map((anchorRect) => anchorRect.top))
+            - Math.min(...anchorRects.map((anchorRect) => anchorRect.top))) <= 130;
         const suggestionText = suggestionPattern.test(text);
         const score = (profileAnchorCount * 4)
           + (horizontalOverflow ? 8 : 0)
+          + (sameRowProfileAnchors ? 7 : 0)
           + (verticalOverflow ? 3 : 0)
           + (suggestionText ? 5 : 0)
           - Math.max(0, Math.floor(text.length / 1200));
@@ -4413,15 +4461,20 @@ async function advanceProfileSuggestionsViewport(page) {
           rect,
           profileAnchorCount,
           horizontalOverflow,
+          sameRowProfileAnchors,
           verticalOverflow,
           suggestionText,
           score,
         };
       })
-      .filter((entry) => entry.profileAnchorCount > 0 && (entry.horizontalOverflow || entry.verticalOverflow || entry.suggestionText))
+      .filter((entry) => entry.profileAnchorCount > 0 && (entry.horizontalOverflow || entry.sameRowProfileAnchors || entry.verticalOverflow || entry.suggestionText))
       .sort((left, right) => right.score - left.score);
 
-    const horizontalTargetEntry = dialog ? null : (scrollables.find((entry) => entry.horizontalOverflow) || null);
+    const horizontalTargetEntry = dialog ? null : (
+      scrollables.find((entry) => entry.horizontalOverflow)
+      || scrollables.find((entry) => entry.sameRowProfileAnchors)
+      || null
+    );
     const horizontalTarget = horizontalTargetEntry?.element || null;
     const horizontalRect = horizontalTarget ? horizontalTarget.getBoundingClientRect() : null;
     const nextPattern = /(?:weiter|n(?:a|\u00e4)chste|next)/i;
@@ -4635,6 +4688,34 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
       profileLinkCandidatesSeen,
       Number(batch.profileLinkCandidatesSeen || 0),
     );
+
+    const shouldDebugCollection = Boolean(runtimeConfig.suggestionDebug)
+      || rounds <= 3
+      || Number(batch.items?.length || 0) === 0;
+    if (shouldDebugCollection) {
+      const debug = batch.debug || {};
+      const debugMessage = [
+        `Vorschlags-Debug ${phase}: ${Array.isArray(batch.items) ? batch.items.length : 0} Profile erkannt`,
+        `Heading ${debug.headingFound ? 'ja' : 'nein'}`,
+        `Scope ${debug.anchorScopeFound ? 'ja' : 'nein'}`,
+        `sichtbare Links ${Number(debug.fallbackAnchorsSeen || 0)}`,
+        `genutzt ${Number(debug.anchorsUsed || 0)}`,
+      ].join(' | ');
+
+      progressLog('suggestions-collection-debug', {
+        relationship: 'suggestions',
+        suggestionCollectionPhase: phase,
+        loaded: itemsByUsername.size,
+        expectedCount: limit,
+        round: rounds,
+        suggestionsObserved: itemsByUsername.size,
+        batchItemsFound: Array.isArray(batch.items) ? batch.items.length : 0,
+        profileLinkCandidatesSeen: Number(batch.profileLinkCandidatesSeen || 0),
+        suggestionDebug: debug,
+        message: debugMessage,
+        ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+      });
+    }
 
     if (batch.rateLimited) {
       return {
