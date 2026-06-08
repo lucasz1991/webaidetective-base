@@ -2,7 +2,7 @@ const instances = new WeakMap();
 const activeRoots = new Set();
 const DEFAULT_LAYOUT_MODE = 'clusters';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
-const LAYOUT_STORAGE_PREFIX = 'network-map-render:v5';
+const LAYOUT_STORAGE_PREFIX = 'network-map-render:v6';
 let cytoscapeLoader;
 
 function loadCytoscape() {
@@ -168,10 +168,12 @@ function updatePublicBadges(root, cy) {
         .filter((node) => node.data('type') !== 'person' && Boolean(node.data('hasImage')))
         .forEach((node) => {
             const position = node.renderedPosition();
-            const nodeSize = Number(node.renderedWidth?.() || node.data('nodeSize') || 42);
-            const badgeSize = 20;
-            const left = position.x + (nodeSize / 2) - 3;
-            const top = position.y - (nodeSize / 2) + 3;
+            const nodeSize = Number(node.renderedWidth?.() || node.data('renderNodeSize') || node.data('nodeSize') || 42);
+            const badgeSize = Math.max(14, Math.min(46, Math.round(nodeSize * 0.26)));
+            const badgeFontSize = Math.max(10, Math.min(22, Math.round(badgeSize * 0.58)));
+            const badgeBorderWidth = Math.max(2, Math.min(4, Math.round(badgeSize * 0.12)));
+            const left = position.x + (nodeSize / 2) - (badgeSize * 0.18);
+            const top = position.y - (nodeSize / 2) + (badgeSize * 0.18);
 
             if (left < -badgeSize || top < -badgeSize || left > width + badgeSize || top > height + badgeSize) {
                 return;
@@ -192,10 +194,10 @@ function updatePublicBadges(root, cy) {
                 'align-items:center',
                 'justify-content:center',
                 'border-radius:9999px',
-                'border:2px solid #ffffff',
+                `border:${badgeBorderWidth}px solid #ffffff`,
                 'background:#10b981',
                 'color:#ffffff',
-                'font-size:11px',
+                `font-size:${badgeFontSize}px`,
                 'font-weight:900',
                 'line-height:1',
                 'box-shadow:0 6px 14px rgba(15,23,42,0.22)',
@@ -696,7 +698,7 @@ function readStoredLayout(root, state, cy) {
     try {
         const stored = JSON.parse(localStorage.getItem(key) || 'null');
 
-        return stored && stored.version === 5 ? { key, stored } : null;
+        return stored && stored.version === 6 ? { key, stored } : null;
     } catch {
         return null;
     }
@@ -734,7 +736,7 @@ function writeStoredLayout(root, cy) {
 
     try {
         localStorage.setItem(key, JSON.stringify({
-            version: 5,
+            version: 6,
             savedAt: Date.now(),
             layoutMode: normalizeLayoutMode(state.layoutMode),
             layoutSpacingScale: normalizedScale(state.layoutSpacingScale, 1, 0.5, 5),
@@ -1125,14 +1127,15 @@ function estimatedNodeBox(node, position) {
     const lines = Math.max(1, Math.ceil((label.length * fontSize * 0.54) / maxTextWidth));
     const labelWidth = Math.min(maxTextWidth + 28, Math.max(size, Math.min(maxTextWidth, label.length * fontSize * 0.54) + 18));
     const labelHeight = (lines * (fontSize + 5)) + 16;
-    const width = Math.max(size, labelWidth) + 34;
-    const height = size + labelHeight + 34;
+    const margin = Math.max(44, Math.min(170, size * 0.34));
+    const width = Math.max(size, labelWidth) + margin;
+    const height = size + labelHeight + margin;
 
     return {
         left: position.x - (width / 2),
         right: position.x + (width / 2),
-        top: position.y - (size / 2) - 14,
-        bottom: position.y + (size / 2) + labelHeight + 20,
+        top: position.y - (size / 2) - (margin * 0.42),
+        bottom: position.y + (size / 2) + labelHeight + (margin * 0.58),
         width,
         height,
     };
@@ -1526,6 +1529,160 @@ function localGroupUpdates(cy, group, mode, spacingScale = 1) {
     });
 }
 
+function groupDirectlyConnectedToFocus(group, focus) {
+    return group.root.connectedEdges()
+        .not('.network-filtered')
+        .some((edge) => edge.source().id() === focus.id() || edge.target().id() === focus.id());
+}
+
+function appendPreparedGroup(updates, item, center) {
+    item.localUpdates.forEach((update) => {
+        updates.push({
+            node: update.node,
+            position: {
+                x: center.x + update.position.x,
+                y: center.y + update.position.y,
+            },
+        });
+    });
+}
+
+function placeClusterGroups(preparedGroups, updates, centerX, centerY, spacingScale) {
+    let index = 0;
+    let ringRadius = 440 * spacingScale;
+    let ringIndex = 0;
+
+    while (index < preparedGroups.length) {
+        const ring = [];
+        let usedArc = 0;
+        let maxRadius = 170;
+        const circumference = Math.PI * 2 * ringRadius;
+
+        while (index < preparedGroups.length) {
+            const item = preparedGroups[index];
+            const arc = Math.max(320 * spacingScale, (item.radius * 1.55) + (140 * spacingScale));
+
+            if (ring.length && usedArc + arc > circumference) {
+                break;
+            }
+
+            ring.push(item);
+            usedArc += arc;
+            maxRadius = Math.max(maxRadius, item.radius);
+            index += 1;
+        }
+
+        const angleOffset = (-Math.PI / 2) + (ringIndex * 0.31);
+
+        ring.forEach((item, ringItemIndex) => {
+            const angle = angleOffset + ((Math.PI * 2) * (ringItemIndex / Math.max(1, ring.length)));
+
+            appendPreparedGroup(updates, item, {
+                x: centerX + Math.cos(angle) * (ringRadius + item.radius * 0.18),
+                y: centerY + Math.sin(angle) * (ringRadius + item.radius * 0.18),
+            });
+        });
+
+        ringRadius += Math.max(460 * spacingScale, (maxRadius * 2.2) + (300 * spacingScale));
+        ringIndex += 1;
+    }
+}
+
+function placeSpiralGroups(preparedGroups, updates, centerX, centerY, spacingScale) {
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    let accumulatedRadius = 360 * spacingScale;
+
+    preparedGroups.forEach((item, index) => {
+        if (index > 0) {
+            accumulatedRadius += Math.max(150 * spacingScale, item.radius * 0.42);
+        }
+
+        const angle = (index + 1) * goldenAngle;
+        const radius = accumulatedRadius + (Math.sqrt(index + 1) * 190 * spacingScale);
+
+        appendPreparedGroup(updates, item, {
+            x: centerX + Math.cos(angle) * radius,
+            y: centerY + Math.sin(angle) * radius,
+        });
+    });
+}
+
+function placeGridGroups(preparedGroups, updates, centerX, centerY, spacingScale) {
+    const maxRadius = Math.max(180, ...preparedGroups.map((item) => item.radius));
+    const columns = Math.max(1, Math.ceil(Math.sqrt(preparedGroups.length)));
+    const rows = Math.max(1, Math.ceil(preparedGroups.length / columns));
+    const slotX = Math.max(360 * spacingScale, (maxRadius * 2.2) + (180 * spacingScale));
+    const slotY = Math.max(320 * spacingScale, (maxRadius * 1.9) + (180 * spacingScale));
+    const startX = centerX - (((columns - 1) * slotX) / 2);
+    const startY = centerY + (520 * spacingScale) - (((rows - 1) * slotY) / 2);
+
+    preparedGroups.forEach((item, index) => {
+        const row = Math.floor(index / columns);
+        const column = index % columns;
+
+        appendPreparedGroup(updates, item, {
+            x: startX + (column * slotX),
+            y: startY + (row * slotY),
+        });
+    });
+}
+
+function placeRadialGroups(preparedGroups, updates, centerX, centerY, spacingScale, focus) {
+    const directGroups = preparedGroups.filter((item) => groupDirectlyConnectedToFocus(item.group, focus));
+    const indirectGroups = preparedGroups.filter((item) => !groupDirectlyConnectedToFocus(item.group, focus));
+    const rings = [directGroups, indirectGroups].filter((ring) => ring.length);
+
+    rings.forEach((ring, ringIndex) => {
+        const maxRadius = Math.max(170, ...ring.map((item) => item.radius));
+        const radius = (420 * spacingScale)
+            + (ringIndex * Math.max(520 * spacingScale, (maxRadius * 2.2) + (260 * spacingScale)));
+
+        ring.forEach((item, index) => {
+            const angle = (-Math.PI / 2) + ((Math.PI * 2) * (index / Math.max(1, ring.length))) + (ringIndex * 0.18);
+
+            appendPreparedGroup(updates, item, {
+                x: centerX + Math.cos(angle) * (radius + item.radius * 0.16),
+                y: centerY + Math.sin(angle) * (radius + item.radius * 0.16),
+            });
+        });
+    });
+}
+
+function placeConcentricGroups(preparedGroups, updates, centerX, centerY, spacingScale, focus) {
+    const strongGroups = [];
+    const mediumGroups = [];
+    const weakGroups = [];
+
+    preparedGroups.forEach((item) => {
+        const score = groupScore(item.group);
+
+        if (groupDirectlyConnectedToFocus(item.group, focus) && score >= 22) {
+            strongGroups.push(item);
+        } else if (score >= 12) {
+            mediumGroups.push(item);
+        } else {
+            weakGroups.push(item);
+        }
+    });
+
+    [strongGroups, mediumGroups, weakGroups]
+        .filter((ring) => ring.length)
+        .forEach((ring, ringIndex) => {
+            const maxRadius = Math.max(170, ...ring.map((item) => item.radius));
+            const radius = (360 * spacingScale)
+                + (ringIndex * Math.max(470 * spacingScale, (maxRadius * 2) + (250 * spacingScale)));
+
+            ring.forEach((item, index) => {
+                const angle = (-Math.PI / 2) + ((Math.PI * 2) * (index / Math.max(1, ring.length))) + (ringIndex * 0.36);
+
+                appendPreparedGroup(updates, item, {
+                    x: centerX + Math.cos(angle) * (radius + item.radius * 0.12),
+                    y: centerY + Math.sin(angle) * (radius + item.radius * 0.12),
+                });
+            });
+        });
+}
+
 function placeGroupedLayout(root, cy, visibleNodes, mode) {
     const state = instances.get(root);
     const spacingScale = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5);
@@ -1555,52 +1712,16 @@ function placeGroupedLayout(root, cy, visibleNodes, mode) {
         };
     });
 
-    let index = 0;
-    let ringRadius = 430 * spacingScale;
-    let ringIndex = 0;
-
-    while (index < preparedGroups.length) {
-        const ring = [];
-        let usedArc = 0;
-        let maxRadius = 170;
-        const circumference = Math.PI * 2 * ringRadius;
-
-        while (index < preparedGroups.length) {
-            const item = preparedGroups[index];
-            const arc = Math.max(300 * spacingScale, (item.radius * 1.45) + (120 * spacingScale));
-
-            if (ring.length && usedArc + arc > circumference) {
-                break;
-            }
-
-            ring.push(item);
-            usedArc += arc;
-            maxRadius = Math.max(maxRadius, item.radius);
-            index += 1;
-        }
-
-        const angleOffset = (-Math.PI / 2) + (ringIndex * 0.23);
-
-        ring.forEach((item, ringItemIndex) => {
-            const angle = angleOffset + ((Math.PI * 2) * (ringItemIndex / Math.max(1, ring.length)));
-            const groupCenter = {
-                x: centerX + Math.cos(angle) * (ringRadius + item.radius * 0.15),
-                y: centerY + Math.sin(angle) * (ringRadius + item.radius * 0.15),
-            };
-
-            item.localUpdates.forEach((update) => {
-                updates.push({
-                    node: update.node,
-                    position: {
-                        x: groupCenter.x + update.position.x,
-                        y: groupCenter.y + update.position.y,
-                    },
-                });
-            });
-        });
-
-        ringRadius += Math.max(430 * spacingScale, (maxRadius * 2) + (260 * spacingScale));
-        ringIndex += 1;
+    if (mode === 'spiral') {
+        placeSpiralGroups(preparedGroups, updates, centerX, centerY, spacingScale);
+    } else if (mode === 'grid') {
+        placeGridGroups(preparedGroups, updates, centerX, centerY, spacingScale);
+    } else if (mode === 'radial') {
+        placeRadialGroups(preparedGroups, updates, centerX, centerY, spacingScale, focus);
+    } else if (mode === 'concentric') {
+        placeConcentricGroups(preparedGroups, updates, centerX, centerY, spacingScale, focus);
+    } else {
+        placeClusterGroups(preparedGroups, updates, centerX, centerY, spacingScale);
     }
 
     return preventLayoutOverlaps(updates, focus, spacingScale);
@@ -1618,7 +1739,9 @@ function preventLayoutOverlaps(updates, focus, spacingScale = 1) {
         position: { ...update.position },
     }));
 
-    for (let pass = 0; pass < 10; pass += 1) {
+    const focusItem = items.find((item) => item.fixed);
+
+    for (let pass = 0; pass < 18; pass += 1) {
         let moved = false;
 
         for (let leftIndex = 0; leftIndex < items.length; leftIndex += 1) {
@@ -1643,7 +1766,7 @@ function preventLayoutOverlaps(updates, focus, spacingScale = 1) {
                 }
 
                 const length = Math.max(1, Math.hypot(dx, dy));
-                const push = Math.min(220 * spacingScale, Math.max(overlap.x, overlap.y) * 0.58 + (18 * spacingScale));
+                const push = Math.min(280 * spacingScale, Math.max(overlap.x, overlap.y) * 0.72 + (24 * spacingScale));
                 const pushX = (dx / length) * push;
                 const pushY = (dy / length) * push;
 
@@ -1670,6 +1793,22 @@ function preventLayoutOverlaps(updates, focus, spacingScale = 1) {
 
         if (!moved) {
             break;
+        }
+
+        if (focusItem && pass % 3 === 2) {
+            items.forEach((item) => {
+                if (item.fixed) {
+                    return;
+                }
+
+                const dx = item.position.x - focusItem.position.x;
+                const dy = item.position.y - focusItem.position.y;
+                const length = Math.max(1, Math.hypot(dx, dy));
+                const nudge = 8 * spacingScale;
+
+                item.position.x += (dx / length) * nudge;
+                item.position.y += (dy / length) * nudge;
+            });
         }
     }
 
