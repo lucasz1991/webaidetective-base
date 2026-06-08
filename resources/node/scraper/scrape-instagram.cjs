@@ -4920,8 +4920,29 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
   const continueUntilEnd = options.continueUntilEnd === true;
   const hoverCardUsernames = options.hoverCardUsernames instanceof Set ? options.hoverCardUsernames : new Set();
   const runtimeConfig = options.runtimeConfig || {};
+  const collectionDebugEvents = [];
+  const scrollDebugEvents = [];
+  const rememberDebugEvent = (target, event, limitCount = 80) => {
+    target.push(event);
+
+    if (target.length > limitCount) {
+      target.splice(0, target.length - limitCount);
+    }
+  };
   const emitScrollPreview = async (phase, round, advanced) => {
     const livePreview = await captureLivePreviewScreenshot(page, runtimeConfig, true);
+    rememberDebugEvent(scrollDebugEvents, {
+      phase,
+      round,
+      loaded: itemsByUsername.size,
+      suggestionsObserved: itemsByUsername.size,
+      suggestionKnownSeen: seenKnownUsernames.size,
+      scrollAdvanced: Boolean(advanced?.advanced),
+      scrollAtEnd: Boolean(advanced?.atEnd),
+      scrollMode: advanced?.mode || null,
+      rightNavigationVisible: Boolean(advanced?.rightNavigationVisible),
+      liveScreenshotPath: livePreview.liveScreenshotPath || null,
+    });
 
     if (!livePreview.liveScreenshotPath) {
       return;
@@ -4978,6 +4999,27 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
         `Textfallback ${Number(debug.textFallbackItemsSeen || 0)}`,
         `genutzt ${Number(debug.anchorsUsed || 0)}`,
       ].join(' | ');
+      const debugEvent = {
+        phase,
+        round: rounds,
+        message: debugMessage,
+        batchItemsFound: Array.isArray(batch.items) ? batch.items.length : 0,
+        itemsStored: itemsByUsername.size,
+        profileLinkCandidatesSeen: Number(batch.profileLinkCandidatesSeen || 0),
+        dialogOpen: Boolean(debug.dialogOpen),
+        headingFound: Boolean(debug.headingFound),
+        headingText: debug.headingText || null,
+        anchorScopeFound: Boolean(debug.anchorScopeFound),
+        scopedAnchorsSeen: Number(debug.scopedAnchorsSeen || 0),
+        fallbackAnchorsSeen: Number(debug.fallbackAnchorsSeen || 0),
+        textFallbackItemsSeen: Number(debug.textFallbackItemsSeen || 0),
+        anchorsUsed: Number(debug.anchorsUsed || 0),
+        usernames: Array.isArray(debug.usernames) ? debug.usernames.slice(0, 20) : [],
+        rateLimited: Boolean(batch.rateLimited),
+        rateLimitText: batch.rateLimitText || null,
+      };
+
+      rememberDebugEvent(collectionDebugEvents, debugEvent);
 
       progressLog('suggestions-collection-debug', {
         relationship: 'suggestions',
@@ -5105,6 +5147,15 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
     dismissedKnownCount: dismissedKnownItems.length,
     seenKnownCount: seenKnownUsernames.size,
     profileLinkCandidatesSeen,
+    collectionDebug: {
+      rounds,
+      profileLinkCandidatesSeen,
+      events: collectionDebugEvents,
+      scrollEvents: scrollDebugEvents,
+      finalUsernames: Array.from(itemsByUsername.keys()).slice(0, 120),
+      seenKnownUsernames: Array.from(seenKnownUsernames).slice(0, 120),
+      dismissedKnownUsernames: Array.from(dismissedKnownUsernames).slice(0, 120),
+    },
   };
 }
 

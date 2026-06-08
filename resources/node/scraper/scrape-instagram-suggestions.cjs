@@ -951,6 +951,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     observedCount: observedSuggestions.length,
     collectionRounds: targetSuggestions.rounds || 0,
     profileLinkCandidatesSeen: targetSuggestions.profileLinkCandidatesSeen || 0,
+    targetCollectionDebug: targetSuggestions.collectionDebug || null,
     dismissedKnownCount: targetSuggestions.dismissedKnownCount || 0,
     seenKnownCount: targetSuggestions.seenKnownCount || 0,
     observedSuggestions,

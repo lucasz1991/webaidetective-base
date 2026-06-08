@@ -70,6 +70,11 @@ class TrackedPersonInstagramSuggestionScanService
 
         $liveConnections = [];
         $liveObservedSuggestions = [];
+        $liveSuggestionDebug = [
+            'events' => [],
+            'scrollEvents' => [],
+            'finalUsernames' => [],
+        ];
 
         $this->reportProgress($progress, [
             'phase' => 'suggestions',
@@ -81,60 +86,118 @@ class TrackedPersonInstagramSuggestionScanService
             'observedSuggestions' => [],
         ]);
 
-        $payload = $this->scraper->scrape(
-            $targetUsername,
-            'suggestions',
-            function (array $state) use ($trackedPerson, $targetUsername, $progress, &$liveConnections, &$liveObservedSuggestions): void {
-                if (array_key_exists('suggestionConnections', $state)) {
-                    $liveConnections = $this->mergeSuggestionConnections(
-                        $liveConnections,
-                        $this->normalizeSuggestionConnections($state['suggestionConnections']),
-                    );
-
-                    if ($liveConnections !== []) {
-                        $this->storeInferredSuggestionConnections(
-                            $trackedPerson,
-                            null,
-                            $targetUsername,
+        try {
+            $payload = $this->scraper->scrape(
+                $targetUsername,
+                'suggestions',
+                function (array $state) use ($trackedPerson, $targetUsername, $progress, &$liveConnections, &$liveObservedSuggestions, &$liveSuggestionDebug): void {
+                    if (array_key_exists('suggestionConnections', $state)) {
+                        $liveConnections = $this->mergeSuggestionConnections(
                             $liveConnections,
-                            ['progress' => true],
-                            now('UTC'),
+                            $this->normalizeSuggestionConnections($state['suggestionConnections']),
                         );
+
+                        if ($liveConnections !== []) {
+                            $this->storeInferredSuggestionConnections(
+                                $trackedPerson,
+                                null,
+                                $targetUsername,
+                                $liveConnections,
+                                ['progress' => true],
+                                now('UTC'),
+                            );
+                        }
                     }
-                }
 
-                if (array_key_exists('observedSuggestions', $state)) {
-                    $liveObservedSuggestions = $this->mergeObservedSuggestionItems(
-                        $liveObservedSuggestions,
-                        $this->normalizeObservedSuggestionItems($state['observedSuggestions']),
+                    if (array_key_exists('observedSuggestions', $state)) {
+                        $liveObservedSuggestions = $this->mergeObservedSuggestionItems(
+                            $liveObservedSuggestions,
+                            $this->normalizeObservedSuggestionItems($state['observedSuggestions']),
+                        );
+                        $liveSuggestionDebug['finalUsernames'] = collect($liveObservedSuggestions)
+                            ->pluck('username')
+                            ->filter()
+                            ->take(120)
+                            ->values()
+                            ->all();
+                    }
+
+                    if (is_array($state['suggestionCollectionDebug'] ?? null)) {
+                        $debugEvent = $state['suggestionCollectionDebug'];
+                        if (is_scalar($state['liveScreenshotUrl'] ?? null)) {
+                            $debugEvent['liveScreenshotUrl'] = (string) $state['liveScreenshotUrl'];
+                        }
+                        $targetKey = ($debugEvent['type'] ?? null) === 'scroll' ? 'scrollEvents' : 'events';
+                        $liveSuggestionDebug[$targetKey][] = $debugEvent;
+                        $liveSuggestionDebug[$targetKey] = array_slice($liveSuggestionDebug[$targetKey], -80);
+                    }
+
+                    $observedSuggestionCount = max(
+                        count($liveObservedSuggestions),
+                        (int) ($state['observedSuggestionCount'] ?? 0),
                     );
-                }
 
-                $observedSuggestionCount = max(
-                    count($liveObservedSuggestions),
-                    (int) ($state['observedSuggestionCount'] ?? 0),
-                );
-
-                $this->reportProgress($progress, [
-                    ...$state,
-                    'phase' => 'suggestions',
-                    'foundSuggestions' => count($liveConnections),
-                    'suggestionConnections' => $liveConnections,
-                    'observedSuggestionCount' => $observedSuggestionCount,
+                    $this->reportProgress($progress, [
+                        ...$state,
+                        'phase' => 'suggestions',
+                        'foundSuggestions' => count($liveConnections),
+                        'suggestionConnections' => $liveConnections,
+                        'observedSuggestionCount' => $observedSuggestionCount,
+                        'observedSuggestions' => $liveObservedSuggestions,
+                    ]);
+                },
+                $this->withActiveScanControl([
+                    'suggestionScanMaxItems' => 500,
+                    'suggestionCandidateMaxItems' => 300,
+                    'suggestionPublicListSearchMaxScrollRounds' => 60,
+                    'suggestionInlineMaxRounds' => 60,
+                    'suggestionDialogMaxRounds' => 100,
+                    'suggestionCandidateInlineMaxRounds' => 40,
+                    'suggestionCandidateDialogMaxRounds' => 70,
+                    'suggestionDebug' => true,
+                    'suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson),
+                ]),
+            );
+        } catch (\Throwable $exception) {
+            $message = 'Profilvorschlag-Verbindungsscan fehlgeschlagen: '.$exception->getMessage();
+            $payload = [
+                'ok' => false,
+                'operationMode' => 'suggestions',
+                'statusLevel' => 'error',
+                'statusMessage' => $message,
+                'error' => $exception->getMessage(),
+                'suggestionConnections' => $liveConnections,
+                'suggestionScan' => [
+                    'ok' => false,
+                    'statusLevel' => 'error',
+                    'statusMessage' => $message,
+                    'targetUsername' => $targetUsername,
+                    'attempted' => true,
+                    'available' => count($liveObservedSuggestions) > 0,
+                    'observedCount' => count($liveObservedSuggestions),
+                    'checkedCount' => 0,
+                    'matchCount' => count($liveConnections),
+                    'rateLimited' => str_contains($exception->getMessage(), '429'),
+                    'rateLimitText' => str_contains($exception->getMessage(), '429') ? $exception->getMessage() : null,
                     'observedSuggestions' => $liveObservedSuggestions,
-                ]);
-            },
-            $this->withActiveScanControl([
-                'suggestionScanMaxItems' => 500,
-                'suggestionCandidateMaxItems' => 300,
-                'suggestionPublicListSearchMaxScrollRounds' => 60,
-                'suggestionInlineMaxRounds' => 60,
-                'suggestionDialogMaxRounds' => 100,
-                'suggestionCandidateInlineMaxRounds' => 40,
-                'suggestionCandidateDialogMaxRounds' => 70,
-                'suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson),
-            ]),
-        );
+                    'matches' => $liveConnections,
+                    'targetCollectionDebug' => [
+                        ...$liveSuggestionDebug,
+                        'error' => $exception->getMessage(),
+                    ],
+                ],
+            ];
+
+            $this->reportProgress($progress, [
+                'phase' => 'suggestions',
+                'percent' => 100,
+                'message' => $message,
+                'foundSuggestions' => count($liveConnections),
+                'suggestionConnections' => $liveConnections,
+                'observedSuggestionCount' => count($liveObservedSuggestions),
+                'observedSuggestions' => $liveObservedSuggestions,
+            ]);
+        }
 
         return $this->storeScan($trackedPerson, $targetUsername, $payload, $liveConnections);
     }

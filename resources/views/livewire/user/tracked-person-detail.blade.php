@@ -1610,6 +1610,18 @@
                                     'error' => 'border-rose-200 bg-white text-rose-900',
                                     default => 'border-slate-200 bg-white text-slate-700',
                                 };
+                                $suggestionRawPayload = is_array($suggestionScan->raw_payload) ? $suggestionScan->raw_payload : [];
+                                $suggestionScanPayload = data_get($suggestionRawPayload, 'suggestionScan', data_get($suggestionRawPayload, 'profile.suggestionScan', []));
+                                $suggestionDebug = data_get($suggestionScanPayload, 'targetCollectionDebug', []);
+                                $suggestionDebugEvents = collect(data_get($suggestionDebug, 'events', []))->filter(fn ($event) => is_array($event))->take(-8)->values();
+                                $suggestionScrollEvents = collect(data_get($suggestionDebug, 'scrollEvents', []))->filter(fn ($event) => is_array($event))->take(-8)->values();
+                                $suggestionFinalUsernames = collect(data_get($suggestionDebug, 'finalUsernames', []))->filter()->take(30)->values();
+                                $suggestionObservedPreview = collect(data_get($suggestionScanPayload, 'observedSuggestions', []))
+                                    ->filter(fn ($item) => is_array($item) && filled($item['username'] ?? null))
+                                    ->take(30)
+                                    ->values();
+                                $suggestionLastDebug = $suggestionDebugEvents->last();
+                                $suggestionLastScroll = $suggestionScrollEvents->last();
                             @endphp
                             <div class="rounded-xl border px-3 py-2 text-xs {{ $suggestionScanStatusClass }}">
                                 <div class="flex flex-wrap items-start justify-between gap-3">
@@ -1630,6 +1642,84 @@
                                         </div>
                                     </div>
                                 </div>
+                                <details class="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">
+                                    <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                        Vorschlags-Debug anzeigen
+                                    </summary>
+                                    <div class="mt-2 grid gap-2 lg:grid-cols-3">
+                                        <div class="rounded-md bg-white p-2">
+                                            <div class="font-semibold text-slate-900">Letzte Erkennung</div>
+                                            <div class="mt-1 space-y-0.5 text-[11px] text-slate-600">
+                                                <div>Runden: {{ number_format((int) data_get($suggestionDebug, 'rounds', 0), 0, ',', '.') }}</div>
+                                                <div>Profil-Link-Kandidaten: {{ number_format((int) data_get($suggestionDebug, 'profileLinkCandidatesSeen', data_get($suggestionScanPayload, 'profileLinkCandidatesSeen', 0)), 0, ',', '.') }}</div>
+                                                <div>Heading: {{ data_get($suggestionLastDebug, 'headingFound') ? 'ja' : 'nein' }}{{ data_get($suggestionLastDebug, 'headingText') ? ' - '.data_get($suggestionLastDebug, 'headingText') : '' }}</div>
+                                                <div>Scope: {{ data_get($suggestionLastDebug, 'anchorScopeFound') ? 'ja' : 'nein' }}</div>
+                                                <div>Links/Textfallback: {{ number_format((int) data_get($suggestionLastDebug, 'fallbackAnchorsSeen', 0), 0, ',', '.') }} / {{ number_format((int) data_get($suggestionLastDebug, 'textFallbackItemsSeen', 0), 0, ',', '.') }}</div>
+                                                <div>Scroll: {{ data_get($suggestionLastScroll, 'scrollMode', '-') }}{{ data_get($suggestionLastScroll, 'scrollAdvanced') ? ' weiter' : ' kein Fortschritt' }}{{ data_get($suggestionLastScroll, 'scrollAtEnd') ? ' / Ende' : '' }}</div>
+                                                @if(data_get($suggestionDebug, 'error'))
+                                                    <div class="text-rose-700">Fehler: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionDebug, 'error'), 160) }}</div>
+                                                @endif
+                                                @if(data_get($suggestionScanPayload, 'rateLimitText'))
+                                                    <div class="text-rose-700">Rate-Limit: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionScanPayload, 'rateLimitText'), 160) }}</div>
+                                                @endif
+                                                @if(data_get($suggestionLastDebug, 'liveScreenshotUrl') || data_get($suggestionLastScroll, 'liveScreenshotUrl'))
+                                                    <a href="{{ data_get($suggestionLastDebug, 'liveScreenshotUrl') ?: data_get($suggestionLastScroll, 'liveScreenshotUrl') }}" target="_blank" class="inline-flex text-[11px] font-semibold text-indigo-600 hover:text-indigo-800">
+                                                        letzten Debug-Screenshot oeffnen
+                                                    </a>
+                                                @endif
+                                            </div>
+                                        </div>
+                                        <div class="rounded-md bg-white p-2">
+                                            <div class="font-semibold text-slate-900">Erkannte Usernames</div>
+                                            @if($suggestionFinalUsernames->isNotEmpty())
+                                                <div class="mt-1 flex flex-wrap gap-1">
+                                                    @foreach($suggestionFinalUsernames as $debugUsername)
+                                                        <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">{{ '@'.$debugUsername }}</span>
+                                                    @endforeach
+                                                </div>
+                                            @else
+                                                <div class="mt-1 text-[11px] text-slate-500">Keine Usernames im gespeicherten Debug gefunden.</div>
+                                            @endif
+                                        </div>
+                                        <div class="rounded-md bg-white p-2">
+                                            <div class="font-semibold text-slate-900">Beobachtete Vorschlaege</div>
+                                            @if($suggestionObservedPreview->isNotEmpty())
+                                                <div class="mt-1 max-h-32 space-y-1 overflow-y-auto pr-1">
+                                                    @foreach($suggestionObservedPreview as $observedSuggestion)
+                                                        <div class="rounded bg-slate-50 px-2 py-1 text-[11px]">
+                                                            <span class="font-semibold text-slate-800">{{ '@'.($observedSuggestion['username'] ?? '') }}</span>
+                                                            @if(! empty($observedSuggestion['skippedReason']))
+                                                                <span class="text-slate-500"> - {{ $observedSuggestion['skippedReason'] }}</span>
+                                                            @endif
+                                                        </div>
+                                                    @endforeach
+                                                </div>
+                                            @else
+                                                <div class="mt-1 text-[11px] text-slate-500">Keine beobachteten Vorschlaege gespeichert.</div>
+                                            @endif
+                                        </div>
+                                    </div>
+                                    @if($suggestionDebugEvents->isNotEmpty())
+                                        <div class="mt-2 rounded-md bg-white p-2">
+                                            <div class="font-semibold text-slate-900">Letzte Debug-Runden</div>
+                                            <div class="mt-1 space-y-1">
+                                                @foreach($suggestionDebugEvents as $debugEvent)
+                                                    <div class="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                                                        <span class="font-semibold text-slate-800">{{ $debugEvent['phase'] ?? '-' }} #{{ $debugEvent['round'] ?? '-' }}</span>
+                                                        - Items {{ number_format((int) ($debugEvent['batchItemsFound'] ?? 0), 0, ',', '.') }}
+                                                        - Heading {{ ! empty($debugEvent['headingFound']) ? 'ja' : 'nein' }}
+                                                        - Scope {{ ! empty($debugEvent['anchorScopeFound']) ? 'ja' : 'nein' }}
+                                                        - Links {{ number_format((int) ($debugEvent['fallbackAnchorsSeen'] ?? 0), 0, ',', '.') }}
+                                                        - Text {{ number_format((int) ($debugEvent['textFallbackItemsSeen'] ?? 0), 0, ',', '.') }}
+                                                        @if(! empty($debugEvent['usernames']) && is_array($debugEvent['usernames']))
+                                                            - {{ implode(', ', array_map(fn ($username) => '@'.$username, array_slice($debugEvent['usernames'], 0, 8))) }}
+                                                        @endif
+                                                    </div>
+                                                @endforeach
+                                            </div>
+                                        </div>
+                                    @endif
+                                </details>
                             </div>
                         @empty
                             <p class="text-sm text-slate-500">Noch keine Profilvorschlaege analysiert.</p>

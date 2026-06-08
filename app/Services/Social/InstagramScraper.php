@@ -664,11 +664,13 @@ class InstagramScraper
             && ! array_key_exists('observedSuggestionsPreview', $event)
             && ! array_key_exists('observedSuggestions', $event)
             && ! array_key_exists('suggestionsObserved', $event)
+            && ! array_key_exists('suggestionDebug', $event)
+            && ! array_key_exists('suggestionCollectionPhase', $event)
         ) {
             return [];
         }
 
-        return [
+        $progress = [
             'foundSuggestions' => (int) ($event['foundSuggestions'] ?? 0),
             'suggestionConnections' => $this->normalizeConnectionProgressItems(
                 $event['suggestionConnectionsPreview'] ?? $event['suggestionConnections'] ?? null,
@@ -681,6 +683,35 @@ class InstagramScraper
                 $event['observedSuggestionsPreview'] ?? $event['observedSuggestions'] ?? null,
             ),
         ];
+
+        if (array_key_exists('suggestionDebug', $event) || array_key_exists('suggestionCollectionPhase', $event)) {
+            $debug = is_array($event['suggestionDebug'] ?? null) ? $event['suggestionDebug'] : [];
+            $progress['suggestionCollectionDebug'] = [
+                'type' => ($event['stage'] ?? null) === 'suggestions-scroll-preview' ? 'scroll' : 'collection',
+                'phase' => $this->nullableTrim($event['suggestionCollectionPhase'] ?? null),
+                'round' => (int) ($event['round'] ?? 0),
+                'batchItemsFound' => (int) ($event['batchItemsFound'] ?? 0),
+                'profileLinkCandidatesSeen' => (int) ($event['profileLinkCandidatesSeen'] ?? 0),
+                'suggestionsObserved' => (int) ($event['suggestionsObserved'] ?? $event['observedSuggestionCount'] ?? 0),
+                'headingFound' => (bool) ($debug['headingFound'] ?? false),
+                'headingText' => $this->nullableTrim($debug['headingText'] ?? null),
+                'dialogOpen' => (bool) ($debug['dialogOpen'] ?? false),
+                'anchorScopeFound' => (bool) ($debug['anchorScopeFound'] ?? false),
+                'scopedAnchorsSeen' => (int) ($debug['scopedAnchorsSeen'] ?? 0),
+                'fallbackAnchorsSeen' => (int) ($debug['fallbackAnchorsSeen'] ?? 0),
+                'textFallbackItemsSeen' => (int) ($debug['textFallbackItemsSeen'] ?? 0),
+                'anchorsUsed' => (int) ($debug['anchorsUsed'] ?? 0),
+                'usernames' => array_values(array_filter(
+                    is_array($debug['usernames'] ?? null) ? array_slice($debug['usernames'], 0, 20) : [],
+                    'is_scalar',
+                )),
+                'scrollAdvanced' => (bool) ($event['scrollAdvanced'] ?? false),
+                'scrollAtEnd' => (bool) ($event['scrollAtEnd'] ?? false),
+                'liveScreenshotUrl' => $this->nullableTrim($progress['liveScreenshotUrl'] ?? null),
+            ];
+        }
+
+        return $progress;
     }
 
     private function normalizeScraperProfileProgress(array $event): array
