@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use App\Providers\RouteServiceProvider;
 use App\Livewire\Welcome;
+use App\Livewire\Packages;
 use App\Livewire\Auth\Login;
 use App\Livewire\Auth\Register;
 use Illuminate\Support\Facades\Auth;
@@ -39,6 +40,21 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 
 
+Route::get('/', Welcome::class)->name('welcome');
+Route::get('/pakete', Packages::class)->name('packages');
+Route::redirect('/products', '/pakete')->name('products');
+Route::redirect('/preise', '/pakete')->name('prices');
+Route::redirect('/prices', '/pakete');
+Route::redirect('/packages', '/pakete');
+Route::redirect('/booking', '/pakete')->name('booking');
+Route::get('/contact', Contact::class);
+Route::get('/termsandconditions', TermsAndConditions::class);
+Route::get('/imprint', Imprint::class);
+Route::get('/privacypolicy', PrivacyPolicy::class);
+Route::get('/sitemap', Sitemap::class);
+Route::get('/howto', HowTo::class);
+Route::get('/faqs', Faqs::class);
+
 
 
 
@@ -67,9 +83,9 @@ Route::middleware('guest')->group(function () {
 Route::middleware(['auth:sanctum', config('jetstream.auth_session'), 'verified'])->group(function () {
 
     // Authentifizierte Benutzer können auf die folgenden Routen zugreifen
-    Route::get('/', function () {
+    Route::get('/home', function () {
         return redirect(RouteServiceProvider::home());
-    })->name('welcome');
+    })->name('home');
 
     // Teilnehmer Routes
     Route::middleware(['role:guest'])->prefix('user')->group(function () {

@@ -4,10 +4,10 @@ namespace App\Livewire;
 
 use Livewire\Component;
 
-class Welcome extends Component
+class Packages extends Component
 {
     public function render()
     {
-        return view('livewire.welcome')->layout('layouts.app');
+        return view('livewire.packages')->layout('layouts.app');
     }
 }
