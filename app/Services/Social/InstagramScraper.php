@@ -687,6 +687,8 @@ class InstagramScraper
         if (array_key_exists('suggestionDebug', $event) || array_key_exists('suggestionCollectionPhase', $event)) {
             $debug = is_array($event['suggestionDebug'] ?? null) ? $event['suggestionDebug'] : [];
             $diagnostics = is_array($debug['diagnostics'] ?? null) ? $debug['diagnostics'] : [];
+            $seeAllResult = is_array($event['seeAllResult'] ?? null) ? $event['seeAllResult'] : [];
+            $suggestionsDialog = is_array($event['suggestionsDialog'] ?? null) ? $event['suggestionsDialog'] : [];
             $progress['suggestionCollectionDebug'] = [
                 'type' => ($event['stage'] ?? null) === 'suggestions-scroll-preview' ? 'scroll' : 'collection',
                 'phase' => $this->nullableTrim($event['suggestionCollectionPhase'] ?? null),
@@ -696,7 +698,6 @@ class InstagramScraper
                 'suggestionsObserved' => (int) ($event['suggestionsObserved'] ?? $event['observedSuggestionCount'] ?? 0),
                 'headingFound' => (bool) ($debug['headingFound'] ?? false),
                 'headingText' => $this->nullableTrim($debug['headingText'] ?? null),
-                'dialogOpen' => (bool) ($debug['dialogOpen'] ?? false),
                 'anchorScopeFound' => (bool) ($debug['anchorScopeFound'] ?? false),
                 'scopedAnchorsSeen' => (int) ($debug['scopedAnchorsSeen'] ?? 0),
                 'fallbackAnchorsSeen' => (int) ($debug['fallbackAnchorsSeen'] ?? 0),
@@ -710,6 +711,11 @@ class InstagramScraper
                 'scrollAtEnd' => (bool) ($event['scrollAtEnd'] ?? false),
                 'scrollMode' => $this->nullableTrim($event['scrollMode'] ?? null),
                 'rightNavigationVisible' => (bool) ($event['rightNavigationVisible'] ?? false),
+                'seeAllClicked' => (bool) ($event['seeAllClicked'] ?? $seeAllResult['clicked'] ?? false),
+                'seeAllReason' => $this->nullableTrim($seeAllResult['reason'] ?? null),
+                'dialogOpen' => (bool) ($suggestionsDialog['open'] ?? $debug['dialogOpen'] ?? false),
+                'dialogProfileLinkCount' => (int) ($suggestionsDialog['profileLinkCount'] ?? 0),
+                'dialogTextPreview' => $this->nullableTrim($suggestionsDialog['textPreview'] ?? null),
                 'bodyContainsSuggestionText' => (bool) ($diagnostics['bodyContainsSuggestionText'] ?? false),
                 'textSamples' => $this->normalizeSuggestionDebugSamples($diagnostics['textSamples'] ?? null, 30),
                 'anchorSamples' => $this->normalizeSuggestionDebugSamples($diagnostics['anchorSamples'] ?? null, 30),
@@ -788,6 +794,7 @@ class InstagramScraper
             'relationship-rate-limited' => 100,
             'suggestions-opening' => 10,
             'suggestions-scroll-preview' => $expected > 0 ? min(20, max(10, 10 + (int) floor(($loaded / max(1, $expected)) * 10))) : 12,
+            'suggestions-see-all-open' => 14,
             'suggestions-target-list' => 20,
             'suggestions-candidate-opening' => $expected > 0 ? min(95, max(20, 20 + (int) floor(($loaded / max(1, $expected)) * 75))) : 35,
             'suggestions-public-list-search' => $expected > 0 ? min(96, max(25, 25 + (int) floor(($loaded / max(1, $expected)) * 75))) : 45,
@@ -918,6 +925,7 @@ class InstagramScraper
         if ($phase === 'suggestions') {
             return match ($stage) {
                 'suggestions-opening' => 'Profilvorschlaege werden gesucht.',
+                'suggestions-see-all-open' => 'Profilvorschlagsliste wird direkt geoeffnet.',
                 'suggestions-target-list' => 'Profilvorschlaege gefunden; Kandidatenpruefung startet.',
                 'suggestions-candidate-opening' => 'Vorschlaege eines Kandidaten werden geoeffnet: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
                 'suggestions-public-list-search' => 'Oeffentliche Listen eines Vorschlags werden durchsucht: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),

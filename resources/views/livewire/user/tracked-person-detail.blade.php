@@ -1656,7 +1656,12 @@
                                                 <div>Heading: {{ data_get($suggestionLastDebug, 'headingFound') ? 'ja' : 'nein' }}{{ data_get($suggestionLastDebug, 'headingText') ? ' - '.data_get($suggestionLastDebug, 'headingText') : '' }}</div>
                                                 <div>Scope: {{ data_get($suggestionLastDebug, 'anchorScopeFound') ? 'ja' : 'nein' }}</div>
                                                 <div>Links/Textfallback: {{ number_format((int) data_get($suggestionLastDebug, 'fallbackAnchorsSeen', 0), 0, ',', '.') }} / {{ number_format((int) data_get($suggestionLastDebug, 'textFallbackItemsSeen', 0), 0, ',', '.') }}</div>
+                                                <div>Alle ansehen: {{ data_get($suggestionLastDebug, 'seeAllClicked') ? 'geklickt' : 'nicht geklickt' }}{{ data_get($suggestionLastDebug, 'seeAllReason') ? ' - '.data_get($suggestionLastDebug, 'seeAllReason') : '' }}</div>
+                                                <div>Dialog: {{ data_get($suggestionLastDebug, 'dialogOpen') ? 'offen' : 'nicht offen' }} / Links {{ number_format((int) data_get($suggestionLastDebug, 'dialogProfileLinkCount', 0), 0, ',', '.') }}</div>
                                                 <div>Scroll: {{ data_get($suggestionLastScroll, 'scrollMode', '-') }}{{ data_get($suggestionLastScroll, 'scrollAdvanced') ? ' weiter' : ' kein Fortschritt' }}{{ data_get($suggestionLastScroll, 'scrollAtEnd') ? ' / Ende' : '' }}</div>
+                                                @if(data_get($suggestionLastDebug, 'dialogTextPreview'))
+                                                    <div class="text-slate-500">Dialogtext: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionLastDebug, 'dialogTextPreview'), 160) }}</div>
+                                                @endif
                                                 @if(data_get($suggestionDebug, 'error'))
                                                     <div class="text-rose-700">Fehler: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionDebug, 'error'), 160) }}</div>
                                                 @endif

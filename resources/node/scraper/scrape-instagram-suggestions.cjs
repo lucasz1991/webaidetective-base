@@ -192,6 +192,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
         dismissUsernames: alreadyScannedSuggestionUsernames,
         includeSeeAll: true,
         forceSeeAll: true,
+        openSeeAllFirst: true,
         continueUntilEnd: true,
         runtimeConfig,
         maxInlineRounds: runtimeConfig.suggestionInlineMaxRounds || 36,
@@ -655,7 +656,8 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
         }
       } else {
         await scrollToProfileSuggestions(page, 5);
-        const candidateSeeAllClicked = await clickProfileSuggestionsSeeAll(page);
+        const candidateSeeAllResult = await clickProfileSuggestionsSeeAll(page);
+        const candidateSeeAllClicked = Boolean(candidateSeeAllResult?.clicked);
 
         if (candidateSeeAllClicked) {
           await sleep(1300);

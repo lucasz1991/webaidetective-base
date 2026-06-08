@@ -4152,27 +4152,132 @@ async function clickProfileSuggestionsSeeAll(page) {
       return rect.width > 0 && rect.height > 0;
     };
     const seeAllPattern = /^(alle ansehen|alle anzeigen|see all|show all)$/i;
+    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge f(?:u|\u00fc)r dich|vorschl(?:a|\u00e4)ge|suggested for you|suggestions for you|suggested|suggestions)$/i;
     const discoverMorePattern = /(?:entdecke mehr konten|weitere konten entdecken|discover more accounts|find more accounts)/i;
+    const heading = Array.from(document.querySelectorAll('span, div, h1, h2, h3, h4, p'))
+      .filter(visible)
+      .find((element) => {
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+
+        return text !== '' && text.length <= 80 && suggestionHeadingPattern.test(text);
+      }) || null;
+    const headingRect = heading?.getBoundingClientRect?.() || null;
     const elements = Array.from(document.querySelectorAll('button, a, div[role="button"], span'))
       .filter(visible);
-    const target = elements.find((element) => {
-      const text = normalizeElementText(element.innerText || element.textContent || '');
+    const candidates = elements
+      .map((element) => {
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+        const rect = element.getBoundingClientRect();
+        const afterHeading = heading
+          ? Boolean(heading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
+          : true;
 
-      return text !== ''
-        && text.length <= 60
-        && seeAllPattern.test(text)
-        && !discoverMorePattern.test(text);
-    });
+        return {
+          element,
+          text,
+          rect,
+          afterHeading,
+          score: (afterHeading ? 20 : 0)
+            + (headingRect && rect.top >= headingRect.top - 40 && rect.top <= headingRect.bottom + 180 ? 12 : 0)
+            + (rect.left > window.innerWidth * 0.45 ? 6 : 0)
+            - Math.max(0, Math.floor(Math.abs(rect.top - (headingRect?.top || rect.top)) / 120)),
+        };
+      })
+      .filter((entry) => (
+        entry.text !== ''
+        && entry.text.length <= 60
+        && seeAllPattern.test(entry.text)
+        && !discoverMorePattern.test(entry.text)
+        && entry.afterHeading
+      ))
+      .sort((left, right) => right.score - left.score);
+    const target = candidates[0]?.element || null;
 
     if (!target) {
-      return false;
+      return {
+        clicked: false,
+        reason: 'see-all-not-found',
+        headingFound: Boolean(heading),
+        candidatesSeen: candidates.length,
+      };
     }
 
     const clickable = target.closest('button, a, div[role="button"]') || target;
+
+    clickable.scrollIntoView?.({ block: 'center', inline: 'center' });
     clickable.click();
 
-    return true;
-  }).catch(() => false);
+    return {
+      clicked: true,
+      reason: 'clicked',
+      headingFound: Boolean(heading),
+      candidatesSeen: candidates.length,
+      text: normalizeElementText(clickable.innerText || clickable.textContent || ''),
+    };
+  }).catch((error) => ({
+    clicked: false,
+    reason: `error:${error?.message || error}`,
+    headingFound: false,
+    candidatesSeen: 0,
+  }));
+}
+
+async function waitForSuggestionsDialog(page, timeoutMs = 3500) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const state = await page.evaluate(() => {
+      const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+      const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge|suggested|suggestions)/i;
+      const dialog = document.querySelector('div[role="dialog"]');
+
+      if (!dialog) {
+        return {
+          open: false,
+          headingText: null,
+          textPreview: '',
+          profileLinkCount: 0,
+        };
+      }
+
+      const text = normalizeElementText(dialog.innerText || dialog.textContent || '');
+      const profileLinkCount = Array.from(dialog.querySelectorAll('a[href]'))
+        .filter((anchor) => {
+          try {
+            const parts = new URL(anchor.getAttribute('href'), window.location.origin).pathname.split('/').filter(Boolean);
+
+            return parts.length === 1;
+          } catch (error) {
+            return false;
+          }
+        }).length;
+
+      return {
+        open: true,
+        headingText: suggestionPattern.test(text) ? text.slice(0, 120) : null,
+        textPreview: text.slice(0, 300),
+        profileLinkCount,
+      };
+    }).catch(() => ({
+      open: false,
+      headingText: null,
+      textPreview: '',
+      profileLinkCount: 0,
+    }));
+
+    if (state.open) {
+      return state;
+    }
+
+    await sleep(250);
+  }
+
+  return {
+    open: false,
+    headingText: null,
+    textPreview: '',
+    profileLinkCount: 0,
+  };
 }
 
 async function collectProfileSuggestionItems(page, currentUsername, maxItems = 12) {
@@ -5240,15 +5345,66 @@ async function collectProfileSuggestionItemsDeep(page, currentUsername, maxItems
     }
   };
 
-  await scanScrollableSuggestions('inline-carousel', maxInlineRounds);
+  const shouldOpenSeeAllFirst = options.openSeeAllFirst === true || options.forceSeeAll === true;
+
+  if (!shouldOpenSeeAllFirst) {
+    await scanScrollableSuggestions('inline-carousel', maxInlineRounds);
+  }
 
   if (options.includeSeeAll !== false && (itemsByUsername.size < limit || options.forceSeeAll === true) && !rateLimited) {
-    seeAllClicked = await clickProfileSuggestionsSeeAll(page);
+    const seeAllResult = await clickProfileSuggestionsSeeAll(page);
+    seeAllClicked = Boolean(seeAllResult?.clicked);
+    const dialogState = seeAllClicked
+      ? await waitForSuggestionsDialog(page, 4500)
+      : { open: false, headingText: null, textPreview: '', profileLinkCount: 0 };
+
+    rememberDebugEvent(collectionDebugEvents, {
+      phase: 'see-all-open',
+      round: rounds + 1,
+      message: seeAllClicked
+        ? 'Vorschlagsliste per Alle ansehen geoeffnet.'
+        : `Alle ansehen konnte nicht geklickt werden (${seeAllResult?.reason || 'unbekannt'}).`,
+      batchItemsFound: 0,
+      itemsStored: itemsByUsername.size,
+      profileLinkCandidatesSeen,
+      dialogOpen: Boolean(dialogState.open),
+      headingFound: Boolean(seeAllResult?.headingFound || dialogState.headingText),
+      headingText: dialogState.headingText || null,
+      anchorScopeFound: false,
+      scopedAnchorsSeen: Number(dialogState.profileLinkCount || 0),
+      fallbackAnchorsSeen: 0,
+      textFallbackItemsSeen: 0,
+      anchorsUsed: 0,
+      usernames: [],
+      rateLimited: false,
+      rateLimitText: null,
+      seeAllResult,
+      dialogState,
+    });
+
+    progressLog('suggestions-see-all-open', {
+      relationship: 'suggestions',
+      suggestionCollectionPhase: 'see-all-open',
+      loaded: itemsByUsername.size,
+      expectedCount: limit,
+      suggestionsObserved: itemsByUsername.size,
+      seeAllClicked,
+      seeAllResult,
+      suggestionsDialog: dialogState,
+      message: seeAllClicked
+        ? `Alle ansehen wurde geoeffnet; Dialog ${dialogState.open ? 'ist sichtbar' : 'wurde nicht erkannt'}.`
+        : `Alle ansehen konnte nicht geoeffnet werden (${seeAllResult?.reason || 'unbekannt'}).`,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+    });
 
     if (seeAllClicked) {
-      await sleep(1700);
+      await sleep(900);
       await scanScrollableSuggestions('see-all-dialog', maxDialogRounds);
     }
+  }
+
+  if (shouldOpenSeeAllFirst && !seeAllClicked && !rateLimited) {
+    await scanScrollableSuggestions('inline-carousel', maxInlineRounds);
   }
 
   return {
