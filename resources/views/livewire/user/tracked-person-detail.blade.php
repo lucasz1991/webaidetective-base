@@ -1616,6 +1616,7 @@
                                 $suggestionDebugEvents = collect(data_get($suggestionDebug, 'events', []))->filter(fn ($event) => is_array($event))->take(-8)->values();
                                 $suggestionScrollEvents = collect(data_get($suggestionDebug, 'scrollEvents', []))->filter(fn ($event) => is_array($event))->take(-8)->values();
                                 $suggestionFinalUsernames = collect(data_get($suggestionDebug, 'finalUsernames', []))->filter()->take(30)->values();
+                                $suggestionSurfaceDebug = data_get($suggestionDebug, 'surfaceBeforeCollection', []);
                                 $suggestionObservedPreview = collect(data_get($suggestionScanPayload, 'observedSuggestions', []))
                                     ->filter(fn ($item) => is_array($item) && filled($item['username'] ?? null))
                                     ->take(30)
@@ -1652,6 +1653,10 @@
                                             <div class="mt-1 space-y-0.5 text-[11px] text-slate-600">
                                                 <div>Runden: {{ number_format((int) data_get($suggestionDebug, 'rounds', 0), 0, ',', '.') }}</div>
                                                 <div>Profil-Link-Kandidaten: {{ number_format((int) data_get($suggestionDebug, 'profileLinkCandidatesSeen', data_get($suggestionScanPayload, 'profileLinkCandidatesSeen', 0)), 0, ',', '.') }}</div>
+                                                @if(is_array($suggestionSurfaceDebug) && $suggestionSurfaceDebug !== [])
+                                                    <div>Oberflaeche vor Scan: {{ data_get($suggestionSurfaceDebug, 'bodyContainsSuggestionText') ? 'Vorschlagstext sichtbar' : 'kein Vorschlagstext' }}</div>
+                                                    <div>Oberflaechen-Links: {{ number_format(count(data_get($suggestionSurfaceDebug, 'profileAnchorUsernames', [])), 0, ',', '.') }} / Alle ansehen Kandidaten {{ number_format(count(data_get($suggestionSurfaceDebug, 'seeAllCandidates', [])), 0, ',', '.') }}</div>
+                                                @endif
                                                 <div>Vorschlagstext im Body: {{ data_get($suggestionLastDebug, 'bodyContainsSuggestionText') ? 'ja' : 'nein' }}</div>
                                                 <div>Heading: {{ data_get($suggestionLastDebug, 'headingFound') ? 'ja' : 'nein' }}{{ data_get($suggestionLastDebug, 'headingText') ? ' - '.data_get($suggestionLastDebug, 'headingText') : '' }}</div>
                                                 <div>Scope: {{ data_get($suggestionLastDebug, 'anchorScopeFound') ? 'ja' : 'nein' }}</div>
@@ -1774,6 +1779,23 @@
                                                         <span class="block truncate text-slate-500">{{ $sample['textPreview'] ?? '' }}</span>
                                                     </div>
                                                 @endforeach
+                                            </div>
+                                        </div>
+                                    @endif
+                                    @if(is_array($suggestionSurfaceDebug) && $suggestionSurfaceDebug !== [])
+                                        <div class="mt-2 rounded-md bg-white p-2">
+                                            <div class="font-semibold text-slate-900">Oberflaeche vor dem Vorschlags-Collector</div>
+                                            <div class="mt-1 space-y-1 text-[11px] text-slate-600">
+                                                <div>URL: {{ data_get($suggestionSurfaceDebug, 'url', '-') }}</div>
+                                                @if(data_get($suggestionSurfaceDebug, 'bodyTextPreview'))
+                                                    <div class="rounded bg-slate-50 px-2 py-1">Body: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionSurfaceDebug, 'bodyTextPreview'), 240) }}</div>
+                                                @endif
+                                                @if(collect(data_get($suggestionSurfaceDebug, 'profileAnchorUsernames', []))->isNotEmpty())
+                                                    <div>Profil-Links: {{ collect(data_get($suggestionSurfaceDebug, 'profileAnchorUsernames', []))->take(20)->map(fn ($username) => '@'.$username)->implode(', ') }}</div>
+                                                @endif
+                                                @if(collect(data_get($suggestionSurfaceDebug, 'seeAllCandidates', []))->isNotEmpty())
+                                                    <div>Alle-ansehen-Kandidaten: {{ collect(data_get($suggestionSurfaceDebug, 'seeAllCandidates', []))->take(8)->map(fn ($item) => ($item['text'] ?? '-').' @ '.($item['left'] ?? '?').'/'.($item['top'] ?? '?'))->implode(' | ') }}</div>
+                                                @endif
                                             </div>
                                         </div>
                                     @endif

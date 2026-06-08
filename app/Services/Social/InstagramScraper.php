@@ -689,6 +689,7 @@ class InstagramScraper
             $diagnostics = is_array($debug['diagnostics'] ?? null) ? $debug['diagnostics'] : [];
             $seeAllResult = is_array($event['seeAllResult'] ?? null) ? $event['seeAllResult'] : [];
             $suggestionsDialog = is_array($event['suggestionsDialog'] ?? null) ? $event['suggestionsDialog'] : [];
+            $surfaceDebug = is_array($event['suggestionsSurfaceDebug'] ?? null) ? $event['suggestionsSurfaceDebug'] : [];
             $progress['suggestionCollectionDebug'] = [
                 'type' => ($event['stage'] ?? null) === 'suggestions-scroll-preview' ? 'scroll' : 'collection',
                 'phase' => $this->nullableTrim($event['suggestionCollectionPhase'] ?? null),
@@ -720,6 +721,20 @@ class InstagramScraper
                 'textSamples' => $this->normalizeSuggestionDebugSamples($diagnostics['textSamples'] ?? null, 30),
                 'anchorSamples' => $this->normalizeSuggestionDebugSamples($diagnostics['anchorSamples'] ?? null, 30),
                 'scopeSamples' => $this->normalizeSuggestionDebugSamples($diagnostics['scopeSamples'] ?? null, 10),
+                'surfaceBeforeCollection' => $surfaceDebug ? [
+                    'url' => $this->nullableTrim($surfaceDebug['url'] ?? null),
+                    'title' => $this->nullableTrim($surfaceDebug['title'] ?? null),
+                    'bodyContainsSuggestionText' => (bool) ($surfaceDebug['bodyContainsSuggestionText'] ?? false),
+                    'bodyTextPreview' => $this->nullableTrim($surfaceDebug['bodyTextPreview'] ?? null),
+                    'profileAnchorUsernames' => array_values(array_filter(
+                        is_array($surfaceDebug['profileAnchorUsernames'] ?? null) ? array_slice($surfaceDebug['profileAnchorUsernames'], 0, 60) : [],
+                        'is_scalar',
+                    )),
+                    'seeAllCandidates' => $this->normalizeSuggestionDebugSamples($surfaceDebug['seeAllCandidates'] ?? null, 20),
+                    'visibleTextSamples' => $this->normalizeSuggestionDebugSamples($surfaceDebug['visibleTextSamples'] ?? null, 40),
+                    'visibleAnchors' => $this->normalizeSuggestionDebugSamples($surfaceDebug['visibleAnchors'] ?? null, 40),
+                    'scrollableContainers' => $this->normalizeSuggestionDebugSamples($surfaceDebug['scrollableContainers'] ?? null, 12),
+                ] : [],
                 'liveScreenshotUrl' => $this->nullableTrim($progress['liveScreenshotUrl'] ?? null),
             ];
         }

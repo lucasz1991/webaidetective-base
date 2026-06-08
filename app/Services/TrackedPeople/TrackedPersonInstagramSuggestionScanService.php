@@ -127,6 +127,9 @@ class TrackedPersonInstagramSuggestionScanService
                         if (is_scalar($state['liveScreenshotUrl'] ?? null)) {
                             $debugEvent['liveScreenshotUrl'] = (string) $state['liveScreenshotUrl'];
                         }
+                        if (is_array($debugEvent['surfaceBeforeCollection'] ?? null)) {
+                            $liveSuggestionDebug['surfaceBeforeCollection'] = $debugEvent['surfaceBeforeCollection'];
+                        }
                         $targetKey = ($debugEvent['type'] ?? null) === 'scroll' ? 'scrollEvents' : 'events';
                         $liveSuggestionDebug[$targetKey][] = $debugEvent;
                         $liveSuggestionDebug[$targetKey] = array_slice($liveSuggestionDebug[$targetKey], -80);

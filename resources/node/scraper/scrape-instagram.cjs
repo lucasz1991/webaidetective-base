@@ -3896,6 +3896,7 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
     collectProfileInfo,
     collectProfileSuggestionItemsDeep,
     collectSuggestionCandidatePublicListConnection,
+    diagnoseProfileSuggestionsSurface,
     detectInstagramHttp429Page,
     dismissVisibleSuggestion,
     hasFiniteNumericValue,
@@ -4141,6 +4142,178 @@ async function scrollToProfileSuggestions(page, maxRounds = 5) {
     suggestionsVisible: false,
     atBottom: false,
   };
+}
+
+async function diagnoseProfileSuggestionsSurface(page, currentUsername) {
+  const normalizedCurrentUsername = normalizeInstagramUsername(currentUsername);
+
+  return page.evaluate(({ currentUsername }) => {
+    const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+    const normalizeUsername = (value = '') => String(value || '')
+      .replace(/^@/, '')
+      .replace(/[^a-z0-9._]/gi, '')
+      .toLowerCase();
+    const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge|suggested|suggestions)/i;
+    const seeAllPattern = /^(alle ansehen|alle anzeigen|see all|show all)$/i;
+    const reservedPaths = new Set(['accounts', 'direct', 'explore', 'p', 'reel', 'reels', 'stories', 'tv']);
+    const isVisible = (element) => {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.visibility !== 'hidden'
+        && style.display !== 'none'
+        && rect.bottom >= -40
+        && rect.top <= window.innerHeight + 240;
+    };
+    const profileUsernameFromHref = (href) => {
+      try {
+        const parts = new URL(href, window.location.origin).pathname.split('/').filter(Boolean);
+
+        if (parts.length !== 1 || reservedPaths.has(parts[0])) {
+          return '';
+        }
+
+        const username = normalizeUsername(parts[0]);
+
+        return username && username !== currentUsername ? username : '';
+      } catch (error) {
+        return '';
+      }
+    };
+    const bodyText = normalizeElementText(document.body?.innerText || document.body?.textContent || '');
+    const visibleTextSamples = [];
+    const seenTexts = new Set();
+
+    for (const element of Array.from(document.querySelectorAll('span, div, a, button, h1, h2, h3, p'))) {
+      if (!isVisible(element)) {
+        continue;
+      }
+
+      const text = normalizeElementText(element.innerText || element.textContent || '');
+
+      if (text === '' || text.length > 120 || seenTexts.has(text.toLowerCase())) {
+        continue;
+      }
+
+      const rect = element.getBoundingClientRect();
+      seenTexts.add(text.toLowerCase());
+      visibleTextSamples.push({
+        text,
+        tag: element.tagName?.toLowerCase?.() || '',
+        role: element.getAttribute?.('role') || null,
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        looksLikeUsername: /^[a-z0-9._]{3,30}$/.test(normalizeUsername(text)),
+        normalizedUsername: normalizeUsername(text),
+      });
+
+      if (visibleTextSamples.length >= 60) {
+        break;
+      }
+    }
+
+    const visibleAnchors = Array.from(document.querySelectorAll('a[href]'))
+      .filter(isVisible)
+      .slice(0, 80)
+      .map((anchor) => {
+        const rect = anchor.getBoundingClientRect();
+        const href = anchor.getAttribute('href') || '';
+
+        return {
+          href,
+          text: normalizeElementText(anchor.innerText || anchor.textContent || ''),
+          username: profileUsernameFromHref(href),
+          top: Math.round(rect.top),
+          left: Math.round(rect.left),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        };
+      });
+
+    const seeAllCandidates = Array.from(document.querySelectorAll('button, a, div[role="button"], span'))
+      .filter(isVisible)
+      .map((element) => {
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+        const rect = element.getBoundingClientRect();
+
+        return {
+          text,
+          matches: seeAllPattern.test(text),
+          top: Math.round(rect.top),
+          left: Math.round(rect.left),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        };
+      })
+      .filter((entry) => entry.matches || /alle|see|show|vorschl|suggest/i.test(entry.text))
+      .slice(0, 30);
+
+    const scrollableContainers = Array.from(document.querySelectorAll('div, section, ul'))
+      .filter(isVisible)
+      .map((element) => {
+        const rect = element.getBoundingClientRect();
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+        const anchorCount = Array.from(element.querySelectorAll('a[href]'))
+          .filter((anchor) => profileUsernameFromHref(anchor.getAttribute('href') || ''))
+          .length;
+
+        return {
+          textPreview: text.slice(0, 180),
+          anchorCount,
+          top: Math.round(rect.top),
+          left: Math.round(rect.left),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+          scrollWidth: Math.round(element.scrollWidth || 0),
+          clientWidth: Math.round(element.clientWidth || 0),
+          scrollHeight: Math.round(element.scrollHeight || 0),
+          clientHeight: Math.round(element.clientHeight || 0),
+          horizontalOverflow: element.scrollWidth > element.clientWidth + 24,
+          verticalOverflow: element.scrollHeight > element.clientHeight + 24,
+        };
+      })
+      .filter((entry) => (
+        entry.anchorCount > 0
+        || entry.horizontalOverflow
+        || suggestionPattern.test(entry.textPreview)
+      ))
+      .slice(0, 20);
+
+    return {
+      url: String(window.location.href || ''),
+      title: String(document.title || ''),
+      scrollY: Math.round(window.scrollY || 0),
+      viewport: {
+        width: Math.round(window.innerWidth || 0),
+        height: Math.round(window.innerHeight || 0),
+      },
+      bodyContainsSuggestionText: suggestionPattern.test(bodyText),
+      bodyTextPreview: bodyText.slice(0, 600),
+      visibleTextSamples,
+      visibleAnchors,
+      profileAnchorUsernames: visibleAnchors.map((anchor) => anchor.username).filter(Boolean).slice(0, 60),
+      seeAllCandidates,
+      scrollableContainers,
+    };
+  }, { currentUsername: normalizedCurrentUsername }).catch((error) => ({
+    error: String(error?.message || error || 'surface-diagnostics-error'),
+    url: '',
+    title: '',
+    bodyContainsSuggestionText: false,
+    visibleTextSamples: [],
+    visibleAnchors: [],
+    profileAnchorUsernames: [],
+    seeAllCandidates: [],
+    scrollableContainers: [],
+  }));
 }
 
 async function clickProfileSuggestionsSeeAll(page) {

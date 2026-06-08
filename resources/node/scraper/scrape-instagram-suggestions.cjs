@@ -51,6 +51,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     collectProfileInfo,
     collectProfileSuggestionItemsDeep,
     collectSuggestionCandidatePublicListConnection,
+    diagnoseProfileSuggestionsSurface,
     detectInstagramHttp429Page,
     dismissVisibleSuggestion,
     hasFiniteNumericValue,
@@ -180,9 +181,41 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
   });
 
   let targetSuggestions = null;
+  let targetSurfaceDebug = null;
 
   while (!targetSuggestions) {
     await scrollToProfileSuggestions(page, 6);
+    targetSurfaceDebug = diagnoseProfileSuggestionsSurface
+      ? await diagnoseProfileSuggestionsSurface(page, targetUsername)
+      : null;
+
+    progressLog('suggestions-surface-debug', {
+      relationship: 'suggestions',
+      suggestionCollectionPhase: 'surface-before-collection',
+      loaded: 0,
+      expectedCount: maxTargetSuggestions,
+      suggestionDebug: {
+        headingFound: Boolean(targetSurfaceDebug?.bodyContainsSuggestionText),
+        headingText: targetSurfaceDebug?.bodyContainsSuggestionText ? 'surface-text-match' : null,
+        diagnostics: {
+          bodyContainsSuggestionText: Boolean(targetSurfaceDebug?.bodyContainsSuggestionText),
+          textSamples: Array.isArray(targetSurfaceDebug?.visibleTextSamples)
+            ? targetSurfaceDebug.visibleTextSamples.slice(0, 40)
+            : [],
+          anchorSamples: Array.isArray(targetSurfaceDebug?.visibleAnchors)
+            ? targetSurfaceDebug.visibleAnchors.slice(0, 40)
+            : [],
+          scopeSamples: Array.isArray(targetSurfaceDebug?.scrollableContainers)
+            ? targetSurfaceDebug.scrollableContainers.slice(0, 12)
+            : [],
+        },
+      },
+      suggestionsSurfaceDebug: targetSurfaceDebug,
+      message: targetSurfaceDebug?.bodyContainsSuggestionText
+        ? 'Oberflaeche vor Vorschlags-Scan: Vorschlagstext sichtbar.'
+        : 'Oberflaeche vor Vorschlags-Scan: kein Vorschlagstext im DOM erkannt.',
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+    });
 
     targetSuggestions = await collectProfileSuggestionItemsDeep(
       page,
@@ -953,7 +986,10 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     observedCount: observedSuggestions.length,
     collectionRounds: targetSuggestions.rounds || 0,
     profileLinkCandidatesSeen: targetSuggestions.profileLinkCandidatesSeen || 0,
-    targetCollectionDebug: targetSuggestions.collectionDebug || null,
+    targetCollectionDebug: {
+      surfaceBeforeCollection: targetSurfaceDebug,
+      ...(targetSuggestions.collectionDebug || {}),
+    },
     dismissedKnownCount: targetSuggestions.dismissedKnownCount || 0,
     seenKnownCount: targetSuggestions.seenKnownCount || 0,
     observedSuggestions,
