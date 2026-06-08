@@ -134,7 +134,7 @@ class TrackedPersonInstagramProfileListScanService
             $listKey = $relationship === 'followers' ? 'followers_list' : 'following_list';
             $relationshipList = is_array($extracted[$listKey] ?? null) ? $extracted[$listKey] : [];
 
-            $profile = $this->profileRelationshipStore->ensureProfile($username, [
+            $profileAttributes = [
                 'display_name' => $extracted['full_name'] ?? $profile->display_name,
                 'full_name' => $extracted['full_name'] ?? $profile->full_name,
                 'biography' => $extracted['biography'] ?? $profile->biography,
@@ -152,7 +152,13 @@ class TrackedPersonInstagramProfileListScanService
                     'profile_visibility' => $extracted['profile_visibility'] ?? null,
                     'visible_counts_complete' => (bool) ($extracted['visible_counts_complete'] ?? false),
                 ],
-            ]) ?: $profile;
+            ];
+
+            if (! $this->payloadCanUpdateProfileVisibility($payload, $relationshipList)) {
+                unset($profileAttributes['is_private'], $profileAttributes['profile_visibility']);
+            }
+
+            $profile = $this->profileRelationshipStore->ensureProfile($username, $profileAttributes) ?: $profile;
 
             $scan = $this->profileRelationshipStore->storeDirectRelationshipListScan(
                 $profile,
@@ -211,6 +217,24 @@ class TrackedPersonInstagramProfileListScanService
         if ($progress) {
             $progress($payload);
         }
+    }
+
+    private function payloadCanUpdateProfileVisibility(array $payload, array $relationshipList): bool
+    {
+        $statusLevel = Str::lower(trim((string) ($payload['statusLevel'] ?? '')));
+
+        if ($statusLevel !== 'success') {
+            return false;
+        }
+
+        if (array_key_exists('ok', $payload) && ! (bool) $payload['ok']) {
+            return false;
+        }
+
+        return ! (bool) ($payload['gracefullyStopped'] ?? false)
+            && ! (bool) ($relationshipList['rateLimited'] ?? false)
+            && ! (bool) ($relationshipList['gracefullyStopped'] ?? false)
+            && ! (bool) ($relationshipList['listTemporarilyUnavailable'] ?? false);
     }
 
     private function withActiveScanControl(array $runtimeConfigOverrides = []): array

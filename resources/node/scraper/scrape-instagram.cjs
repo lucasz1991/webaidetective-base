@@ -4062,6 +4062,51 @@ async function scrollToProfileSuggestions(page, maxRounds = 5) {
 
   for (let round = 0; round < maxRounds; round += 1) {
     const state = await page.evaluate(() => {
+      const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
+      const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge f(?:u|\u00fc)r dich|vorschl(?:a|\u00e4)ge|suggested for you|suggestions for you|suggested|suggestions)$/i;
+      const isVisible = (element) => {
+        if (!element) {
+          return false;
+        }
+
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return rect.width > 0
+          && rect.height > 0
+          && style.visibility !== 'hidden'
+          && style.display !== 'none'
+          && rect.bottom >= 0
+          && rect.top <= window.innerHeight;
+      };
+      const heading = Array.from(document.querySelectorAll('span, div, h1, h2, h3, h4, p'))
+        .find((element) => {
+          if (!isVisible(element)) {
+            return false;
+          }
+
+          const ownText = normalizeElementText(
+            Array.from(element.childNodes || [])
+              .filter((node) => node.nodeType === Node.TEXT_NODE)
+              .map((node) => node.textContent || '')
+              .join(' '),
+          );
+          const fullText = normalizeElementText(element.innerText || element.textContent || '');
+          const text = ownText || fullText;
+
+          return text !== '' && text.length <= 80 && suggestionHeadingPattern.test(text);
+        }) || null;
+
+      if (heading) {
+        return {
+          before: window.scrollY,
+          after: window.scrollY,
+          atBottom: window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 12,
+          suggestionsVisible: true,
+          alreadyVisible: true,
+        };
+      }
+
       const before = window.scrollY;
       window.scrollBy(0, Math.max(700, window.innerHeight * 0.9));
       const after = window.scrollY;
@@ -4073,12 +4118,14 @@ async function scrollToProfileSuggestions(page, maxRounds = 5) {
         after,
         atBottom: after + window.innerHeight >= document.documentElement.scrollHeight - 12,
         suggestionsVisible,
+        alreadyVisible: false,
       };
     }).catch(() => ({
       before: 0,
       after: 0,
       atBottom: true,
       suggestionsVisible: false,
+      alreadyVisible: false,
     }));
 
     await sleep(650);

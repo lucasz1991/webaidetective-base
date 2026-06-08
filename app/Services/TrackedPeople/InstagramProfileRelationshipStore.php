@@ -99,7 +99,7 @@ class InstagramProfileRelationshipStore
             return null;
         }
 
-        $profile = $this->ensureProfile($snapshot->instagram_username ?: $trackedPerson->instagram_username, [
+        $profileAttributes = [
             'display_name' => $snapshot->full_name ?: $trackedPerson->display_name,
             'full_name' => $snapshot->full_name,
             'biography' => $snapshot->biography,
@@ -124,7 +124,13 @@ class InstagramProfileRelationshipStore
                     'status_message' => $payload['statusMessage'] ?? null,
                 ],
             ],
-        ]);
+        ];
+
+        if (! $this->snapshotScanCanUpdateProfileVisibility($snapshot, $payload, $attemptInfo)) {
+            unset($profileAttributes['is_private'], $profileAttributes['profile_visibility']);
+        }
+
+        $profile = $this->ensureProfile($snapshot->instagram_username ?: $trackedPerson->instagram_username, $profileAttributes);
 
         if (! $profile) {
             return null;
@@ -746,6 +752,45 @@ class InstagramProfileRelationshipStore
         ];
 
         return array_filter($payload, static fn ($value): bool => $value !== null);
+    }
+
+    private function snapshotScanCanUpdateProfileVisibility(
+        TrackedPersonInstagramSnapshot $snapshot,
+        array $payload = [],
+        array $attemptInfo = [],
+    ): bool {
+        $statusLevel = Str::lower(trim((string) ($snapshot->status_level ?: ($payload['statusLevel'] ?? ''))));
+
+        if ($statusLevel !== 'success') {
+            return false;
+        }
+
+        if (array_key_exists('ok', $payload) && ! (bool) $payload['ok']) {
+            return false;
+        }
+
+        if ((bool) ($payload['gracefullyStopped'] ?? false) || (bool) ($attemptInfo['gracefully_stopped'] ?? false)) {
+            return false;
+        }
+
+        foreach (($attemptInfo['phases'] ?? []) as $phase) {
+            if (! is_array($phase)) {
+                continue;
+            }
+
+            $phaseStatus = Str::lower(trim((string) ($phase['statusLevel'] ?? 'success')));
+
+            if (
+                $phaseStatus !== 'success'
+                || (bool) ($phase['rateLimited'] ?? false)
+                || (bool) ($phase['gracefullyStopped'] ?? false)
+                || (bool) ($phase['listTemporarilyUnavailable'] ?? false)
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function relationshipListScanPayload(array $relationshipList): array

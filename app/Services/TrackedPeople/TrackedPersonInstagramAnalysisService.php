@@ -128,6 +128,13 @@ class TrackedPersonInstagramAnalysisService
             $previousSnapshot,
             $preservedProfileFields,
         );
+        $extracted = $this->preserveUnreliableProfileVisibility(
+            $extracted,
+            $previousSnapshot,
+            $payload,
+            $attemptInfo,
+            $preservedProfileFields,
+        );
 
         if ($preservedProfileFields !== []) {
             $attemptInfo['preserved_profile_fields'] = $preservedProfileFields;
@@ -345,6 +352,13 @@ class TrackedPersonInstagramAnalysisService
         $extracted = $this->preserveMissingProfileValues(
             $extracted,
             $previousSnapshot,
+            $preservedProfileFields,
+        );
+        $extracted = $this->preserveUnreliableProfileVisibility(
+            $extracted,
+            $previousSnapshot,
+            $payload,
+            $attemptInfo,
             $preservedProfileFields,
         );
 
@@ -1153,6 +1167,71 @@ class TrackedPersonInstagramAnalysisService
         }
 
         return $extracted;
+    }
+
+    private function preserveUnreliableProfileVisibility(
+        array $extracted,
+        ?TrackedPersonInstagramSnapshot $previousSnapshot,
+        array $payload,
+        array $attemptInfo,
+        array &$preservedFields,
+    ): array {
+        if (! $previousSnapshot || $this->scanCanUpdateProfileVisibility($payload, $attemptInfo)) {
+            return $extracted;
+        }
+
+        $previousVisibility = $this->snapshotProfileVisibility($previousSnapshot);
+
+        if (! in_array($previousVisibility, ['public', 'private'], true)) {
+            return $extracted;
+        }
+
+        $extracted['profile_visibility'] = $previousVisibility;
+        $extracted['is_private'] = $previousVisibility === 'private';
+
+        foreach (['profile_visibility', 'is_private'] as $field) {
+            if (! in_array($field, $preservedFields, true)) {
+                $preservedFields[] = $field;
+            }
+        }
+
+        return $extracted;
+    }
+
+    private function scanCanUpdateProfileVisibility(array $payload, array $attemptInfo): bool
+    {
+        $statusLevel = Str::lower(trim((string) ($payload['statusLevel'] ?? '')));
+
+        if ($statusLevel !== 'success') {
+            return false;
+        }
+
+        if (array_key_exists('ok', $payload) && ! (bool) $payload['ok']) {
+            return false;
+        }
+
+        if ((bool) ($payload['gracefullyStopped'] ?? false) || (bool) ($attemptInfo['gracefully_stopped'] ?? false)) {
+            return false;
+        }
+
+        foreach (($attemptInfo['phases'] ?? []) as $phase) {
+            if (! is_array($phase)) {
+                continue;
+            }
+
+            $phaseStatus = Str::lower(trim((string) ($phase['statusLevel'] ?? 'success')));
+
+            if (
+                $phaseStatus !== 'success'
+                || (bool) ($phase['rateLimited'] ?? false)
+                || (bool) ($phase['gracefullyStopped'] ?? false)
+                || (bool) ($phase['listTemporarilyUnavailable'] ?? false)
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function profileComparisonFields(): array
