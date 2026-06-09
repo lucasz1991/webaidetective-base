@@ -4,326 +4,6 @@
             <div x-text="t.message" :class="t.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'" class="rounded-lg px-4 py-2 shadow"></div>
         </template>
     </div>
-    @php
-        $detailStatusClass = match ($detailStatusLevel ?? 'neutral') {
-            'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
-            'partial' => 'border-amber-200 bg-amber-50 text-amber-950',
-            'error' => 'border-rose-200 bg-rose-50 text-rose-900',
-            default => 'border-slate-200 bg-slate-50 text-slate-800',
-        };
-        $instagramStatusLevel = $trackedPerson->last_instagram_status_level ?: 'neutral';
-        $instagramStatusLabel = match ($instagramStatusLevel) {
-            'success' => 'Aktuell',
-            'partial' => 'Teilweise',
-            'error' => 'Fehler',
-            default => 'Offen',
-        };
-        $instagramStatusBadgeClass = match ($instagramStatusLevel) {
-            'success' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-            'partial' => 'bg-amber-50 text-amber-800 ring-amber-200',
-            'error' => 'bg-rose-50 text-rose-700 ring-rose-200',
-            default => 'bg-slate-100 text-slate-600 ring-slate-200',
-        };
-        $isStandaloneDetailPage = ! ($compact ?? false);
-        $latestSnapshot = $trackedPerson->latestInstagramSnapshot;
-        $latestCountSources = data_get($latestSnapshot?->raw_payload, 'extractedProfile.countSources', []);
-        $latestCountWarnings = data_get($latestSnapshot?->raw_payload, 'extractedProfile.countWarnings', []);
-        $latestDebugLogPath = data_get($latestSnapshot?->raw_payload, 'debugLogPath');
-        $latestCookieDiagnostics = data_get($latestSnapshot?->raw_payload, 'cookieDiagnostics', []);
-        $latestLoginDiagnostics = data_get($latestSnapshot?->raw_payload, 'loginDiagnostics', []);
-        $latestFollowersList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followersList', []);
-        $latestFollowingList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followingList', []);
-        $relationshipSearchText = function ($item) {
-            return \Illuminate\Support\Str::lower(trim(data_get($item, 'username', '').' '.data_get($item, 'displayName', '')));
-        };
-        $relationshipProfileImages = collect($relationshipProfileImages ?? []);
-        $relationshipProfileImageUrl = function ($item) use ($relationshipProfileImages) {
-            $username = \Illuminate\Support\Str::lower(ltrim(trim((string) data_get($item, 'username', '')), '@'));
-
-            return $username !== '' ? $relationshipProfileImages->get($username) : null;
-        };
-        $relationshipAvatar = function ($item, string $tone = 'slate') use ($relationshipProfileImageUrl) {
-            $imageUrl = $relationshipProfileImageUrl($item);
-            $username = ltrim(trim((string) data_get($item, 'username', '')), '@');
-            $initial = \Illuminate\Support\Str::upper(\Illuminate\Support\Str::substr($username !== '' ? $username : '?', 0, 1));
-            $toneClass = match ($tone) {
-                'emerald' => 'bg-emerald-50 text-emerald-700',
-                'rose' => 'bg-rose-50 text-rose-700',
-                default => 'bg-slate-100 text-slate-600',
-            };
-
-            if (filled($imageUrl)) {
-                return new \Illuminate\Support\HtmlString(
-                    '<img src="'.e($imageUrl).'" alt="'.e($username !== '' ? '@'.$username : 'Instagram-Profilbild').'" loading="lazy" referrerpolicy="no-referrer" class="h-11 w-11 shrink-0 rounded-full border border-slate-200 object-cover '.$toneClass.'">',
-                );
-            }
-
-            return new \Illuminate\Support\HtmlString(
-                '<div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-slate-200 text-xs font-bold '.$toneClass.'">'.e($initial).'</div>',
-            );
-        };
-        $relationshipVisibility = function ($item): string {
-            $visibility = \Illuminate\Support\Str::lower((string) data_get($item, 'profileVisibility', ''));
-
-            if (in_array($visibility, ['public', 'private'], true)) {
-                return $visibility;
-            }
-
-            if (data_get($item, 'isPrivate') === true) {
-                return 'private';
-            }
-
-            if (data_get($item, 'isPrivate') === false) {
-                return 'public';
-            }
-
-            return 'unknown';
-        };
-        $relationshipVisibilityBadge = function ($item) use ($relationshipVisibility) {
-            $visibility = $relationshipVisibility($item);
-            $label = match ($visibility) {
-                'public' => 'Oeffentlich',
-                'private' => 'Privat',
-                default => 'Unbekannt',
-            };
-            $class = match ($visibility) {
-                'public' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-                'private' => 'bg-slate-100 text-slate-700 ring-slate-200',
-                default => 'bg-amber-50 text-amber-800 ring-amber-200',
-            };
-
-            return new \Illuminate\Support\HtmlString(
-                '<span class="mt-1 inline-flex rounded-lg px-2 py-0.5 text-[11px] font-semibold ring-1 '.$class.'">'.$label.'</span>',
-            );
-        };
-        $relationshipTimestamp = function ($item, array $keys = ['firstSeenAt', 'lastSeenAt', 'removedAt']) {
-            foreach ($keys as $key) {
-                $value = data_get($item, $key);
-
-                if (! filled($value)) {
-                    continue;
-                }
-
-                try {
-                    return \Illuminate\Support\Carbon::parse($value)->timestamp;
-                } catch (\Throwable) {
-                    continue;
-                }
-            }
-
-            return 0;
-        };
-        $sortRelationshipItemsNewest = function (\Illuminate\Support\Collection $items, array $keys = ['firstSeenAt', 'lastSeenAt', 'removedAt']) use ($relationshipTimestamp) {
-            return $items
-                ->values()
-                ->sortByDesc(fn ($item, $index) => sprintf('%020d.%06d', $relationshipTimestamp($item, $keys), 999999 - $index))
-                ->values();
-        };
-        $sortRelationshipActiveItems = function (\Illuminate\Support\Collection $items, \Illuminate\Support\Collection $addedItems) use ($relationshipTimestamp) {
-            $addedUsernames = $addedItems
-                ->pluck('username')
-                ->filter()
-                ->map(fn ($username) => \Illuminate\Support\Str::lower((string) $username))
-                ->flip();
-
-            return $items
-                ->values()
-                ->sortByDesc(function ($item, $index) use ($addedUsernames, $relationshipTimestamp) {
-                    $username = \Illuminate\Support\Str::lower((string) data_get($item, 'username', ''));
-                    $isAdded = $addedUsernames->has($username) ? 1 : 0;
-                    $timestamp = $relationshipTimestamp($item, ['firstSeenAt', 'lastSeenAt', 'removedAt']);
-
-                    return sprintf('%d.%020d.%06d', $isAdded, $timestamp, 999999 - $index);
-                })
-                ->values();
-        };
-        $loadRelationshipItems = function (array $relationshipList, string $key = 'items') {
-            $items = collect(data_get($relationshipList, $key, []));
-            $itemsPath = data_get($relationshipList, 'itemsPath');
-
-            if ($items->isNotEmpty() || ! is_string($itemsPath) || $itemsPath === '') {
-                return $items;
-            }
-
-            try {
-                if (! \Illuminate\Support\Facades\Storage::disk('public')->exists($itemsPath)) {
-                    return collect();
-                }
-
-                $decoded = json_decode(
-                    \Illuminate\Support\Facades\Storage::disk('public')->get($itemsPath),
-                    true,
-                );
-
-                return collect(data_get($decoded, $key, []));
-            } catch (\Throwable) {
-                return collect();
-            }
-        };
-        $latestFollowerAddedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowersList, 'addedItems'));
-        $latestFollowingAddedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowingList, 'addedItems'));
-        $latestFollowerItems = $sortRelationshipActiveItems($loadRelationshipItems($latestFollowersList), $latestFollowerAddedItems);
-        $latestFollowingItems = $sortRelationshipActiveItems($loadRelationshipItems($latestFollowingList), $latestFollowingAddedItems);
-        $latestFollowerScanRemovedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowersList, 'removedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $latestFollowingScanRemovedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowingList, 'removedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $latestFollowerRemovedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowersList, 'currentlyRemovedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $latestFollowingRemovedItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowingList, 'currentlyRemovedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $latestFollowerRemovedHistoryItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowersList, 'removedHistoryItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $latestFollowingRemovedHistoryItems = $sortRelationshipItemsNewest($loadRelationshipItems($latestFollowingList, 'removedHistoryItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $relationshipStats = function (array $relationshipList, \Illuminate\Support\Collection $items) {
-            return [
-                'activeCount' => (int) data_get($relationshipList, 'activeCount', data_get($relationshipList, 'count', $items->count())),
-                'observedCount' => (int) data_get($relationshipList, 'observedCount', $items->count()),
-                'allKnownCount' => (int) data_get($relationshipList, 'allKnownCount', data_get($relationshipList, 'knownCount', $items->count())),
-                'currentlyRemovedCount' => (int) data_get($relationshipList, 'currentlyRemovedCount', 0),
-                'removedHistoryCount' => (int) data_get($relationshipList, 'removedHistoryCount', 0),
-            ];
-        };
-        $latestFollowerStats = $relationshipStats($latestFollowersList, $latestFollowerItems);
-        $latestFollowingStats = $relationshipStats($latestFollowingList, $latestFollowingItems);
-        $latestFollowerListAvailable = $latestFollowerItems->isNotEmpty()
-            || $latestFollowerAddedItems->isNotEmpty()
-            || $latestFollowerScanRemovedItems->isNotEmpty()
-            || $latestFollowerRemovedItems->isNotEmpty()
-            || $latestFollowerRemovedHistoryItems->isNotEmpty();
-        $latestFollowingListAvailable = $latestFollowingItems->isNotEmpty()
-            || $latestFollowingAddedItems->isNotEmpty()
-            || $latestFollowingScanRemovedItems->isNotEmpty()
-            || $latestFollowingRemovedItems->isNotEmpty()
-            || $latestFollowingRemovedHistoryItems->isNotEmpty();
-        $inferredInstagramFollowers = $trackedPerson->instagramInferredConnections
-            ->where('relationship_type', 'follows_target')
-            ->unique('candidate_username')
-            ->values();
-        $inferredInstagramFollowing = $trackedPerson->instagramInferredConnections
-            ->where('relationship_type', 'followed_by_target')
-            ->unique('candidate_username')
-            ->values();
-        $suggestionInstagramConnections = $trackedPerson->instagramInferredConnections
-            ->where('relationship_type', 'suggestion_connection')
-            ->unique('candidate_username')
-            ->values();
-        $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
-        $latestProfileVisibility = data_get($latestSnapshot?->raw_payload, 'extractedProfile.profileVisibility');
-        $latestProfileVisibilityLabel = match ($latestProfileVisibility) {
-            'public' => 'Oeffentlich',
-            'private' => 'Privat',
-            default => 'Unbekannt',
-        };
-        $latestProfileVisibilityBadgeClass = match ($latestProfileVisibility) {
-            'public' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-            'private' => 'bg-slate-100 text-slate-700 ring-slate-200',
-            default => 'bg-amber-50 text-amber-800 ring-amber-200',
-        };
-        $latestProfileIsPublic = $latestProfileVisibility === 'public';
-        $latestProfileIsPrivate = $latestProfileVisibility === 'private';
-        $profileImageFrameClass = match ($latestProfileVisibility) {
-            'public' => 'border-emerald-400 ring-4 ring-emerald-100',
-            'private' => 'border-slate-300 ring-4 ring-slate-100',
-            default => 'border-amber-300 ring-4 ring-amber-100',
-        };
-        $profileStatusDotClass = match ($latestProfileVisibility) {
-            'public' => 'bg-emerald-500',
-            'private' => 'bg-slate-400',
-            default => 'bg-amber-400',
-        };
-        $countSourceLabels = [
-            'body_text_preview' => 'sichtbarer Profiltext',
-            'profile_dom' => 'sichtbarer Profil-DOM',
-            'description_meta' => 'Meta-Beschreibung',
-            'html_document' => 'HTML-Fallback',
-            'html_profile_data' => 'Profil-Daten im HTML',
-        ];
-        $resolveCountSourceLabel = function ($source) use ($countSourceLabels) {
-            return $source ? ($countSourceLabels[$source] ?? $source) : 'keine sichtbaren Werte';
-        };
-        $screenshotUrl = fn (string $path) => \Illuminate\Support\Facades\Storage::disk('public')->url($path);
-        $connectionScanScreenshots = function (array $payload) use ($screenshotUrl) {
-            $screenshots = collect();
-            $mainScreenshotPath = data_get($payload, 'screenshotPath');
-
-            if (is_string($mainScreenshotPath) && $mainScreenshotPath !== '') {
-                $screenshots->push([
-                    'label' => 'Scan-Screenshot',
-                    'path' => $mainScreenshotPath,
-                    'url' => $screenshotUrl($mainScreenshotPath),
-                    'meta' => null,
-                ]);
-            }
-
-            foreach (data_get($payload, 'candidateErrorScreenshots', []) as $entry) {
-                $path = is_array($entry) ? data_get($entry, 'screenshotPath') : null;
-
-                if (! is_string($path) || $path === '') {
-                    continue;
-                }
-
-                $screenshots->push([
-                    'label' => 'Kandidatenfehler',
-                    'path' => $path,
-                    'url' => $screenshotUrl($path),
-                    'meta' => trim('@'.data_get($entry, 'candidateUsername', '').' Versuch '.data_get($entry, 'attempt', '-')),
-                ]);
-            }
-
-            foreach (data_get($payload, 'checkedPreview', []) as $connection) {
-                foreach (data_get($connection, 'debugScreenshotPaths', []) as $path) {
-                    if (! is_string($path) || $path === '') {
-                        continue;
-                    }
-
-                    $screenshots->push([
-                        'label' => 'Kandidat',
-                        'path' => $path,
-                        'url' => $screenshotUrl($path),
-                        'meta' => '@'.data_get($connection, 'username', '-'),
-                    ]);
-                }
-            }
-
-            return $screenshots->unique('path')->values();
-        };
-        $snapshotScreenshots = function ($instagramSnapshot) use ($screenshotUrl) {
-            $screenshots = collect();
-
-            if (! $instagramSnapshot) {
-                return $screenshots;
-            }
-
-            if (is_string($instagramSnapshot->screenshot_path) && $instagramSnapshot->screenshot_path !== '') {
-                $screenshots->push([
-                    'label' => 'Debug-Screenshot',
-                    'path' => $instagramSnapshot->screenshot_path,
-                    'url' => $instagramSnapshot->screenshot_url,
-                    'meta' => null,
-                ]);
-            }
-
-            foreach (data_get($instagramSnapshot->raw_payload, 'analysisPolicy.scrapePhases', []) as $phase) {
-                $path = data_get($phase, 'screenshotPath');
-
-                if (! is_string($path) || $path === '') {
-                    continue;
-                }
-
-                $screenshots->push([
-                    'label' => match(data_get($phase, 'phase')) {
-                        'profile' => 'Grunddaten',
-                        'followers' => 'Followerliste',
-                        'following' => 'Gefolgt-Liste',
-                        default => data_get($phase, 'phase', 'Phase'),
-                    },
-                    'path' => $path,
-                    'url' => $screenshotUrl($path),
-                    'meta' => data_get($phase, 'statusLevel'),
-                ]);
-            }
-
-            return $screenshots->unique('path')->values();
-        };
-    @endphp
-
-
     <div
         wire:loading.flex
         wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanPublicProfileConnections,scanInstagramSuggestions,scanInstagramPosts"
@@ -580,10 +260,6 @@
                 @endif
             </div>
 
-            <div class="mt-4 flex flex-wrap gap-2">
-                <a href="#profil" class="shrink-0 rounded-3xl bg-white px-3 py-2 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50">Profil</a>
-                <a href="#profilinfos" class="shrink-0 rounded-3xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50">Informationen</a>
-            </div>
         </div>
 
         <div class="px-4 py-4 sm:px-5 sm:py-5">
@@ -1269,23 +945,23 @@
         </div>
     </x-modal>
 
-    <x-confirmation-modal wire:model="showDeleteConfirmationModal" maxWidth="lg">
-        <x-slot name="title">
-            Person loeschen
-        </x-slot>
-
-        <x-slot name="content">
-            <p>
-                Soll
-                <span class="font-semibold text-slate-900">{{ $trackedPerson->display_name }}</span>
-                wirklich geloescht werden?
-            </p>
-            <p class="mt-3">
-                Damit werden auch gespeicherte Instagram-Scans, Profile, Medien und Verknuepfungen dieser Person entfernt. Diese Aktion kann nicht rueckgaengig gemacht werden.
-            </p>
-        </x-slot>
-
-        <x-slot name="footer">
+    <x-modal wire:model="showDeleteConfirmationModal" maxWidth="lg">
+        <div class="overflow-hidden">
+            <div class="border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
+                <h3 class="text-lg font-bold text-slate-900">Person loeschen</h3>
+                <p class="mt-1 text-sm text-slate-500">Diese Aktion kann nicht rueckgaengig gemacht werden.</p>
+            </div>
+            <div class="px-4 py-4 text-sm leading-6 text-slate-700 sm:px-5">
+                <p>
+                    Soll
+                    <span class="font-semibold text-slate-900">{{ $trackedPerson->display_name }}</span>
+                    wirklich geloescht werden?
+                </p>
+                <p class="mt-3">
+                    Damit werden auch gespeicherte Instagram-Scans, Profile, Medien und Verknuepfungen dieser Person entfernt.
+                </p>
+            </div>
+            <div class="flex flex-wrap justify-end gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:px-5">
             <button
                 type="button"
                 wire:click="cancelTrackedPersonDeletion"
@@ -1303,8 +979,9 @@
                 <span wire:loading.remove wire:target="deleteTrackedPerson">Endgueltig loeschen</span>
                 <span wire:loading wire:target="deleteTrackedPerson">Loesche...</span>
             </button>
-        </x-slot>
-    </x-confirmation-modal>
+            </div>
+        </div>
+    </x-modal>
 
     <section id="profilinfos" x-data="{ activeProfileTab: 'verbindungen' }" class="scroll-mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="border-b border-slate-200 px-4 py-3">
@@ -1374,85 +1051,66 @@
                 </div>
 
                 <div class="mt-3 space-y-2">
-                    @forelse($trackedPerson->publicProfiles as $publicProfile)
-                        @php
-                            $latestConnectionScan = $publicProfile->latestInstagramConnectionScan;
-                            $connectionStatusClass = match ($latestConnectionScan?->status_level) {
-                                'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
-                                'partial' => 'border-amber-200 bg-amber-50 text-amber-950',
-                                'error' => 'border-rose-200 bg-rose-50 text-rose-900',
-                                default => 'border-slate-200 bg-white text-slate-600',
-                            };
-                        @endphp
+                    @forelse($publicProfileRows as $publicProfileRow)
                         <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                             <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div>
                                     <div class="flex flex-wrap items-center gap-2">
                                         <span class="font-semibold text-slate-900">
-                                            {{ $publicProfile->display_name ?: $publicProfile->display_handle }}
+                                            {{ $publicProfileRow->profile->display_name ?: $publicProfileRow->profile->display_handle }}
                                         </span>
                                         <span class="rounded-full bg-white px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            {{ $publicProfile->platform }}
+                                            {{ $publicProfileRow->profile->platform }}
                                         </span>
                                         <span class="rounded-full bg-sky-100 px-2 py-1 text-[11px] font-semibold text-sky-800">
-                                            {{ $publicProfile->relationship_label }}
+                                            {{ $publicProfileRow->profile->relationship_label }}
                                         </span>
-                                        @if($publicProfile->is_public)
+                                        @if($publicProfileRow->profile->is_public)
                                             <span class="rounded-full bg-emerald-100 px-2 py-1 text-[11px] font-semibold text-emerald-800">
                                                 Oeffentlich bestaetigt
                                             </span>
                                         @endif
                                     </div>
-                                    <div class="mt-1 text-slate-600">{{ $publicProfile->display_handle }}</div>
-                                    @if($publicProfile->notes)
-                                        <p class="mt-2 whitespace-pre-wrap text-xs text-slate-500">{{ $publicProfile->notes }}</p>
+                                    <div class="mt-1 text-slate-600">{{ $publicProfileRow->profile->display_handle }}</div>
+                                    @if($publicProfileRow->profile->notes)
+                                        <p class="mt-2 whitespace-pre-wrap text-xs text-slate-500">{{ $publicProfileRow->profile->notes }}</p>
                                     @endif
-                                    @if($latestConnectionScan)
-                                        @php
-                                            $latestInferredFollowerCount = count(data_get($latestConnectionScan->raw_payload, 'inferredFollowers', []));
-                                            $latestInferredFollowingCount = count(data_get($latestConnectionScan->raw_payload, 'inferredFollowing', []));
-                                            $latestConnectionScreenshotPath = data_get($latestConnectionScan->raw_payload, 'screenshotPath');
-                                            $latestCandidateErrorScreenshots = collect(data_get($latestConnectionScan->raw_payload, 'candidateErrorScreenshots', []))
-                                                ->filter(fn ($entry) => is_array($entry) && data_get($entry, 'screenshotPath'))
-                                                ->values();
-                                            $latestCandidateErrorScreenshotPath = data_get($latestCandidateErrorScreenshots->first(), 'screenshotPath');
-                                            $latestConnectionScreenshots = $connectionScanScreenshots($latestConnectionScan->raw_payload ?? []);
-                                        @endphp
-                                        <div class="mt-3 rounded-xl border px-3 py-2 text-xs {{ $connectionStatusClass }}">
+                                    @if($publicProfileRow->latestConnectionScan)
+                                        <div class="mt-3 rounded-xl border px-3 py-2 text-xs {{ $publicProfileRow->connectionStatusClass }}">
                                             <div class="flex flex-wrap items-center gap-2">
                                                 <span class="font-semibold">Teilrekonstruktion</span>
-                                                <span>{{ $latestConnectionScan->analyzed_at ? $latestConnectionScan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</span>
+                                                <span>{{ $publicProfileRow->latestConnectionScan->analyzed_at ? $publicProfileRow->latestConnectionScan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</span>
                                             </div>
                                             <div class="mt-2 flex flex-wrap gap-2">
-                                                @if($latestInferredFollowerCount > 0)
-                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">{{ $latestInferredFollowerCount }} moegliche Follower</span>
+                                                @if($publicProfileRow->latestConnectionSummary->inferredFollowerCount > 0)
+                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">{{ $publicProfileRow->latestConnectionSummary->inferredFollowerCount }} moegliche Follower</span>
                                                 @endif
-                                                @if($latestInferredFollowingCount > 0)
-                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">{{ $latestInferredFollowingCount }} moeglich gefolgt</span>
+                                                @if($publicProfileRow->latestConnectionSummary->inferredFollowingCount > 0)
+                                                    <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">{{ $publicProfileRow->latestConnectionSummary->inferredFollowingCount }} moeglich gefolgt</span>
                                                 @endif
-                                                @if($latestInferredFollowerCount === 0 && $latestInferredFollowingCount === 0)
+                                                @if($publicProfileRow->latestConnectionSummary->inferredFollowerCount === 0 && $publicProfileRow->latestConnectionSummary->inferredFollowingCount === 0)
                                                     <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">Keine Treffer in Kandidatenlisten</span>
                                                 @endif
                                             </div>
                                             <div class="mt-2 text-[11px]">
-                                                Kandidaten: {{ data_get($latestConnectionScan->raw_payload, 'candidatesChecked', 0) }}
-                                                / private oder gesperrte Profile: {{ data_get($latestConnectionScan->raw_payload, 'candidatesSkippedPrivate', 0) }}
-                                                / Rate-Limit: {{ data_get($latestConnectionScan->raw_payload, 'candidatesRateLimited', 0) }}
-                                                / Fehler: {{ data_get($latestConnectionScan->raw_payload, 'candidatesFailed', 0) }}
-                                                @if($latestConnectionScreenshotPath)
-                                                    / <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($latestConnectionScreenshotPath) }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Screenshot</a>
+                                                Kandidaten: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesChecked', 0) }}
+                                                / private oder gesperrte Profile: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesSkippedPrivate', 0) }}
+                                                / Rate-Limit: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesRateLimited', 0) }}
+                                                / Fehler: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesFailed', 0) }}
+                                                @if($publicProfileRow->latestConnectionSummary->screenshotUrl)
+                                                    / <a href="{{ $publicProfileRow->latestConnectionSummary->screenshotUrl }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Screenshot</a>
                                                 @endif
-                                                @if($latestCandidateErrorScreenshotPath)
-                                                    / <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($latestCandidateErrorScreenshotPath) }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Kandidatenfehler {{ $latestCandidateErrorScreenshots->count() }}</a>
+                                                @if($publicProfileRow->latestConnectionSummary->candidateErrorScreenshotUrl)
+                                                    / <a href="{{ $publicProfileRow->latestConnectionSummary->candidateErrorScreenshotUrl }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Kandidatenfehler {{ $publicProfileRow->latestConnectionSummary->candidateErrorScreenshots->count() }}</a>
                                                 @endif
                                             </div>
-                                            @if($latestConnectionScreenshots->isNotEmpty())
+                                            @if($publicProfileRow->latestConnectionSummary->screenshots->isNotEmpty())
                                                 <details class="mt-3 rounded-xl border border-white/70 bg-white/70 p-2">
                                                     <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-                                                        Screenshots anzeigen ({{ $latestConnectionScreenshots->count() }})
+                                                        Screenshots anzeigen ({{ $publicProfileRow->latestConnectionSummary->screenshots->count() }})
                                                     </summary>
                                                     <div class="mt-2 grid gap-2 sm:grid-cols-2">
-                                                        @foreach($latestConnectionScreenshots->take(8) as $screenshot)
+                                                        @foreach($publicProfileRow->latestConnectionSummary->screenshots->take(8) as $screenshot)
                                                             <a href="{{ $screenshot['url'] }}" target="_blank" class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
                                                                 <img src="{{ $screenshot['url'] }}" alt="{{ $screenshot['label'] }}" class="h-32 w-full object-cover">
                                                                 <div class="border-t border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
@@ -1470,12 +1128,12 @@
                                     @endif
                                 </div>
                                 <div class="flex flex-wrap gap-2">
-                                    @if($publicProfile->resolved_profile_url)
-                                        <a href="{{ $publicProfile->resolved_profile_url }}" target="_blank" class="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white">
+                                    @if($publicProfileRow->profile->resolved_profile_url)
+                                        <a href="{{ $publicProfileRow->profile->resolved_profile_url }}" target="_blank" class="rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-white">
                                             Profil oeffnen
                                         </a>
                                     @endif
-                                    <button wire:click="deletePublicProfile({{ $publicProfile->id }})" class="rounded-xl border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50">
+                                    <button wire:click="deletePublicProfile({{ $publicProfileRow->profile->id }})" class="rounded-xl border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50">
                                         Entfernen
                                     </button>
                                 </div>
@@ -1489,27 +1147,12 @@
                 <div class="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <div>
                         <label class="mb-1 block text-sm font-medium text-slate-700">Beobachtetes Profil</label>
-                        @php
-                            $reconstructedProfileCandidates = $inferredInstagramFollowers
-                                ->concat($inferredInstagramFollowing)
-                                ->concat($suggestionInstagramConnections)
-                                ->unique('candidate_username')
-                                ->values();
-                        @endphp
 
                         <select wire:model.defer="publicProfileTrackedPersonId" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500">
                             <option value="">Profil auswaehlen</option>
-                            @foreach($publicProfileCandidates as $candidate)
-                                @php
-                                    $candidateVisibility = data_get($candidate->latestInstagramSnapshot?->raw_payload, 'extractedProfile.profileVisibility');
-                                    $candidateVisibilityLabel = match ($candidateVisibility) {
-                                        'public' => 'oeffentlich',
-                                        'private' => 'privat',
-                                        default => 'unbekannt',
-                                    };
-                                @endphp
-                                <option value="{{ $candidate->id }}">
-                                    {{ '@'.$candidate->instagram_username }} - {{ $candidate->display_name }} ({{ $candidateVisibilityLabel }})
+                            @foreach($publicProfileCandidateRows as $candidateRow)
+                                <option value="{{ $candidateRow->candidate->id }}">
+                                    {{ '@'.$candidateRow->candidate->instagram_username }} - {{ $candidateRow->candidate->display_name }} ({{ $candidateRow->visibilityLabel }})
                                 </option>
                             @endforeach
 
@@ -1576,58 +1219,42 @@
                         <span class="text-xs text-slate-500">Letzte 20 Scans</span>
                     </div>
                     <div class="mt-3 space-y-2">
-                        @forelse($trackedPerson->instagramPublicProfileScans as $connectionScan)
-                            @php
-                                $scanInferredFollowerCount = count(data_get($connectionScan->raw_payload, 'inferredFollowers', []));
-                                $scanInferredFollowingCount = count(data_get($connectionScan->raw_payload, 'inferredFollowing', []));
-                                $scanScreenshotPath = data_get($connectionScan->raw_payload, 'screenshotPath');
-                                $scanCandidateErrorScreenshots = collect(data_get($connectionScan->raw_payload, 'candidateErrorScreenshots', []))
-                                    ->filter(fn ($entry) => is_array($entry) && data_get($entry, 'screenshotPath'))
-                                    ->values();
-                                $scanCandidateErrorScreenshotPath = data_get($scanCandidateErrorScreenshots->first(), 'screenshotPath');
-                                $scanScreenshots = $connectionScanScreenshots($connectionScan->raw_payload ?? []);
-                                $scanStatusClass = match ($connectionScan->status_level) {
-                                    'success' => 'border-emerald-200 bg-white text-emerald-900',
-                                    'partial' => 'border-amber-200 bg-white text-amber-950',
-                                    'error' => 'border-rose-200 bg-white text-rose-900',
-                                    default => 'border-slate-200 bg-white text-slate-700',
-                                };
-                            @endphp
-                            <div class="rounded-xl border px-3 py-2 text-xs {{ $scanStatusClass }}">
+                        @forelse($connectionScanRows as $connectionScanRow)
+                            <div class="rounded-xl border px-3 py-2 text-xs {{ $connectionScanRow->summary->statusClass }}">
                                 <div class="flex flex-wrap items-start justify-between gap-3">
                                     <div>
                                         <div class="font-semibold text-slate-950">
-                                            {{ $connectionScan->publicProfile?->display_name ?: '@'.$connectionScan->public_username }}
-                                            <span class="font-normal text-slate-500">({{ '@'.$connectionScan->public_username }})</span>
+                                            {{ $connectionScanRow->scan->publicProfile?->display_name ?: '@'.$connectionScanRow->scan->public_username }}
+                                            <span class="font-normal text-slate-500">({{ '@'.$connectionScanRow->scan->public_username }})</span>
                                         </div>
-                                        <div class="mt-1">{{ $connectionScan->relation_label }}</div>
-                                        @if($connectionScan->status_message)
-                                            <div class="mt-1 text-slate-500">{{ $connectionScan->status_message }}</div>
+                                        <div class="mt-1">{{ $connectionScanRow->scan->relation_label }}</div>
+                                        @if($connectionScanRow->scan->status_message)
+                                            <div class="mt-1 text-slate-500">{{ $connectionScanRow->scan->status_message }}</div>
                                         @endif
                                     </div>
                                     <div class="text-right text-slate-500">
-                                        <div>{{ $connectionScan->analyzed_at ? $connectionScan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</div>
+                                        <div>{{ $connectionScanRow->scan->analyzed_at ? $connectionScanRow->scan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</div>
                                         <div class="mt-1">
-                                            Kandidaten {{ data_get($connectionScan->raw_payload, 'candidatesChecked', 0) }}
-                                            / Treffer {{ $scanInferredFollowerCount + $scanInferredFollowingCount }}
-                                            / Rate-Limit {{ data_get($connectionScan->raw_payload, 'candidatesRateLimited', 0) }}
-                                            / Fehler {{ data_get($connectionScan->raw_payload, 'candidatesFailed', 0) }}
-                                            @if($scanScreenshotPath)
-                                                / <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($scanScreenshotPath) }}" target="_blank" class="font-semibold text-slate-700 underline decoration-slate-300 underline-offset-2">Screenshot</a>
+                                            Kandidaten {{ data_get($connectionScanRow->scan->raw_payload, 'candidatesChecked', 0) }}
+                                            / Treffer {{ $connectionScanRow->summary->inferredFollowerCount + $connectionScanRow->summary->inferredFollowingCount }}
+                                            / Rate-Limit {{ data_get($connectionScanRow->scan->raw_payload, 'candidatesRateLimited', 0) }}
+                                            / Fehler {{ data_get($connectionScanRow->scan->raw_payload, 'candidatesFailed', 0) }}
+                                            @if($connectionScanRow->summary->screenshotUrl)
+                                                / <a href="{{ $connectionScanRow->summary->screenshotUrl }}" target="_blank" class="font-semibold text-slate-700 underline decoration-slate-300 underline-offset-2">Screenshot</a>
                                             @endif
-                                            @if($scanCandidateErrorScreenshotPath)
-                                                / <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($scanCandidateErrorScreenshotPath) }}" target="_blank" class="font-semibold text-slate-700 underline decoration-slate-300 underline-offset-2">Kandidatenfehler {{ $scanCandidateErrorScreenshots->count() }}</a>
+                                            @if($connectionScanRow->summary->candidateErrorScreenshotUrl)
+                                                / <a href="{{ $connectionScanRow->summary->candidateErrorScreenshotUrl }}" target="_blank" class="font-semibold text-slate-700 underline decoration-slate-300 underline-offset-2">Kandidatenfehler {{ $connectionScanRow->summary->candidateErrorScreenshots->count() }}</a>
                                             @endif
                                         </div>
                                     </div>
                                 </div>
-                                @if($connectionScan->logs->isNotEmpty())
+                                @if($connectionScanRow->scan->logs->isNotEmpty())
                                     <details class="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-700">
                                         <summary class="cursor-pointer font-semibold text-slate-600">
-                                            Scan-Logs anzeigen ({{ $connectionScan->logs->count() }})
+                                            Scan-Logs anzeigen ({{ $connectionScanRow->scan->logs->count() }})
                                         </summary>
                                         <div class="mt-2 space-y-2">
-                                            @foreach($connectionScan->logs as $scanLog)
+                                            @foreach($connectionScanRow->scan->logs as $scanLog)
                                                 <div class="rounded-md border border-slate-200 bg-white p-2">
                                                     <div class="font-semibold text-slate-800">
                                                         {{ $scanLog->message ?: 'Technischer Eintrag' }}
@@ -1650,13 +1277,13 @@
                                         </div>
                                     </details>
                                 @endif
-                                @if($scanScreenshots->isNotEmpty())
+                                @if($connectionScanRow->summary->screenshots->isNotEmpty())
                                     <details class="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-2 text-left">
                                         <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-                                            Screenshots anzeigen ({{ $scanScreenshots->count() }})
+                                            Screenshots anzeigen ({{ $connectionScanRow->summary->screenshots->count() }})
                                         </summary>
                                         <div class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                                            @foreach($scanScreenshots->take(9) as $screenshot)
+                                            @foreach($connectionScanRow->summary->screenshots->take(9) as $screenshot)
                                                 <a href="{{ $screenshot['url'] }}" target="_blank" class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
                                                     <img src="{{ $screenshot['url'] }}" alt="{{ $screenshot['label'] }}" class="h-28 w-full object-cover">
                                                     <div class="border-t border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
@@ -1683,44 +1310,23 @@
                         <span class="text-xs text-slate-500">Letzte 20 Scans</span>
                     </div>
                     <div class="mt-3 space-y-2">
-                        @forelse($trackedPerson->instagramSuggestionScans as $suggestionScan)
-                            @php
-                                $suggestionScanStatusClass = match ($suggestionScan->status_level) {
-                                    'success' => 'border-emerald-200 bg-white text-emerald-900',
-                                    'partial' => 'border-amber-200 bg-white text-amber-950',
-                                    'error' => 'border-rose-200 bg-white text-rose-900',
-                                    default => 'border-slate-200 bg-white text-slate-700',
-                                };
-                                $suggestionRawPayload = is_array($suggestionScan->raw_payload) ? $suggestionScan->raw_payload : [];
-                                $suggestionScanPayload = data_get($suggestionRawPayload, 'suggestionScan', data_get($suggestionRawPayload, 'profile.suggestionScan', []));
-                                $suggestionDebug = data_get($suggestionScanPayload, 'targetCollectionDebug', []);
-                                $suggestionDebugEvents = collect(data_get($suggestionDebug, 'events', []))->filter(fn ($event) => is_array($event))->take(-8)->values();
-                                $suggestionScrollEvents = collect(data_get($suggestionDebug, 'scrollEvents', []))->filter(fn ($event) => is_array($event))->take(-8)->values();
-                                $suggestionFinalUsernames = collect(data_get($suggestionDebug, 'finalUsernames', []))->filter()->take(30)->values();
-                                $suggestionSurfaceDebug = data_get($suggestionDebug, 'surfaceBeforeCollection', []);
-                                $suggestionObservedPreview = collect(data_get($suggestionScanPayload, 'observedSuggestions', []))
-                                    ->filter(fn ($item) => is_array($item) && filled($item['username'] ?? null))
-                                    ->take(30)
-                                    ->values();
-                                $suggestionLastDebug = $suggestionDebugEvents->last();
-                                $suggestionLastScroll = $suggestionScrollEvents->last();
-                            @endphp
-                            <div class="rounded-xl border px-3 py-2 text-xs {{ $suggestionScanStatusClass }}">
+                        @forelse($suggestionScanRows as $suggestionScanRow)
+                            <div class="rounded-xl border px-3 py-2 text-xs {{ $suggestionScanRow->statusClass }}">
                                 <div class="flex flex-wrap items-start justify-between gap-3">
                                     <div>
                                         <div class="font-semibold text-slate-950">
-                                            {{ '@'.$suggestionScan->target_username }}
+                                            {{ '@'.$suggestionScanRow->scan->target_username }}
                                         </div>
-                                        @if($suggestionScan->status_message)
-                                            <div class="mt-1 text-slate-500">{{ $suggestionScan->status_message }}</div>
+                                        @if($suggestionScanRow->scan->status_message)
+                                            <div class="mt-1 text-slate-500">{{ $suggestionScanRow->scan->status_message }}</div>
                                         @endif
                                     </div>
                                     <div class="text-right text-slate-500">
-                                        <div>{{ $suggestionScan->analyzed_at ? $suggestionScan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</div>
+                                        <div>{{ $suggestionScanRow->scan->analyzed_at ? $suggestionScanRow->scan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</div>
                                         <div class="mt-1">
-                                            Vorschlaege {{ number_format($suggestionScan->suggestions_observed_count, 0, ',', '.') }}
-                                            / geprueft {{ number_format($suggestionScan->suggestions_checked_count, 0, ',', '.') }}
-                                            / Treffer {{ number_format($suggestionScan->suggestion_matches_count, 0, ',', '.') }}
+                                            Vorschlaege {{ number_format($suggestionScanRow->scan->suggestions_observed_count, 0, ',', '.') }}
+                                            / geprueft {{ number_format($suggestionScanRow->scan->suggestions_checked_count, 0, ',', '.') }}
+                                            / Treffer {{ number_format($suggestionScanRow->scan->suggestion_matches_count, 0, ',', '.') }}
                                         </div>
                                     </div>
                                 </div>
@@ -1732,30 +1338,30 @@
                                         <div class="rounded-md bg-white p-2">
                                             <div class="font-semibold text-slate-900">Letzte Erkennung</div>
                                             <div class="mt-1 space-y-0.5 text-[11px] text-slate-600">
-                                                <div>Runden: {{ number_format((int) data_get($suggestionDebug, 'rounds', 0), 0, ',', '.') }}</div>
-                                                <div>Profil-Link-Kandidaten: {{ number_format((int) data_get($suggestionDebug, 'profileLinkCandidatesSeen', data_get($suggestionScanPayload, 'profileLinkCandidatesSeen', 0)), 0, ',', '.') }}</div>
-                                                @if(is_array($suggestionSurfaceDebug) && $suggestionSurfaceDebug !== [])
-                                                    <div>Oberflaeche vor Scan: {{ data_get($suggestionSurfaceDebug, 'bodyContainsSuggestionText') ? 'Vorschlagstext sichtbar' : 'kein Vorschlagstext' }}</div>
-                                                    <div>Oberflaechen-Links: {{ number_format(count(data_get($suggestionSurfaceDebug, 'profileAnchorUsernames', [])), 0, ',', '.') }} / Alle ansehen Kandidaten {{ number_format(count(data_get($suggestionSurfaceDebug, 'seeAllCandidates', [])), 0, ',', '.') }}</div>
+                                                <div>Runden: {{ number_format((int) data_get($suggestionScanRow->debug, 'rounds', 0), 0, ',', '.') }}</div>
+                                                <div>Profil-Link-Kandidaten: {{ number_format((int) data_get($suggestionScanRow->debug, 'profileLinkCandidatesSeen', data_get($suggestionScanRow->payload, 'profileLinkCandidatesSeen', 0)), 0, ',', '.') }}</div>
+                                                @if(is_array($suggestionScanRow->surfaceDebug) && $suggestionScanRow->surfaceDebug !== [])
+                                                    <div>Oberflaeche vor Scan: {{ data_get($suggestionScanRow->surfaceDebug, 'bodyContainsSuggestionText') ? 'Vorschlagstext sichtbar' : 'kein Vorschlagstext' }}</div>
+                                                    <div>Oberflaechen-Links: {{ number_format(count(data_get($suggestionScanRow->surfaceDebug, 'profileAnchorUsernames', [])), 0, ',', '.') }} / Alle ansehen Kandidaten {{ number_format(count(data_get($suggestionScanRow->surfaceDebug, 'seeAllCandidates', [])), 0, ',', '.') }}</div>
                                                 @endif
-                                                <div>Vorschlagstext im Body: {{ data_get($suggestionLastDebug, 'bodyContainsSuggestionText') ? 'ja' : 'nein' }}</div>
-                                                <div>Heading: {{ data_get($suggestionLastDebug, 'headingFound') ? 'ja' : 'nein' }}{{ data_get($suggestionLastDebug, 'headingText') ? ' - '.data_get($suggestionLastDebug, 'headingText') : '' }}</div>
-                                                <div>Scope: {{ data_get($suggestionLastDebug, 'anchorScopeFound') ? 'ja' : 'nein' }}</div>
-                                                <div>Links/Textfallback: {{ number_format((int) data_get($suggestionLastDebug, 'fallbackAnchorsSeen', 0), 0, ',', '.') }} / {{ number_format((int) data_get($suggestionLastDebug, 'textFallbackItemsSeen', 0), 0, ',', '.') }}</div>
-                                                <div>Alle ansehen: {{ data_get($suggestionLastDebug, 'seeAllClicked') ? 'geklickt' : 'nicht geklickt' }}{{ data_get($suggestionLastDebug, 'seeAllReason') ? ' - '.data_get($suggestionLastDebug, 'seeAllReason') : '' }}</div>
-                                                <div>Dialog: {{ data_get($suggestionLastDebug, 'dialogOpen') ? 'offen' : 'nicht offen' }} / Links {{ number_format((int) data_get($suggestionLastDebug, 'dialogProfileLinkCount', 0), 0, ',', '.') }}</div>
-                                                <div>Scroll: {{ data_get($suggestionLastScroll, 'scrollMode', '-') }}{{ data_get($suggestionLastScroll, 'scrollAdvanced') ? ' weiter' : ' kein Fortschritt' }}{{ data_get($suggestionLastScroll, 'scrollAtEnd') ? ' / Ende' : '' }}</div>
-                                                @if(data_get($suggestionLastDebug, 'dialogTextPreview'))
-                                                    <div class="text-slate-500">Dialogtext: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionLastDebug, 'dialogTextPreview'), 160) }}</div>
+                                                <div>Vorschlagstext im Body: {{ data_get($suggestionScanRow->lastDebug, 'bodyContainsSuggestionText') ? 'ja' : 'nein' }}</div>
+                                                <div>Heading: {{ data_get($suggestionScanRow->lastDebug, 'headingFound') ? 'ja' : 'nein' }}{{ data_get($suggestionScanRow->lastDebug, 'headingText') ? ' - '.data_get($suggestionScanRow->lastDebug, 'headingText') : '' }}</div>
+                                                <div>Scope: {{ data_get($suggestionScanRow->lastDebug, 'anchorScopeFound') ? 'ja' : 'nein' }}</div>
+                                                <div>Links/Textfallback: {{ number_format((int) data_get($suggestionScanRow->lastDebug, 'fallbackAnchorsSeen', 0), 0, ',', '.') }} / {{ number_format((int) data_get($suggestionScanRow->lastDebug, 'textFallbackItemsSeen', 0), 0, ',', '.') }}</div>
+                                                <div>Alle ansehen: {{ data_get($suggestionScanRow->lastDebug, 'seeAllClicked') ? 'geklickt' : 'nicht geklickt' }}{{ data_get($suggestionScanRow->lastDebug, 'seeAllReason') ? ' - '.data_get($suggestionScanRow->lastDebug, 'seeAllReason') : '' }}</div>
+                                                <div>Dialog: {{ data_get($suggestionScanRow->lastDebug, 'dialogOpen') ? 'offen' : 'nicht offen' }} / Links {{ number_format((int) data_get($suggestionScanRow->lastDebug, 'dialogProfileLinkCount', 0), 0, ',', '.') }}</div>
+                                                <div>Scroll: {{ data_get($suggestionScanRow->lastScroll, 'scrollMode', '-') }}{{ data_get($suggestionScanRow->lastScroll, 'scrollAdvanced') ? ' weiter' : ' kein Fortschritt' }}{{ data_get($suggestionScanRow->lastScroll, 'scrollAtEnd') ? ' / Ende' : '' }}</div>
+                                                @if(data_get($suggestionScanRow->lastDebug, 'dialogTextPreview'))
+                                                    <div class="text-slate-500">Dialogtext: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionScanRow->lastDebug, 'dialogTextPreview'), 160) }}</div>
                                                 @endif
-                                                @if(data_get($suggestionDebug, 'error'))
-                                                    <div class="text-rose-700">Fehler: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionDebug, 'error'), 160) }}</div>
+                                                @if(data_get($suggestionScanRow->debug, 'error'))
+                                                    <div class="text-rose-700">Fehler: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionScanRow->debug, 'error'), 160) }}</div>
                                                 @endif
-                                                @if(data_get($suggestionScanPayload, 'rateLimitText'))
-                                                    <div class="text-rose-700">Rate-Limit: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionScanPayload, 'rateLimitText'), 160) }}</div>
+                                                @if(data_get($suggestionScanRow->payload, 'rateLimitText'))
+                                                    <div class="text-rose-700">Rate-Limit: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionScanRow->payload, 'rateLimitText'), 160) }}</div>
                                                 @endif
-                                                @if(data_get($suggestionLastDebug, 'liveScreenshotUrl') || data_get($suggestionLastScroll, 'liveScreenshotUrl'))
-                                                    <a href="{{ data_get($suggestionLastDebug, 'liveScreenshotUrl') ?: data_get($suggestionLastScroll, 'liveScreenshotUrl') }}" target="_blank" class="inline-flex text-[11px] font-semibold text-indigo-600 hover:text-indigo-800">
+                                                @if(data_get($suggestionScanRow->lastDebug, 'liveScreenshotUrl') || data_get($suggestionScanRow->lastScroll, 'liveScreenshotUrl'))
+                                                    <a href="{{ data_get($suggestionScanRow->lastDebug, 'liveScreenshotUrl') ?: data_get($suggestionScanRow->lastScroll, 'liveScreenshotUrl') }}" target="_blank" class="inline-flex text-[11px] font-semibold text-indigo-600 hover:text-indigo-800">
                                                         letzten Debug-Screenshot oeffnen
                                                     </a>
                                                 @endif
@@ -1763,9 +1369,9 @@
                                         </div>
                                         <div class="rounded-md bg-white p-2">
                                             <div class="font-semibold text-slate-900">Erkannte Usernames</div>
-                                            @if($suggestionFinalUsernames->isNotEmpty())
+                                            @if($suggestionScanRow->finalUsernames->isNotEmpty())
                                                 <div class="mt-1 flex flex-wrap gap-1">
-                                                    @foreach($suggestionFinalUsernames as $debugUsername)
+                                                    @foreach($suggestionScanRow->finalUsernames as $debugUsername)
                                                         <span class="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">{{ '@'.$debugUsername }}</span>
                                                     @endforeach
                                                 </div>
@@ -1775,9 +1381,9 @@
                                         </div>
                                         <div class="rounded-md bg-white p-2">
                                             <div class="font-semibold text-slate-900">Beobachtete Vorschlaege</div>
-                                            @if($suggestionObservedPreview->isNotEmpty())
+                                            @if($suggestionScanRow->observedPreview->isNotEmpty())
                                                 <div class="mt-1 max-h-32 space-y-1 overflow-y-auto pr-1">
-                                                    @foreach($suggestionObservedPreview as $observedSuggestion)
+                                                    @foreach($suggestionScanRow->observedPreview as $observedSuggestion)
                                                         <div class="rounded bg-slate-50 px-2 py-1 text-[11px]">
                                                             <span class="font-semibold text-slate-800">{{ '@'.($observedSuggestion['username'] ?? '') }}</span>
                                                             @if(! empty($observedSuggestion['skippedReason']))
@@ -1791,11 +1397,11 @@
                                             @endif
                                         </div>
                                     </div>
-                                    @if($suggestionDebugEvents->isNotEmpty())
+                                    @if($suggestionScanRow->debugEvents->isNotEmpty())
                                         <div class="mt-2 rounded-md bg-white p-2">
                                             <div class="font-semibold text-slate-900">Letzte Debug-Runden</div>
                                             <div class="mt-1 space-y-1">
-                                                @foreach($suggestionDebugEvents as $debugEvent)
+                                                @foreach($suggestionScanRow->debugEvents as $debugEvent)
                                                     <div class="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
                                                         <span class="font-semibold text-slate-800">{{ $debugEvent['phase'] ?? '-' }} #{{ $debugEvent['round'] ?? '-' }}</span>
                                                         - Items {{ number_format((int) ($debugEvent['batchItemsFound'] ?? 0), 0, ',', '.') }}
@@ -1811,12 +1417,12 @@
                                             </div>
                                         </div>
                                     @endif
-                                    @if(collect(data_get($suggestionLastDebug, 'textSamples', []))->isNotEmpty() || collect(data_get($suggestionLastDebug, 'anchorSamples', []))->isNotEmpty())
+                                    @if($suggestionScanRow->textSamples->isNotEmpty() || $suggestionScanRow->anchorSamples->isNotEmpty())
                                         <div class="mt-2 grid gap-2 lg:grid-cols-2">
                                             <div class="rounded-md bg-white p-2">
                                                 <div class="font-semibold text-slate-900">Sichtbare Texte unter Vorschlaegen</div>
                                                 <div class="mt-1 max-h-44 space-y-1 overflow-y-auto pr-1">
-                                                    @forelse(collect(data_get($suggestionLastDebug, 'textSamples', []))->take(20) as $sample)
+                                                    @forelse($suggestionScanRow->textSamples as $sample)
                                                         <div class="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
                                                             <span class="font-semibold text-slate-800">{{ $sample['text'] ?? '-' }}</span>
                                                             @if(! empty($sample['normalizedUsername']))
@@ -1832,7 +1438,7 @@
                                             <div class="rounded-md bg-white p-2">
                                                 <div class="font-semibold text-slate-900">Sichtbare Links unter Vorschlaegen</div>
                                                 <div class="mt-1 max-h-44 space-y-1 overflow-y-auto pr-1">
-                                                    @forelse(collect(data_get($suggestionLastDebug, 'anchorSamples', []))->take(20) as $sample)
+                                                    @forelse($suggestionScanRow->anchorSamples as $sample)
                                                         <div class="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
                                                             <span class="font-semibold text-slate-800">{{ $sample['parsedUsername'] ? '@'.$sample['parsedUsername'] : ($sample['text'] ?? '-') }}</span>
                                                             @if(! empty($sample['href']))
@@ -1846,11 +1452,11 @@
                                             </div>
                                         </div>
                                     @endif
-                                    @if(collect(data_get($suggestionLastDebug, 'scopeSamples', []))->isNotEmpty())
+                                    @if($suggestionScanRow->scopeSamples->isNotEmpty())
                                         <div class="mt-2 rounded-md bg-white p-2">
                                             <div class="font-semibold text-slate-900">Moegliche Vorschlags-Container</div>
                                             <div class="mt-1 space-y-1">
-                                                @foreach(collect(data_get($suggestionLastDebug, 'scopeSamples', []))->take(8) as $sample)
+                                                @foreach($suggestionScanRow->scopeSamples as $sample)
                                                     <div class="rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
                                                         <span class="font-semibold text-slate-800">
                                                             Links {{ number_format((int) ($sample['profileAnchorCount'] ?? 0), 0, ',', '.') }}
@@ -1863,19 +1469,19 @@
                                             </div>
                                         </div>
                                     @endif
-                                    @if(is_array($suggestionSurfaceDebug) && $suggestionSurfaceDebug !== [])
+                                    @if(is_array($suggestionScanRow->surfaceDebug) && $suggestionScanRow->surfaceDebug !== [])
                                         <div class="mt-2 rounded-md bg-white p-2">
                                             <div class="font-semibold text-slate-900">Oberflaeche vor dem Vorschlags-Collector</div>
                                             <div class="mt-1 space-y-1 text-[11px] text-slate-600">
-                                                <div>URL: {{ data_get($suggestionSurfaceDebug, 'url', '-') }}</div>
-                                                @if(data_get($suggestionSurfaceDebug, 'bodyTextPreview'))
-                                                    <div class="rounded bg-slate-50 px-2 py-1">Body: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionSurfaceDebug, 'bodyTextPreview'), 240) }}</div>
+                                                <div>URL: {{ data_get($suggestionScanRow->surfaceDebug, 'url', '-') }}</div>
+                                                @if(data_get($suggestionScanRow->surfaceDebug, 'bodyTextPreview'))
+                                                    <div class="rounded bg-slate-50 px-2 py-1">Body: {{ \Illuminate\Support\Str::limit((string) data_get($suggestionScanRow->surfaceDebug, 'bodyTextPreview'), 240) }}</div>
                                                 @endif
-                                                @if(collect(data_get($suggestionSurfaceDebug, 'profileAnchorUsernames', []))->isNotEmpty())
-                                                    <div>Profil-Links: {{ collect(data_get($suggestionSurfaceDebug, 'profileAnchorUsernames', []))->take(20)->map(fn ($username) => '@'.$username)->implode(', ') }}</div>
+                                                @if(collect(data_get($suggestionScanRow->surfaceDebug, 'profileAnchorUsernames', []))->isNotEmpty())
+                                                    <div>Profil-Links: {{ collect(data_get($suggestionScanRow->surfaceDebug, 'profileAnchorUsernames', []))->take(20)->map(fn ($username) => '@'.$username)->implode(', ') }}</div>
                                                 @endif
-                                                @if(collect(data_get($suggestionSurfaceDebug, 'seeAllCandidates', []))->isNotEmpty())
-                                                    <div>Alle-ansehen-Kandidaten: {{ collect(data_get($suggestionSurfaceDebug, 'seeAllCandidates', []))->take(8)->map(fn ($item) => ($item['text'] ?? '-').' @ '.($item['left'] ?? '?').'/'.($item['top'] ?? '?'))->implode(' | ') }}</div>
+                                                @if(collect(data_get($suggestionScanRow->surfaceDebug, 'seeAllCandidates', []))->isNotEmpty())
+                                                    <div>Alle-ansehen-Kandidaten: {{ collect(data_get($suggestionScanRow->surfaceDebug, 'seeAllCandidates', []))->take(8)->map(fn ($item) => ($item['text'] ?? '-').' @ '.($item['left'] ?? '?').'/'.($item['top'] ?? '?'))->implode(' | ') }}</div>
                                                 @endif
                                             </div>
                                         </div>
@@ -1968,17 +1574,7 @@
                 <h3 class="text-lg font-bold text-slate-900">Letzte Instagram-Analyse</h3>
 
                 @if($latestSnapshot)
-                    @php
-                        $snapshotStatusClass = match ($latestSnapshot->status_level ?? 'neutral') {
-                            'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
-                            'partial' => 'border-amber-200 bg-amber-50 text-amber-950',
-                            'error' => 'border-rose-200 bg-rose-50 text-rose-900',
-                            default => 'border-slate-200 bg-slate-50 text-slate-700',
-                        };
-                        $latestSnapshotScreenshots = $snapshotScreenshots($latestSnapshot);
-                    @endphp
-
-                    <div class="mt-3 rounded-xl border p-3 text-sm {{ $snapshotStatusClass }}">
+                    <div class="mt-3 rounded-xl border p-3 text-sm {{ $latestSnapshotStatusClass }}">
                         <p class="font-semibold">{{ $latestSnapshot->status_message }}</p>
                         <p class="mt-1 text-xs">{{ optional($latestSnapshot->analyzed_at)->format('d.m.Y H:i') ?: '—' }}</p>
                         @if($latestSnapshot->screenshot_url)
@@ -2023,26 +1619,18 @@
                         <div class="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
                             <h4 class="font-semibold text-slate-900">Scrape-Phasen</h4>
                             <div class="mt-2 grid gap-2">
-                                @foreach($latestScrapePhases as $phase)
-                                    @php
-                                        $phaseScreenshotPath = data_get($phase, 'screenshotPath');
-                                    @endphp
+                                @foreach($latestScrapePhaseRows as $phase)
                                     <div class="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white px-3 py-2">
                                         <span class="font-semibold">
-                                            {{ match(data_get($phase, 'phase')) {
-                                                'profile' => 'Grunddaten',
-                                                'followers' => 'Followerliste',
-                                                'following' => 'Gefolgt-Liste',
-                                                default => data_get($phase, 'phase', 'Unbekannt'),
-                                            } }}
+                                            {{ $phase->label }}
                                         </span>
                                         <span class="text-slate-500">
                                             {{ data_get($phase, 'statusLevel', 'unknown') }}
                                             @if(data_get($phase, 'count') !== null)
                                                 · {{ number_format((int) data_get($phase, 'count')) }} Eintraege
                                             @endif
-                                            @if($phaseScreenshotPath)
-                                                | <a href="{{ \Illuminate\Support\Facades\Storage::disk('public')->url($phaseScreenshotPath) }}" target="_blank" class="font-semibold text-slate-700 underline decoration-slate-300 underline-offset-2">Screenshot</a>
+                                            @if($phase->screenshotUrl)
+                                                | <a href="{{ $phase->screenshotUrl }}" target="_blank" class="font-semibold text-slate-700 underline decoration-slate-300 underline-offset-2">Screenshot</a>
                                             @endif
                                         </span>
                                     </div>
@@ -2090,25 +1678,12 @@
                         <div class="mt-3 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-950">
                             <h4 class="font-semibold">Erkannte Aenderungen</h4>
                             <ul class="mt-2 space-y-2">
-                                @foreach($latestSnapshot->detected_changes as $change)
-                                    @php
-                                        $formatChangeValue = function ($value) use ($change) {
-                                            if (($change['field'] ?? null) === 'profile_visibility') {
-                                                return match ($value) {
-                                                    'public' => 'Oeffentlich',
-                                                    'private' => 'Privat',
-                                                    default => 'Unbekannt',
-                                                };
-                                            }
-
-                                            return filled($value) ? $value : '-';
-                                        };
-                                    @endphp
+                                @foreach($latestDetectedChangeRows as $changeRow)
                                     <li>
-                                        <span class="font-semibold">{{ $change['label'] ?? $change['field'] }}:</span>
-                                        <span>{{ $formatChangeValue($change['before'] ?? null) }}</span>
+                                        <span class="font-semibold">{{ $changeRow->label }}:</span>
+                                        <span>{{ $changeRow->before }}</span>
                                         <span>-&gt;</span>
-                                        <span>{{ $formatChangeValue($change['after'] ?? null) }}</span>
+                                        <span>{{ $changeRow->after }}</span>
                                     </li>
                                 @endforeach
                             </ul>
@@ -2142,41 +1717,38 @@
                 </div>
 
                 <div class="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                    @forelse($trackedPerson->currentInstagramProfile?->posts ?? collect() as $post)
-                        @php($primaryMedia = $post->media->first())
-                        @php($mediaUrl = $primaryMedia?->media_url)
-                        @php($previewUrl = $primaryMedia?->preview_media_url ?: $post->thumbnail_storage_url)
+                    @forelse($currentInstagramPostRows as $postRow)
                         <article class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:border-violet-300 hover:bg-violet-50">
-                            @if($primaryMedia?->media_type === 'video' && $mediaUrl)
-                                <video controls preload="metadata" playsinline poster="{{ $previewUrl }}" class="h-44 w-full bg-black object-contain">
-                                    <source src="{{ $mediaUrl }}" type="{{ $primaryMedia->mime_type ?: 'video/mp4' }}">
+                            @if($postRow->primaryMedia?->media_type === 'video' && $postRow->mediaUrl)
+                                <video controls preload="metadata" playsinline poster="{{ $postRow->previewUrl }}" class="h-44 w-full bg-black object-contain">
+                                    <source src="{{ $postRow->mediaUrl }}" type="{{ $postRow->primaryMedia->mime_type ?: 'video/mp4' }}">
                                 </video>
-                            @elseif($mediaUrl || $previewUrl)
-                                <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="block">
-                                    <img src="{{ $mediaUrl ?: $previewUrl }}" alt="Instagram-Beitrag {{ $post->shortcode }}" loading="lazy" class="h-44 w-full object-cover">
+                            @elseif($postRow->mediaUrl || $postRow->previewUrl)
+                                <a href="{{ $postRow->post->post_url }}" target="_blank" rel="noopener noreferrer" class="block">
+                                    <img src="{{ $postRow->mediaUrl ?: $postRow->previewUrl }}" alt="Instagram-Beitrag {{ $postRow->post->shortcode }}" loading="lazy" class="h-44 w-full object-cover">
                                 </a>
                             @endif
                             <div class="p-3">
                                 <div class="flex justify-between gap-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
                                     <span>
-                                        {{ $post->media_type }}
-                                        @if($post->media_count > 1)
-                                            · {{ number_format($post->media_count) }} Medien
+                                        {{ $postRow->post->media_type }}
+                                        @if($postRow->post->media_count > 1)
+                                            · {{ number_format($postRow->post->media_count) }} Medien
                                         @endif
                                     </span>
-                                    <span>{{ $post->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>
+                                    <span>{{ $postRow->post->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>
                                 </div>
-                                @if($post->caption)
-                                    <p class="mt-2 line-clamp-2 text-sm text-slate-700">{{ $post->caption }}</p>
+                                @if($postRow->post->caption)
+                                    <p class="mt-2 line-clamp-2 text-sm text-slate-700">{{ $postRow->post->caption }}</p>
                                 @endif
                                 <div class="mt-3 flex gap-4 text-sm font-semibold text-slate-800">
-                                    <span>{{ $post->likes_count !== null ? number_format($post->likes_count) : '-' }} Likes</span>
-                                    <span>{{ $post->comments_count !== null ? number_format($post->comments_count) : '-' }} Kommentare</span>
+                                    <span>{{ $postRow->post->likes_count !== null ? number_format($postRow->post->likes_count) : '-' }} Likes</span>
+                                    <span>{{ $postRow->post->comments_count !== null ? number_format($postRow->post->comments_count) : '-' }} Kommentare</span>
                                 </div>
                                 <div class="mt-1 text-xs text-slate-500">
-                                    {{ number_format($post->metrics_count ?? 0) }} gespeicherte Messpunkte
+                                    {{ number_format($postRow->post->metrics_count ?? 0) }} gespeicherte Messpunkte
                                 </div>
-                                <a href="{{ $post->post_url }}" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs font-semibold text-violet-700 hover:text-violet-900">
+                                <a href="{{ $postRow->post->post_url }}" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs font-semibold text-violet-700 hover:text-violet-900">
                                     Auf Instagram öffnen
                                 </a>
                             </div>
@@ -2212,59 +1784,55 @@
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Analyse-Historie</h3>
                 <div class="mt-3 space-y-2">
-                    <?php $historySnapshots = $trackedPerson->instagramSnapshots ?? collect(); ?>
-                    <?php if ($historySnapshots->isNotEmpty()): ?>
-                        <?php foreach ($historySnapshots as $historySnapshot): ?>
-                            <?php $historySnapshotScreenshots = $snapshotScreenshots($historySnapshot); ?>
+                    @forelse($historySnapshotRows as $historySnapshotRow)
                         <div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
                             <div class="flex flex-wrap items-start justify-between gap-3">
                                 <div>
-                                    <div class="font-semibold text-slate-900">{{ optional($historySnapshot->analyzed_at)->format('d.m.Y H:i') ?: '-' }}</div>
-                                    <div class="mt-1">{{ $historySnapshot->status_message }}</div>
+                                    <div class="font-semibold text-slate-900">{{ optional($historySnapshotRow->snapshot->analyzed_at)->format('d.m.Y H:i') ?: '-' }}</div>
+                                    <div class="mt-1">{{ $historySnapshotRow->snapshot->status_message }}</div>
                                 </div>
                                 <div class="text-xs text-slate-500">
-                                    {{ $historySnapshot->status_level }}
+                                    {{ $historySnapshotRow->snapshot->status_level }}
                                 </div>
                             </div>
                             <div class="mt-3 grid grid-cols-3 gap-2 text-xs">
                                 <div class="rounded-xl bg-white px-3 py-2">
                                     <div class="text-slate-500">Follower</div>
-                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshot->followers_count !== null ? number_format($historySnapshot->followers_count) : '-' }}</div>
+                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshotRow->snapshot->followers_count !== null ? number_format($historySnapshotRow->snapshot->followers_count) : '-' }}</div>
                                 </div>
                                 <div class="rounded-xl bg-white px-3 py-2">
                                     <div class="text-slate-500">Gefolgt</div>
-                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshot->following_count !== null ? number_format($historySnapshot->following_count) : '-' }}</div>
+                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshotRow->snapshot->following_count !== null ? number_format($historySnapshotRow->snapshot->following_count) : '-' }}</div>
                                 </div>
                                 <div class="rounded-xl bg-white px-3 py-2">
                                     <div class="text-slate-500">Beitraege</div>
-                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshot->posts_count !== null ? number_format($historySnapshot->posts_count) : '-' }}</div>
+                                    <div class="mt-1 font-semibold text-slate-900">{{ $historySnapshotRow->snapshot->posts_count !== null ? number_format($historySnapshotRow->snapshot->posts_count) : '-' }}</div>
                                 </div>
                             </div>
-                            <?php if ($historySnapshotScreenshots->isNotEmpty()): ?>
+                            @if($historySnapshotRow->screenshots->isNotEmpty())
                                 <details class="mt-3 rounded-xl border border-slate-200 bg-white p-2">
                                     <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-                                        Screenshots anzeigen ({{ $historySnapshotScreenshots->count() }})
+                                        Screenshots anzeigen ({{ $historySnapshotRow->screenshots->count() }})
                                     </summary>
                                     <div class="mt-2 grid gap-2 sm:grid-cols-2">
-                                        <?php foreach ($historySnapshotScreenshots->take(4) as $screenshot): ?>
+                                        @foreach($historySnapshotRow->screenshots->take(4) as $screenshot)
                                             <a href="{{ $screenshot['url'] }}" target="_blank" class="overflow-hidden rounded-lg border border-slate-200 bg-slate-50 shadow-sm">
                                                 <img src="{{ $screenshot['url'] }}" alt="{{ $screenshot['label'] }}" class="h-28 w-full object-cover">
                                                 <div class="border-t border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
                                                     <span class="font-semibold text-slate-800">{{ $screenshot['label'] }}</span>
-                                                    <?php if ($screenshot['meta']): ?>
+                                                    @if($screenshot['meta'])
                                                         <span class="ml-1">{{ $screenshot['meta'] }}</span>
-                                                    <?php endif; ?>
+                                                    @endif
                                                 </div>
                                             </a>
-                                        <?php endforeach; ?>
+                                        @endforeach
                                     </div>
                                 </details>
-                            <?php endif; ?>
+                            @endif
                         </div>
-                        <?php endforeach; ?>
-                    <?php else: ?>
+                    @empty
                         <p class="text-sm text-slate-500">Noch keine Verlaufseintraege mit erkannten Aenderungen vorhanden.</p>
-                    <?php endif; ?>
+                    @endforelse
                 </div>
             </div>
             </div>

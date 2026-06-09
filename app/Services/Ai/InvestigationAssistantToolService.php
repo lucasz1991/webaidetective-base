@@ -2,11 +2,17 @@
 
 namespace App\Services\Ai;
 
+use App\Jobs\ScanInstagramProfileJob;
 use App\Jobs\RunTrackedPersonInstagramToolScan;
+use App\Livewire\User\NetworkMap;
+use App\Models\InstagramProfile;
+use App\Models\InstagramProfileListScanItem;
+use App\Models\InstagramProfileRelationship;
 use App\Models\TrackedPerson;
+use App\Models\TrackedPersonPublicProfile;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
-use Illuminate\Support\Arr;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -21,6 +27,8 @@ class InvestigationAssistantToolService
             'Du darfst Tools nutzen, um App-Kontext zu lesen oder erlaubte Aktionen auszufuehren.',
             'Starte kosten-/zeitintensive Scans nur, wenn der Nutzer es klar beauftragt oder bereits zustimmt. Sonst schlage den naechsten Schritt vor.',
             'Empfohlene Scan-Strategie: unbekanntes Profil zuerst Mini-Scan; oeffentliches Profil danach Follower/Gefolgt/Posts; privates Profil danach Suggestions; bei wichtigen Faellen Monitoring aktivieren.',
+            'Nutze Netzwerkdaten, Knotenanzahl, oeffentliche Kennzahlen und Scan-Alter, bevor du naechste Profile priorisierst.',
+            'Speichere neue Kontaktkandidaten nur, wenn der Nutzer das beauftragt oder eine Datei/Nachricht eindeutig Kontakte zur Speicherung enthaelt.',
             'Wenn ein Tool ausgefuehrt wurde, fasse das Ergebnis und den naechsten sinnvollen Schritt zusammen.',
         ]));
     }
@@ -42,6 +50,15 @@ class InvestigationAssistantToolService
                     'instagram_username' => ['type' => 'string'],
                 ],
             ]),
+            $this->tool('list_network_scan_candidates', 'Analysiere den gespeicherten Instagram-Graphen und liefere priorisierte Kandidaten fuer naechste Scans.', [
+                'type' => 'object',
+                'properties' => [
+                    'tracked_person_id' => ['type' => 'integer', 'description' => 'Optional: Fokusperson fuer den Graphen.'],
+                    'instagram_username' => ['type' => 'string', 'description' => 'Optional: Instagram-Handle der Fokusperson.'],
+                    'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 25],
+                    'include_known_profiles' => ['type' => 'boolean'],
+                ],
+            ]),
             $this->tool('create_or_update_tracked_person', 'Lege eine beobachtete Person an oder aktualisiere Basisdaten und Instagram-Handle.', [
                 'type' => 'object',
                 'properties' => [
@@ -51,6 +68,22 @@ class InvestigationAssistantToolService
                     'alias' => ['type' => 'string'],
                     'instagram_username' => ['type' => 'string'],
                     'notes' => ['type' => 'string'],
+                ],
+            ]),
+            $this->tool('save_contact_candidate', 'Speichere einen moeglichen Kontakt als bekannte oeffentliche Verbindung oder als beobachtete Person.', [
+                'type' => 'object',
+                'properties' => [
+                    'source_tracked_person_id' => ['type' => 'integer', 'description' => 'Person, zu deren Netzwerk der Kontakt gehoert. Wenn leer, wird die Hauptperson genutzt.'],
+                    'source_instagram_username' => ['type' => 'string'],
+                    'candidate_instagram_username' => ['type' => 'string'],
+                    'display_name' => ['type' => 'string'],
+                    'relationship_type' => [
+                        'type' => 'string',
+                        'enum' => ['public_connection', 'follows_target', 'followed_by_target', 'mutual'],
+                    ],
+                    'notes' => ['type' => 'string'],
+                    'promote_to_tracked_person' => ['type' => 'boolean'],
+                    'scan_now' => ['type' => 'boolean'],
                 ],
             ]),
             $this->tool('configure_monitoring', 'Aktiviere oder deaktiviere Monitoring fuer eine beobachtete Person.', [
@@ -75,6 +108,15 @@ class InvestigationAssistantToolService
                     'reason' => ['type' => 'string'],
                 ],
             ]),
+            $this->tool('dispatch_network_profile_scan', 'Starte eine Profil-Vollanalyse fuer einen Kontakt/Kandidaten aus dem Instagram-Graphen.', [
+                'type' => 'object',
+                'properties' => [
+                    'source_tracked_person_id' => ['type' => 'integer'],
+                    'source_instagram_username' => ['type' => 'string'],
+                    'candidate_instagram_username' => ['type' => 'string'],
+                    'reason' => ['type' => 'string'],
+                ],
+            ]),
             $this->tool('stop_active_scan', 'Fordere das Beenden eines laufenden Instagram-Scans fuer eine Person an.', [
                 'type' => 'object',
                 'properties' => [
@@ -95,9 +137,12 @@ class InvestigationAssistantToolService
         return match ($name) {
             'list_tracked_people' => $this->listTrackedPeople($user, $arguments),
             'get_profile_context' => $this->getProfileContext($user, $arguments),
+            'list_network_scan_candidates' => $this->listNetworkScanCandidates($user, $arguments),
             'create_or_update_tracked_person' => $this->createOrUpdateTrackedPerson($user, $arguments),
+            'save_contact_candidate' => $this->saveContactCandidate($user, $arguments),
             'configure_monitoring' => $this->configureMonitoring($user, $arguments),
             'dispatch_instagram_scan' => $this->dispatchInstagramScan($user, $arguments),
+            'dispatch_network_profile_scan' => $this->dispatchNetworkProfileScan($user, $arguments),
             'stop_active_scan' => $this->stopActiveScan($user, $arguments),
             default => $this->error('UNKNOWN_TOOL', 'Unbekanntes Tool: '.$name),
         };
@@ -177,6 +222,7 @@ class InvestigationAssistantToolService
         return [
             'ok' => true,
             'profile' => $this->trackedPersonSummary($person),
+            'network' => $this->profileNetworkSummary($user, $person),
             'recent_snapshots' => $person->instagramSnapshots->map(fn ($snapshot): array => [
                 'id' => (int) $snapshot->id,
                 'status_level' => $snapshot->status_level,
@@ -202,6 +248,55 @@ class InvestigationAssistantToolService
                 'scanned_at' => optional($scan->scanned_at)->toDateTimeString(),
             ])->values()->all(),
             'inferred_connections_count' => $person->instagramInferredConnections->count(),
+        ];
+    }
+
+    private function listNetworkScanCandidates($user, array $arguments): array
+    {
+        $limit = max(1, min(25, (int) ($arguments['limit'] ?? 10)));
+        $includeKnownProfiles = (bool) ($arguments['include_known_profiles'] ?? false);
+        $focusPerson = $this->resolveTrackedPerson($user, $arguments);
+        $knownProfileIds = $this->knownInstagramProfileIdsForUser($user);
+        $candidateIds = $this->candidateInstagramProfileIdsForUser($user, $focusPerson);
+
+        if ($candidateIds === []) {
+            return [
+                'ok' => true,
+                'message' => 'Es sind noch keine auswertbaren Profilverbindungen im Graphen gespeichert.',
+                'candidates' => [],
+            ];
+        }
+
+        $trackedUsernames = $user->trackedPeople()
+            ->whereNotNull('instagram_username')
+            ->pluck('instagram_username')
+            ->map(fn ($username) => $this->normalizeUsername($username))
+            ->filter()
+            ->values()
+            ->all();
+
+        $candidates = InstagramProfile::query()
+            ->whereIn('id', $candidateIds)
+            ->when(! $includeKnownProfiles, fn ($query) => $query->whereNotIn('id', $knownProfileIds))
+            ->whereNotIn('username', $trackedUsernames)
+            ->limit(250)
+            ->get()
+            ->map(fn (InstagramProfile $profile): array => $this->networkCandidateSummary($profile, $focusPerson))
+            ->sortByDesc('priority_score')
+            ->take($limit)
+            ->values()
+            ->all();
+
+        return [
+            'ok' => true,
+            'focus_profile' => $focusPerson ? $this->trackedPersonSummary($focusPerson) : null,
+            'scoring' => [
+                'degree' => 'Mehr direkte gespeicherte Beziehungen erhoehen Prioritaet.',
+                'public_counts' => 'Follower/Gefolgt/Posts geben grobe Reichweite und Datenmenge.',
+                'scan_age' => 'Nie oder lange nicht gescannte Profile werden hoeher gewichtet.',
+                'visibility' => 'Oeffentliche Profile sind fuer Listen-/Post-Scans wertvoller; private Profile eher fuer Suggestions.',
+            ],
+            'candidates' => $candidates,
         ];
     }
 
@@ -240,6 +335,97 @@ class InvestigationAssistantToolService
             'ok' => true,
             'message' => 'Beobachtete Person wurde gespeichert.',
             'profile' => $this->trackedPersonSummary($person->fresh('latestInstagramSnapshot')),
+        ];
+    }
+
+    private function saveContactCandidate($user, array $arguments): array
+    {
+        $candidateUsername = $this->normalizeUsername($arguments['candidate_instagram_username'] ?? null);
+
+        if (! $candidateUsername) {
+            return $this->error('MISSING_CANDIDATE_HANDLE', 'Zum Speichern brauche ich den Instagram-Namen des Kontakts.');
+        }
+
+        $sourcePerson = $this->resolveSourceTrackedPerson($user, $arguments);
+        $displayName = $this->nullableString($arguments['display_name'] ?? null);
+        $relationshipType = $this->validRelationshipType((string) ($arguments['relationship_type'] ?? 'public_connection'));
+        $notes = $this->nullableString($arguments['notes'] ?? null);
+        $promoteToTrackedPerson = (bool) ($arguments['promote_to_tracked_person'] ?? false);
+        $scanNow = (bool) ($arguments['scan_now'] ?? false);
+
+        $profile = app(InstagramProfileRelationshipStore::class)->ensureProfile($candidateUsername, [
+            'display_name' => $displayName,
+            'profile_url' => 'https://www.instagram.com/'.$candidateUsername.'/',
+        ]);
+
+        if (! $profile) {
+            return $this->error('PROFILE_STORE_UNAVAILABLE', 'Das Instagram-Profil konnte nicht im Graphen gespeichert werden.');
+        }
+
+        if ($promoteToTrackedPerson) {
+            $trackedPerson = $this->findTrackedPersonByProfile($user, $profile)
+                ?: $this->createTrackedPersonFromInstagramProfile($user, $profile, $displayName, $notes);
+
+            app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($trackedPerson);
+
+            if ($scanNow) {
+                RunTrackedPersonInstagramToolScan::dispatch((int) $trackedPerson->id, 'full', false);
+            }
+
+            NetworkMap::forgetGraphCacheForUser((int) $user->id);
+            NetworkMap::forgetGraphCacheForUser((int) $user->id, (int) $trackedPerson->id);
+
+            return [
+                'ok' => true,
+                'message' => $scanNow
+                    ? 'Kontakt wurde als beobachtete Person gespeichert und eine Instagram-Vollanalyse wurde gestartet.'
+                    : 'Kontakt wurde als beobachtete Person gespeichert.',
+                'profile' => $this->trackedPersonSummary($trackedPerson->fresh('latestInstagramSnapshot')),
+            ];
+        }
+
+        if (! $sourcePerson) {
+            return $this->error('SOURCE_PROFILE_REQUIRED', 'Zum Speichern als Kontakt brauche ich eine Fokusperson.');
+        }
+
+        $publicProfile = $sourcePerson->publicProfiles()->updateOrCreate(
+            [
+                'platform' => 'instagram',
+                'username' => $candidateUsername,
+            ],
+            [
+                'user_id' => $user->id,
+                'instagram_profile_id' => $profile->id,
+                'display_name' => $displayName ?: $profile->display_name ?: $profile->full_name,
+                'relationship_type' => $relationshipType,
+                'profile_url' => 'https://www.instagram.com/'.$candidateUsername.'/',
+                'is_public' => $profile->profile_visibility === 'public' || $profile->is_private === false,
+                'notes' => $notes,
+            ],
+        );
+
+        app(InstagramProfileRelationshipStore::class)->syncPublicProfile($publicProfile);
+
+        if ($scanNow) {
+            $this->queueNetworkProfileScan($user, $sourcePerson, $profile);
+        }
+
+        NetworkMap::forgetGraphCacheForUser((int) $user->id);
+        NetworkMap::forgetGraphCacheForUser((int) $user->id, (int) $sourcePerson->id);
+
+        return [
+            'ok' => true,
+            'message' => $scanNow
+                ? 'Kontakt wurde gespeichert und eine Profil-Vollanalyse wurde gestartet.'
+                : 'Kontakt wurde als bekannte oeffentliche Verbindung gespeichert.',
+            'contact' => [
+                'id' => (int) $publicProfile->id,
+                'tracked_person_id' => (int) $sourcePerson->id,
+                'instagram_profile_id' => (int) $profile->id,
+                'username' => $candidateUsername,
+                'display_name' => $publicProfile->display_name,
+                'relationship_type' => $publicProfile->relationship_type,
+            ],
         ];
     }
 
@@ -306,6 +492,37 @@ class InvestigationAssistantToolService
         ];
     }
 
+    private function dispatchNetworkProfileScan($user, array $arguments): array
+    {
+        $candidateUsername = $this->normalizeUsername($arguments['candidate_instagram_username'] ?? null);
+
+        if (! $candidateUsername) {
+            return $this->error('MISSING_CANDIDATE_HANDLE', 'Zum Scannen brauche ich den Instagram-Namen des Kontaktprofils.');
+        }
+
+        $sourcePerson = $this->resolveSourceTrackedPerson($user, $arguments);
+
+        if (! $sourcePerson) {
+            return $this->error('SOURCE_PROFILE_REQUIRED', 'Zum Scannen eines Netzwerkkontakts brauche ich eine Fokusperson.');
+        }
+
+        $profile = app(InstagramProfileRelationshipStore::class)->ensureProfile($candidateUsername);
+
+        if (! $profile) {
+            return $this->error('PROFILE_STORE_UNAVAILABLE', 'Das Instagram-Profil konnte nicht im Graphen vorbereitet werden.');
+        }
+
+        $this->queueNetworkProfileScan($user, $sourcePerson, $profile);
+
+        return [
+            'ok' => true,
+            'message' => 'Profil-Vollanalyse fuer @'.$candidateUsername.' wurde im Hintergrund gestartet.',
+            'reason' => $arguments['reason'] ?? null,
+            'source_profile' => $this->trackedPersonSummary($sourcePerson->fresh('latestInstagramSnapshot')),
+            'candidate' => $this->networkCandidateSummary($profile->fresh() ?: $profile, $sourcePerson),
+        ];
+    }
+
     private function stopActiveScan($user, array $arguments): array
     {
         $person = $this->resolveTrackedPerson($user, $arguments);
@@ -369,6 +586,284 @@ class InvestigationAssistantToolService
             'latest_snapshot_id' => $snapshot?->id,
             'latest_snapshot_has_changes' => (bool) ($snapshot?->has_changes ?? false),
         ];
+    }
+
+    private function profileNetworkSummary($user, TrackedPerson $person): array
+    {
+        $profile = $person->currentInstagramProfile
+            ?: app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($person);
+
+        if (! $profile) {
+            return [
+                'has_graph_profile' => false,
+                'active_relationships' => 0,
+                'scan_candidates' => [],
+            ];
+        }
+
+        $activeSourceCount = InstagramProfileRelationship::query()
+            ->where('source_instagram_profile_id', $profile->id)
+            ->where('status', 'active')
+            ->whereNull('removed_at')
+            ->count();
+        $activeRelatedCount = InstagramProfileRelationship::query()
+            ->where('related_instagram_profile_id', $profile->id)
+            ->where('status', 'active')
+            ->whereNull('removed_at')
+            ->count();
+
+        $candidateIds = $this->candidateInstagramProfileIdsForUser($user, $person);
+        $knownProfileIds = $this->knownInstagramProfileIdsForUser($user);
+
+        $candidates = InstagramProfile::query()
+            ->whereIn('id', $candidateIds)
+            ->whereNotIn('id', $knownProfileIds)
+            ->limit(80)
+            ->get()
+            ->map(fn (InstagramProfile $candidate): array => $this->networkCandidateSummary($candidate, $person))
+            ->sortByDesc('priority_score')
+            ->take(8)
+            ->values()
+            ->all();
+
+        return [
+            'has_graph_profile' => true,
+            'instagram_profile_id' => (int) $profile->id,
+            'active_outgoing_relationships' => $activeSourceCount,
+            'active_incoming_relationships' => $activeRelatedCount,
+            'active_relationships' => $activeSourceCount + $activeRelatedCount,
+            'scan_candidates' => $candidates,
+        ];
+    }
+
+    private function networkCandidateSummary(InstagramProfile $profile, ?TrackedPerson $focusPerson = null): array
+    {
+        $activeOutgoing = InstagramProfileRelationship::query()
+            ->where('source_instagram_profile_id', $profile->id)
+            ->where('status', 'active')
+            ->whereNull('removed_at')
+            ->count();
+        $activeIncoming = InstagramProfileRelationship::query()
+            ->where('related_instagram_profile_id', $profile->id)
+            ->where('status', 'active')
+            ->whereNull('removed_at')
+            ->count();
+        $latestListScan = $profile->listScans()->latest('scanned_at')->first();
+        $lastScannedAt = $profile->last_scanned_at ?: $latestListScan?->scanned_at;
+        $scanAgeDays = $lastScannedAt ? Carbon::parse($lastScannedAt)->diffInDays(now()) : null;
+        $degree = $activeOutgoing + $activeIncoming;
+        $followers = (int) ($profile->followers_count ?? 0);
+        $following = (int) ($profile->following_count ?? 0);
+        $posts = (int) ($profile->posts_count ?? 0);
+        $visibility = $profile->profile_visibility ?: ($profile->is_private === true ? 'private' : 'unknown');
+        $scanAgeScore = $scanAgeDays === null ? 35 : min(35, (int) floor($scanAgeDays / 3));
+        $visibilityScore = match ($visibility) {
+            'public' => 18,
+            'private' => 8,
+            default => 10,
+        };
+        $priorityScore = (int) round(
+            min(60, $degree * 9)
+            + min(35, log(max(1, $followers + 1), 10) * 8)
+            + min(25, log(max(1, $following + 1), 10) * 6)
+            + min(10, log(max(1, $posts + 1), 10) * 3)
+            + $scanAgeScore
+            + $visibilityScore
+        );
+
+        return [
+            'instagram_profile_id' => (int) $profile->id,
+            'username' => $profile->username,
+            'display_name' => $profile->display_name ?: $profile->full_name,
+            'profile_url' => $profile->profile_url ?: 'https://www.instagram.com/'.$profile->username.'/',
+            'visibility' => $visibility,
+            'followers_count' => $profile->followers_count,
+            'following_count' => $profile->following_count,
+            'posts_count' => $profile->posts_count,
+            'active_outgoing_relationships' => $activeOutgoing,
+            'active_incoming_relationships' => $activeIncoming,
+            'degree' => $degree,
+            'last_scanned_at' => optional($lastScannedAt)->toDateTimeString(),
+            'scan_age_days' => $scanAgeDays,
+            'last_status_level' => $profile->last_status_level,
+            'last_status_message' => $profile->last_status_message,
+            'priority_score' => $priorityScore,
+            'recommended_next_action' => $this->recommendedNetworkAction($profile, $scanAgeDays, $degree, $focusPerson),
+        ];
+    }
+
+    private function candidateInstagramProfileIdsForUser($user, ?TrackedPerson $focusPerson = null): array
+    {
+        $knownProfileIds = $this->knownInstagramProfileIdsForUser($user);
+        $focusProfile = $focusPerson?->currentInstagramProfile
+            ?: ($focusPerson ? app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($focusPerson) : null);
+
+        $relationships = InstagramProfileRelationship::query()
+            ->where('status', 'active')
+            ->whereNull('removed_at')
+            ->when($focusProfile, function ($query) use ($focusProfile) {
+                $query->where(function ($inner) use ($focusProfile) {
+                    $inner
+                        ->where('source_instagram_profile_id', $focusProfile->id)
+                        ->orWhere('related_instagram_profile_id', $focusProfile->id);
+                });
+            }, function ($query) use ($user, $knownProfileIds) {
+                $query->where(function ($inner) use ($user, $knownProfileIds) {
+                    $inner->whereHas('lastSeenScan', fn ($scan) => $scan->where('user_id', $user->id));
+
+                    if ($knownProfileIds !== []) {
+                        $inner
+                            ->orWhereIn('source_instagram_profile_id', $knownProfileIds)
+                            ->orWhereIn('related_instagram_profile_id', $knownProfileIds);
+                    }
+                });
+            })
+            ->latest('last_seen_at')
+            ->limit(1500)
+            ->get(['source_instagram_profile_id', 'related_instagram_profile_id']);
+
+        $relationshipIds = $relationships
+            ->flatMap(fn (InstagramProfileRelationship $relationship): array => [
+                (int) $relationship->source_instagram_profile_id,
+                (int) $relationship->related_instagram_profile_id,
+            ])
+            ->filter()
+            ->values();
+
+        $scanItemIds = InstagramProfileListScanItem::query()
+            ->whereHas('listScan', fn ($scan) => $scan->where('user_id', $user->id))
+            ->when($focusProfile, function ($query) use ($focusProfile) {
+                $query->where(function ($inner) use ($focusProfile) {
+                    $inner
+                        ->where('source_instagram_profile_id', $focusProfile->id)
+                        ->orWhere('related_instagram_profile_id', $focusProfile->id);
+                });
+            })
+            ->latest('observed_at')
+            ->limit(1500)
+            ->get(['source_instagram_profile_id', 'related_instagram_profile_id'])
+            ->flatMap(fn (InstagramProfileListScanItem $item): array => [
+                (int) $item->source_instagram_profile_id,
+                (int) $item->related_instagram_profile_id,
+            ])
+            ->filter()
+            ->values();
+
+        return $relationshipIds
+            ->merge($scanItemIds)
+            ->unique()
+            ->reject(fn (int $id): bool => $focusProfile && $id === (int) $focusProfile->id)
+            ->values()
+            ->all();
+    }
+
+    private function knownInstagramProfileIdsForUser($user): array
+    {
+        $trackedProfileIds = $user->trackedPeople()
+            ->whereNotNull('current_instagram_profile_id')
+            ->pluck('current_instagram_profile_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->all();
+
+        $publicProfileIds = TrackedPersonPublicProfile::query()
+            ->where('user_id', $user->id)
+            ->whereNotNull('instagram_profile_id')
+            ->pluck('instagram_profile_id')
+            ->map(fn ($id) => (int) $id)
+            ->filter()
+            ->all();
+
+        return array_values(array_unique([...$trackedProfileIds, ...$publicProfileIds]));
+    }
+
+    private function recommendedNetworkAction(
+        InstagramProfile $profile,
+        ?int $scanAgeDays,
+        int $degree,
+        ?TrackedPerson $focusPerson = null,
+    ): string {
+        if ($profile->last_scanned_at === null && $scanAgeDays === null) {
+            return 'Als Kontakt speichern und Profil-Vollanalyse starten.';
+        }
+
+        if ($scanAgeDays !== null && $scanAgeDays > 30) {
+            return 'Profil erneut scannen, weil die letzten Daten aelter als 30 Tage sind.';
+        }
+
+        if ($profile->profile_visibility === 'private' || $profile->is_private === true) {
+            return 'Bei Relevanz als Kontakt speichern; danach Suggestions ueber die Fokusperson pruefen.';
+        }
+
+        if ($degree >= 5) {
+            return 'Hoch vernetzter Knoten: Profil-Vollanalyse priorisieren.';
+        }
+
+        return 'Als mittlere Prioritaet beobachten und bei Fallrelevanz scannen.';
+    }
+
+    private function resolveSourceTrackedPerson($user, array $arguments): ?TrackedPerson
+    {
+        $sourceArguments = [
+            'tracked_person_id' => $arguments['source_tracked_person_id'] ?? $arguments['tracked_person_id'] ?? null,
+            'instagram_username' => $arguments['source_instagram_username'] ?? $arguments['instagram_username'] ?? null,
+        ];
+
+        return $this->resolveTrackedPerson($user, $sourceArguments)
+            ?: $user->trackedPeople()->orderByDesc('is_primary')->oldest('id')->first();
+    }
+
+    private function findTrackedPersonByProfile($user, InstagramProfile $profile): ?TrackedPerson
+    {
+        $username = $this->normalizeUsername($profile->username);
+
+        return $user->trackedPeople()
+            ->where(function ($query) use ($profile, $username) {
+                $query->where('current_instagram_profile_id', $profile->id)
+                    ->orWhereRaw('LOWER(TRIM(LEADING ? FROM instagram_username)) = ?', ['@', $username]);
+            })
+            ->first();
+    }
+
+    private function createTrackedPersonFromInstagramProfile($user, InstagramProfile $profile, ?string $displayName, ?string $notes): TrackedPerson
+    {
+        $name = trim((string) ($displayName ?: $profile->display_name ?: $profile->full_name ?: $profile->username));
+        $parts = preg_split('/\s+/', $name, 2) ?: [];
+
+        return $user->trackedPeople()->create([
+            'first_name' => $parts[0] ?? 'Instagram',
+            'last_name' => $parts[1] ?? '',
+            'alias' => $name,
+            'notes' => $notes,
+            'instagram_username' => $profile->username,
+            'current_instagram_profile_id' => $profile->id,
+            'instagram_followers_count' => $profile->followers_count,
+            'instagram_following_count' => $profile->following_count,
+            'instagram_posts_count' => $profile->posts_count,
+            'last_instagram_status_level' => $profile->last_status_level,
+            'last_instagram_status_message' => $profile->last_status_message,
+            'last_instagram_analyzed_at' => $profile->last_scanned_at,
+            'is_primary' => ! $user->trackedPeople()->where('is_primary', true)->exists(),
+        ]);
+    }
+
+    private function queueNetworkProfileScan($user, TrackedPerson $sourcePerson, InstagramProfile $profile): void
+    {
+        $profile->forceFill([
+            'last_status_level' => 'partial',
+            'last_status_message' => 'AI-Assistent hat eine Profil-Vollanalyse in die Warteschlange gestellt.',
+        ])->save();
+
+        ScanInstagramProfileJob::dispatch((int) $sourcePerson->id, (int) $profile->id, (int) $user->id);
+        NetworkMap::forgetGraphCacheForUser((int) $user->id);
+        NetworkMap::forgetGraphCacheForUser((int) $user->id, (int) $sourcePerson->id);
+    }
+
+    private function validRelationshipType(string $relationshipType): string
+    {
+        return in_array($relationshipType, ['public_connection', 'follows_target', 'followed_by_target', 'mutual'], true)
+            ? $relationshipType
+            : 'public_connection';
     }
 
     private function tool(string $name, string $description, array $parameters): array

@@ -9,9 +9,13 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Session;
 use Livewire\Component;
+use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
+use Livewire\WithFileUploads;
 
 class Chatbot extends Component
 {
+    use WithFileUploads;
+
     private const DISPLAY_HISTORY_KEY = 'investigation_assistant_display_history';
     private const TRANSCRIPT_KEY = 'investigation_assistant_transcript';
     private const TOOL_EVENTS_KEY = 'investigation_assistant_tool_events';
@@ -19,6 +23,7 @@ class Chatbot extends Component
     public string $message = '';
     public array $chatHistory = [];
     public array $toolEvents = [];
+    public array $uploads = [];
     public bool $isLoading = false;
 
     public $status;
@@ -58,17 +63,24 @@ class Chatbot extends Component
     public function sendMessage(): void
     {
         $userMessage = trim($this->message);
+        $attachmentContext = $this->buildAttachmentContext();
 
-        if ($userMessage === '') {
+        if ($userMessage === '' && $attachmentContext === '') {
             return;
         }
 
         $this->message = '';
         $this->isLoading = true;
-        $this->appendDisplayMessage('user', $userMessage);
+        $displayMessage = $userMessage !== '' ? $userMessage : 'Dateien zur Analyse hinzugefuegt.';
+
+        if ($attachmentContext !== '') {
+            $displayMessage .= "\n\n".'Anhang-Kontext wurde der AI mitgegeben.';
+        }
+
+        $this->appendDisplayMessage('user', $displayMessage);
 
         try {
-            $assistantMessage = $this->runAssistantConversation($userMessage);
+            $assistantMessage = $this->runAssistantConversation(trim($userMessage."\n\n".$attachmentContext));
             $this->appendDisplayMessage('assistant', $assistantMessage ?: 'Ich habe dazu gerade keine belastbare Antwort erhalten.');
         } catch (\Throwable $exception) {
             Log::warning('Investigation Assistant fehlgeschlagen.', [
@@ -81,6 +93,7 @@ class Chatbot extends Component
                 'error',
             );
         } finally {
+            $this->uploads = [];
             $this->isLoading = false;
         }
     }
@@ -95,6 +108,7 @@ class Chatbot extends Component
 
         $this->chatHistory = [];
         $this->toolEvents = [];
+        $this->uploads = [];
         $this->message = '';
     }
 
@@ -167,6 +181,67 @@ class Chatbot extends Component
         Session::put(self::TRANSCRIPT_KEY, $this->trimTranscript($transcript));
 
         return $this->sanitizeAssistantText($finalMessage);
+    }
+
+    private function buildAttachmentContext(): string
+    {
+        if ($this->uploads === []) {
+            return '';
+        }
+
+        $files = collect($this->uploads)
+            ->filter(fn ($file): bool => $file instanceof TemporaryUploadedFile)
+            ->take(4)
+            ->values();
+
+        if ($files->isEmpty()) {
+            return '';
+        }
+
+        $blocks = [];
+        $remainingCharacters = 24000;
+
+        foreach ($files as $file) {
+            $name = $file->getClientOriginalName();
+            $extension = strtolower((string) $file->getClientOriginalExtension());
+            $mime = (string) $file->getMimeType();
+            $size = (int) $file->getSize();
+            $text = '';
+
+            if ($this->attachmentIsReadableText($extension, $mime)) {
+                $raw = @file_get_contents($file->getRealPath());
+                $text = is_string($raw) ? $this->normalizeAttachmentText($raw) : '';
+            }
+
+            if ($text !== '' && $remainingCharacters > 0) {
+                $snippet = mb_substr($text, 0, $remainingCharacters);
+                $remainingCharacters -= mb_strlen($snippet);
+                $blocks[] = "Datei: {$name}\nMIME: {$mime}\nGroesse: {$size} Bytes\nInhalt:\n{$snippet}";
+            } else {
+                $blocks[] = "Datei: {$name}\nMIME: {$mime}\nGroesse: {$size} Bytes\nHinweis: Kein direkt lesbarer Text extrahiert. Nutze Dateiname und Nutzernachricht als Kontext.";
+            }
+        }
+
+        return "Vom Nutzer hinzugefuegte Dateien als Kontext:\n\n".implode("\n\n---\n\n", $blocks);
+    }
+
+    private function attachmentIsReadableText(string $extension, string $mime): bool
+    {
+        if (str_starts_with($mime, 'text/')) {
+            return true;
+        }
+
+        return in_array($extension, ['txt', 'csv', 'json', 'md', 'log', 'xml', 'html', 'yaml', 'yml'], true)
+            || in_array($mime, ['application/json', 'application/xml', 'application/x-yaml'], true);
+    }
+
+    private function normalizeAttachmentText(string $text): string
+    {
+        $text = preg_replace('/\x00+/', '', $text) ?? $text;
+        $text = preg_replace('/[ \t]+/', ' ', $text) ?? $text;
+        $text = preg_replace("/\R{3,}/", "\n\n", $text) ?? $text;
+
+        return trim($text);
     }
 
     private function baseTranscript(InvestigationAssistantToolService $toolService): array

@@ -5,9 +5,15 @@
         isLoading: @entangle('isLoading'),
         chatHistory: @entangle('chatHistory'),
         toolEvents: @entangle('toolEvents'),
+        voiceSupported: false,
+        listening: false,
+        recognition: null,
+        init() {
+            this.voiceSupported = ('SpeechRecognition' in window) || ('webkitSpeechRecognition' in window);
+        },
         send() {
-            if (!this.draft || this.draft.trim() === '' || this.isLoading) return;
-            $wire.set('message', this.draft);
+            if (this.isLoading) return;
+            $wire.set('message', this.draft || '');
             $wire.sendMessage();
         },
         quick(prompt) {
@@ -15,6 +21,38 @@
             this.draft = prompt;
             $wire.set('message', prompt);
             $wire.sendMessage();
+        },
+        toggleVoice() {
+            if (!this.voiceSupported || this.isLoading) return;
+
+            if (!this.recognition) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                this.recognition = new SpeechRecognition();
+                this.recognition.lang = 'de-DE';
+                this.recognition.continuous = false;
+                this.recognition.interimResults = false;
+                this.recognition.onresult = (event) => {
+                    let transcript = '';
+
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        transcript += event.results[i][0].transcript;
+                    }
+
+                    this.draft = `${this.draft || ''} ${transcript}`.trim();
+                    $wire.set('message', this.draft);
+                };
+                this.recognition.onend = () => this.listening = false;
+                this.recognition.onerror = () => this.listening = false;
+            }
+
+            if (this.listening) {
+                this.recognition.stop();
+                this.listening = false;
+                return;
+            }
+
+            this.listening = true;
+            this.recognition.start();
         }
     }"
     class="investigation-copilot"
@@ -49,7 +87,7 @@
             x-transition:leave="transition ease-in duration-150"
             x-transition:leave-start="translate-x-0"
             x-transition:leave-end="translate-x-full"
-            class="fixed bottom-0 right-0 top-0 z-50 flex w-[620px] max-w-full flex-col border-l border-slate-200 bg-white shadow-2xl"
+            class="fixed bottom-0 right-0 top-0 z-50 flex w-[680px] max-w-full flex-col border-l border-slate-200 bg-white shadow-2xl"
         >
             <header class="border-b border-slate-200 bg-slate-950 px-5 py-4 text-white">
                 <div class="flex items-start justify-between gap-4">
@@ -96,7 +134,7 @@
                             <div class="space-y-4">
                                 <div class="border border-slate-200 bg-white p-4">
                                     <p class="text-sm font-black text-slate-950">Bereit fuer Analyse und Steuerung.</p>
-                                    <p class="mt-2 text-sm leading-6 text-slate-600">Waehle eine Aktion oder stelle eine konkrete Frage zu Profilen, Scans, Monitoring oder Netzwerkaufbau.</p>
+                                    <p class="mt-2 text-sm leading-6 text-slate-600">Waehle eine Aktion, nutze Sprache oder gib Dateien mit Handles, Notizen und Kontaktlisten als Kontext hinzu.</p>
                                 </div>
 
                                 <div class="grid gap-2">
@@ -108,6 +146,9 @@
                                     </button>
                                     <button type="button" @click="quick('Welche Profile sollten ins Monitoring und welches Intervall ist sinnvoll?')" class="border border-slate-200 bg-white px-4 py-3 text-left text-sm font-bold text-slate-800 transition hover:border-emerald-300 hover:bg-emerald-50">
                                         Monitoring bewerten
+                                    </button>
+                                    <button type="button" @click="quick('Analysiere den gespeicherten Profilgraphen und liste die wichtigsten Kontaktkandidaten fuer den naechsten Scan.')" class="border border-slate-200 bg-white px-4 py-3 text-left text-sm font-bold text-slate-800 transition hover:border-emerald-300 hover:bg-emerald-50">
+                                        Kontaktkandidaten finden
                                     </button>
                                 </div>
                             </div>
@@ -155,18 +196,59 @@
                     </div>
 
                     <footer class="border-t border-slate-200 bg-white p-4">
+                        <div class="mb-3 flex flex-wrap items-center gap-2">
+                            <input
+                                x-ref="fileInput"
+                                type="file"
+                                wire:model="uploads"
+                                multiple
+                                class="hidden"
+                                accept=".txt,.csv,.json,.md,.log,.xml,.html,.yaml,.yml,.pdf,.png,.jpg,.jpeg,.webp"
+                            >
+                            <button
+                                type="button"
+                                x-on:click="$refs.fileInput.click()"
+                                :disabled="isLoading"
+                                class="inline-flex h-9 items-center gap-2 border border-slate-300 px-3 text-xs font-black uppercase tracking-[.12em] text-slate-700 transition hover:border-emerald-400 hover:text-emerald-800 disabled:opacity-50"
+                                title="Dateien hinzufuegen"
+                            >
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                </svg>
+                                Datei
+                            </button>
+                            <button
+                                type="button"
+                                x-on:click="toggleVoice()"
+                                :disabled="!voiceSupported || isLoading"
+                                class="inline-flex h-9 items-center gap-2 border px-3 text-xs font-black uppercase tracking-[.12em] transition disabled:cursor-not-allowed disabled:opacity-40"
+                                :class="listening ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-slate-300 text-slate-700 hover:border-emerald-400 hover:text-emerald-800'"
+                                title="Spracheingabe"
+                            >
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" stroke="currentColor" stroke-width="2"/>
+                                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                </svg>
+                                <span x-text="listening ? 'Hoert zu' : 'Sprache'"></span>
+                            </button>
+                            <span wire:loading wire:target="uploads" class="text-xs font-bold text-slate-500">Dateien werden vorbereitet...</span>
+                            @if(count($uploads) > 0)
+                                <span class="text-xs font-bold text-emerald-700">{{ count($uploads) }} Datei(en) bereit</span>
+                            @endif
+                        </div>
+
                         <div class="flex gap-2">
                             <textarea
                                 x-model="draft"
                                 x-on:keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send(); }"
-                                class="min-h-[46px] flex-1 resize-none border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 focus:border-emerald-500 focus:ring-0"
-                                placeholder="Profil analysieren, Scan starten oder naechste Schritte planen..."
+                                class="min-h-[54px] flex-1 resize-none border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 focus:border-emerald-500 focus:ring-0"
+                                placeholder="Profil analysieren, Kontakt speichern, Scan starten oder naechste Schritte planen..."
                             ></textarea>
                             <button
                                 type="button"
                                 @click="send()"
                                 :disabled="isLoading"
-                                class="inline-flex h-[46px] w-[46px] shrink-0 items-center justify-center bg-slate-950 text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                class="inline-flex h-[54px] w-[54px] shrink-0 items-center justify-center bg-slate-950 text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                                 title="Senden"
                             >
                                 <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
