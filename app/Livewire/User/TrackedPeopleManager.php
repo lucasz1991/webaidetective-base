@@ -76,6 +76,51 @@ class TrackedPeopleManager extends Component
         $this->showDetailModal = false;
     }
 
+    public function setMonitoringEnabled(int $trackedPersonId, bool $enabled): void
+    {
+        $trackedPerson = $this->trackedPersonForCurrentUser($trackedPersonId);
+
+        if (! $trackedPerson) {
+            return;
+        }
+
+        $trackedPerson->update([
+            'monitoring_enabled' => $enabled,
+            'monitoring_interval_minutes' => max(15, (int) ($trackedPerson->monitoring_interval_minutes ?: 60)),
+        ]);
+
+        $this->setManagerStatus(
+            $enabled
+                ? 'Dauerbeobachtung fuer "'.$trackedPerson->display_name.'" wurde aktiviert.'
+                : 'Dauerbeobachtung fuer "'.$trackedPerson->display_name.'" wurde deaktiviert.',
+            'success',
+        );
+    }
+
+    public function setMonitoringInterval(int $trackedPersonId, int $intervalMinutes): void
+    {
+        $trackedPerson = $this->trackedPersonForCurrentUser($trackedPersonId);
+
+        if (! $trackedPerson) {
+            return;
+        }
+
+        $allowedIntervals = [15, 30, 60, 120, 360, 720, 1440, 4320, 10080];
+        $intervalMinutes = in_array($intervalMinutes, $allowedIntervals, true)
+            ? $intervalMinutes
+            : 60;
+
+        $trackedPerson->update([
+            'monitoring_enabled' => true,
+            'monitoring_interval_minutes' => $intervalMinutes,
+        ]);
+
+        $this->setManagerStatus(
+            'Dauerbeobachtung fuer "'.$trackedPerson->display_name.'" laeuft jetzt alle '.$this->formatMonitoringInterval($intervalMinutes).'.',
+            'success',
+        );
+    }
+
     public function confirmTrackedPersonDeletion(int $trackedPersonId): void
     {
         $user = Auth::user();
@@ -242,6 +287,31 @@ class TrackedPeopleManager extends Component
     {
         $this->managerStatus = $message;
         $this->managerStatusLevel = $level;
+    }
+
+    private function trackedPersonForCurrentUser(int $trackedPersonId)
+    {
+        $user = Auth::user();
+
+        return $user
+            ? $user->trackedPeople()->whereKey($trackedPersonId)->first()
+            : null;
+    }
+
+    private function formatMonitoringInterval(int $minutes): string
+    {
+        return match ($minutes) {
+            15 => '15 Minuten',
+            30 => '30 Minuten',
+            60 => '1 Stunde',
+            120 => '2 Stunden',
+            360 => '6 Stunden',
+            720 => '12 Stunden',
+            1440 => '1 Tag',
+            4320 => '3 Tage',
+            10080 => '7 Tage',
+            default => $minutes.' Minuten',
+        };
     }
 
     private function nullableTrim(?string $value): ?string

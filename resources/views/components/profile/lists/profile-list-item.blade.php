@@ -42,6 +42,17 @@
     $monitoringIconClass = $trackedPerson->monitoring_enabled
         ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
         : 'border-slate-200 bg-slate-50 text-slate-500';
+    $monitoringIntervals = [
+        15 => '15 Min.',
+        30 => '30 Min.',
+        60 => '1 Std.',
+        120 => '2 Std.',
+        360 => '6 Std.',
+        720 => '12 Std.',
+        1440 => '1 Tag',
+        4320 => '3 Tage',
+        10080 => '7 Tage',
+    ];
     $initial = strtoupper(substr(ltrim($trackedPerson->instagram_username ?: $trackedPerson->display_name ?: 'I', '@'), 0, 1));
 @endphp
 
@@ -95,23 +106,42 @@
                 x-on:click.outside="monitoringOpen = false"
                 class="absolute right-0 top-10 z-40 w-64 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-xl"
             >
-                <div class="text-xs font-bold uppercase tracking-wide text-slate-500">Dauerbeobachtung</div>
-                <div class="mt-2 text-sm font-bold {{ $trackedPerson->monitoring_enabled ? 'text-indigo-700' : 'text-slate-700' }}">
-                    {{ $trackedPerson->monitoring_enabled ? 'Aktiv' : 'Inaktiv' }}
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <div class="text-xs font-bold uppercase tracking-wide text-slate-500">Dauerbeobachtung</div>
+                        <div class="mt-1 text-sm font-bold {{ $trackedPerson->monitoring_enabled ? 'text-indigo-700' : 'text-slate-700' }}">
+                            {{ $trackedPerson->monitoring_enabled ? 'Aktiv' : 'Inaktiv' }}
+                        </div>
+                    </div>
+                    <x-ui.forms.toggle-button
+                        id="monitoring-toggle-{{ $trackedPerson->id }}"
+                        :checked="(bool) $trackedPerson->monitoring_enabled"
+                        :change="'$wire.setMonitoringEnabled('.$trackedPerson->id.', $event.target.checked)'"
+                    />
                 </div>
-                <div class="mt-1 text-xs leading-5 text-slate-600">
-                    @if($trackedPerson->monitoring_enabled)
-                        Takt: alle {{ number_format($intervalMinutes) }} Minuten.
-                    @else
-                        Dieses Profil wird aktuell nicht automatisch beobachtet.
-                    @endif
+
+                <div class="mt-3">
+                    <label for="monitoring-interval-{{ $trackedPerson->id }}" class="mb-1 block text-xs font-bold text-slate-600">Takt</label>
+                    <select
+                        id="monitoring-interval-{{ $trackedPerson->id }}"
+                        x-on:change.stop="$wire.setMonitoringInterval({{ $trackedPerson->id }}, Number($event.target.value))"
+                        class="w-full rounded-md border border-slate-300 bg-white px-2 py-2 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    >
+                        @foreach($monitoringIntervals as $minutes => $label)
+                            <option value="{{ $minutes }}" @selected($intervalMinutes === $minutes)>{{ $label }}</option>
+                        @endforeach
+                    </select>
+                    <div class="mt-1 text-[11px] leading-4 text-slate-500">
+                        Eine Takt-Aenderung aktiviert die Dauerbeobachtung automatisch.
+                    </div>
                 </div>
+
                 <a
                     href="{{ route('tracked-people.show', $trackedPerson->id) }}"
                     wire:navigate
                     class="mt-3 inline-flex w-full items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
                 >
-                    Einstellungen oeffnen
+                    Weitere Einstellungen
                 </a>
             </div>
         </div>
