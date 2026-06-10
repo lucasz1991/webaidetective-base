@@ -5,6 +5,7 @@ namespace App\Livewire\Tools;
 use App\Models\Setting;
 use App\Services\Ai\InvestigationAssistantToolService;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Session;
@@ -29,7 +30,6 @@ class Chatbot extends Component
     public $status;
     public $assistantName;
     public $apiUrl;
-    public $apiKey;
     public $aiModel;
     public $modelTitle;
     public $refererUrl;
@@ -47,7 +47,6 @@ class Chatbot extends Component
         $this->status = (bool) Setting::getValue('ai_assistant', 'status');
         $this->assistantName = Setting::getValue('ai_assistant', 'assistant_name') ?: 'Investigation Copilot';
         $this->apiUrl = Setting::getValue('ai_assistant', 'api_url');
-        $this->apiKey = Setting::getValue('ai_assistant', 'api_key');
         $this->aiModel = Setting::getValue('ai_assistant', 'ai_model');
         $this->modelTitle = Setting::getValue('ai_assistant', 'model_title') ?: config('app.name');
         $this->refererUrl = Setting::getValue('ai_assistant', 'referer_url') ?: config('app.url');
@@ -269,8 +268,10 @@ class Chatbot extends Component
 
     private function requestAssistant(array $messages, array $tools): array
     {
+        $apiKey = $this->assistantApiKey();
+
         $response = Http::withHeaders([
-            'Authorization' => 'Bearer '.$this->apiKey,
+            'Authorization' => 'Bearer '.$apiKey,
             'HTTP-Referer' => $this->refererUrl,
             'X-Title' => $this->modelTitle,
             'Content-Type' => 'application/json',
@@ -379,9 +380,23 @@ class Chatbot extends Component
         return (bool) $this->status
             && is_string($this->apiUrl)
             && trim($this->apiUrl) !== ''
-            && is_string($this->apiKey)
-            && trim($this->apiKey) !== ''
+            && $this->assistantApiKey() !== ''
             && is_string($this->aiModel)
             && trim($this->aiModel) !== '';
+    }
+
+    private function assistantApiKey(): string
+    {
+        $value = Setting::getValue('ai_assistant', 'api_key');
+
+        if (! is_string($value) || trim($value) === '') {
+            return '';
+        }
+
+        try {
+            return Crypt::decryptString($value);
+        } catch (\Throwable) {
+            return trim($value);
+        }
     }
 }
