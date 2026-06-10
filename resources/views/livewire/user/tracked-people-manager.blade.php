@@ -15,32 +15,35 @@
     @endphp
 
     <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div class="border-b border-slate-200 px-4 py-4 sm:px-5">
-            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div class="border-b border-slate-200 px-2.5 py-2 sm:px-5 sm:py-4">
+            <div class="flex flex-col gap-1.5 sm:gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                    <h2 class="text-lg font-bold tracking-tight text-slate-950">Instagram-Uebersicht</h2>
-                    <p class="mt-1 text-sm text-slate-600">Profile, Kennzahlen, Scanstatus und Aenderungen im Instagram-Fokus.</p>
+                    <h2 class="text-[15px] sm:text-lg font-bold tracking-tight text-slate-950">Instagram-Uebersicht</h2>
+                    <p class="mt-0.5 text-[11px] sm:mt-1 sm:text-sm text-slate-600">
+                        Profile, Kennzahlen, Scanstatus und Aenderungen im Instagram-Fokus.
+                    </p>
                 </div>
+
                 <button
                     wire:click="toggleCreateForm"
-                    class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+                    class="inline-flex w-full sm:w-auto items-center justify-center rounded-md border border-slate-300 bg-white px-2 py-1 sm:px-3.5 sm:py-2 text-[11px] sm:text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 whitespace-nowrap"
                 >
                     {{ $showCreateForm ? 'Formular schliessen' : 'Instagram-Profil erfassen' }}
                 </button>
             </div>
 
-            <div class="mt-4 grid gap-2 sm:grid-cols-3">
-                <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
-                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Profile</div>
-                    <div class="mt-1 text-lg font-bold text-slate-950">{{ $instagramProfiles->count() }}</div>
+            <div class="mt-2 sm:mt-4 grid grid-cols-3 gap-1 sm:gap-2">
+                <div class="rounded-md border border-slate-200 bg-slate-50 px-2 py-1 sm:px-3 sm:py-2.5">
+                    <div class="text-[10px] sm:text-xs font-semibold uppercase tracking-wide text-slate-500 leading-3">Profile</div>
+                    <div class="mt-0.5 sm:mt-1 text-sm sm:text-lg font-bold text-slate-950">{{ $instagramProfiles->count() }}</div>
                 </div>
-                <div class="rounded-lg border border-indigo-200 bg-indigo-50/70 px-3 py-2.5">
-                    <div class="text-xs font-semibold uppercase tracking-wide text-indigo-700">Scan aktiv</div>
-                    <div class="mt-1 text-lg font-bold text-indigo-900">{{ $monitoredProfiles->count() }}</div>
+                <div class="rounded-md border border-indigo-200 bg-indigo-50/70 px-2 py-1 sm:px-3 sm:py-2.5">
+                    <div class="text-[10px] sm:text-xs font-semibold uppercase tracking-wide text-indigo-700 leading-3">Scan aktiv</div>
+                    <div class="mt-0.5 sm:mt-1 text-sm sm:text-lg font-bold text-indigo-900">{{ $monitoredProfiles->count() }}</div>
                 </div>
-                <div class="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2.5">
-                    <div class="text-xs font-semibold uppercase tracking-wide text-amber-700">Aenderungs-Alerts</div>
-                    <div class="mt-1 text-lg font-bold text-amber-900">{{ $alertProfiles->count() }}</div>
+                <div class="rounded-md border border-amber-200 bg-amber-50/70 px-2 py-1 sm:px-3 sm:py-2.5">
+                    <div class="text-[10px] sm:text-xs font-semibold uppercase tracking-wide text-amber-700 leading-3">Aenderungs-Alerts</div>
+                    <div class="mt-0.5 sm:mt-1 text-sm sm:text-lg font-bold text-amber-900">{{ $alertProfiles->count() }}</div>
                 </div>
             </div>
         </div>
