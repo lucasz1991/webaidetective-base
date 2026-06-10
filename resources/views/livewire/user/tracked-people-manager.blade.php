@@ -30,20 +30,7 @@
             </div>
         </div>
 
-        <div class="grid gap-px bg-slate-200 sm:grid-cols-3">
-            <div class="bg-white px-5 py-4">
-                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram-Profile</div>
-                <div class="mt-1 text-2xl font-bold text-slate-950">{{ number_format($instagramProfiles->count()) }}</div>
-            </div>
-            <div class="bg-white px-5 py-4">
-                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Dauerbeobachtung</div>
-                <div class="mt-1 text-2xl font-bold text-slate-950">{{ number_format($monitoredProfiles->count()) }}</div>
-            </div>
-            <div class="bg-white px-5 py-4">
-                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Benachrichtigungen</div>
-                <div class="mt-1 text-2xl font-bold text-slate-950">{{ number_format($alertProfiles->count()) }}</div>
-            </div>
-        </div>
+
 
         @if($managerStatus)
             <div class="mx-4 mt-4 rounded-lg border p-3 text-sm sm:mx-5 {{ $managerStatusClass }}">
