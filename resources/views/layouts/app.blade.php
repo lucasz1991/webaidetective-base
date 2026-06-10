@@ -27,7 +27,7 @@
         @livewireStyles
     </head>
     <body class=" antialiased ">
-        <div id="main" class="snap-y">
+        <div id="main bg-gray-100" class="snap-y">
             @livewire('user-alert')
             <header class="snap-start">
                 @livewire('user-navigation-menu')
