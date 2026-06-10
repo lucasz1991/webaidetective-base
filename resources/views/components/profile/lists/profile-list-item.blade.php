@@ -10,6 +10,14 @@
         ? $trackedPerson->last_instagram_analyzed_at->copy()->timezone(config('app.timezone'))
         : null;
     $intervalMinutes = max(1, (int) ($trackedPerson->monitoring_interval_minutes ?: 60));
+    $intervalSeconds = $intervalMinutes * 60;
+    $initialRemainingSeconds = 0;
+
+    if ($trackedPerson->monitoring_enabled && $lastAnalyzedAt) {
+        $nextScanAt = $lastAnalyzedAt->copy()->addMinutes($intervalMinutes);
+        $initialRemainingSeconds = max(0, now(config('app.timezone'))->diffInSeconds($nextScanAt, false));
+    }
+
     $intervalBadge = $intervalMinutes >= 1440
         ? floor($intervalMinutes / 1440).'d'
         : ($intervalMinutes >= 60 ? floor($intervalMinutes / 60).'h' : $intervalMinutes.'m');
@@ -53,7 +61,36 @@
 @endphp
 
 <article
-    x-data="{ monitoringOpen: false, statusOpen: false }"
+    x-data="{
+        monitoringOpen: false,
+        statusOpen: false,
+        remainingSeconds: {{ $initialRemainingSeconds }},
+        countdownTimer: null,
+        formatCountdown() {
+            const seconds = Math.max(0, Number(this.remainingSeconds || 0));
+            if (seconds >= 3600) {
+                return Math.floor(seconds / 3600) + 'h';
+            }
+            if (seconds >= 60) {
+                return Math.floor(seconds / 60) + 'm';
+            }
+            return seconds + 's';
+        },
+        startCountdown() {
+            if (!{{ $trackedPerson->monitoring_enabled ? 'true' : 'false' }}) {
+                return;
+            }
+            if (this.countdownTimer) {
+                clearInterval(this.countdownTimer);
+            }
+            this.countdownTimer = setInterval(() => {
+                if (this.remainingSeconds > 0) {
+                    this.remainingSeconds -= 1;
+                }
+            }, 1000);
+        }
+    }"
+    x-init="startCountdown()"
     x-on:keydown.escape.window="monitoringOpen = false; statusOpen = false"
     wire:key="tracked-person-instagram-card-{{ $trackedPerson->id }}"
     wire:click="selectTrackedPerson({{ $trackedPerson->id }})"
@@ -91,6 +128,10 @@
                 </svg>
                 @if($trackedPerson->monitoring_enabled)
                     <span class="absolute -bottom-1 -right-2 rounded-full border border-white bg-indigo-600 px-1 text-[8px] font-black leading-3 text-white shadow-sm">{{ $intervalBadge }}</span>
+                    <span
+                        class="absolute -top-1 -left-2 rounded-full border border-white bg-slate-900 px-1.5 text-[8px] font-bold leading-3 text-white shadow-sm"
+                        x-text="formatCountdown()"
+                    ></span>
                 @endif
             </button>
             <div

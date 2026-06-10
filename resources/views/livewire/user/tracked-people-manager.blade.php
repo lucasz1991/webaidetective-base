@@ -1,4 +1,4 @@
-<div class="space-y-5" wire:loading.class="cursor-wait" wire:poll.visible.10000ms>
+<div class="space-y-4" wire:loading.class="cursor-wait" wire:poll.visible.10000ms>
     @php
         $managerStatusClass = match ($managerStatusLevel ?? 'neutral') {
             'success' => 'border-emerald-200 bg-emerald-50 text-emerald-900',
@@ -14,23 +14,36 @@
         $alertProfiles = $instagramProfiles->filter(fn ($person) => $person->notify_social_changes && $person->notify_instagram_changes);
     @endphp
 
-    <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+    <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="border-b border-slate-200 px-4 py-4 sm:px-5">
-            <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                    <h2 class="text-lg font-bold text-slate-950">Instagram-Uebersicht</h2>
+                    <h2 class="text-lg font-bold tracking-tight text-slate-950">Instagram-Uebersicht</h2>
                     <p class="mt-1 text-sm text-slate-600">Profile, Kennzahlen, Scanstatus und Aenderungen im Instagram-Fokus.</p>
                 </div>
                 <button
                     wire:click="toggleCreateForm"
-                    class="inline-flex items-center justify-center rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+                    class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
                 >
                     {{ $showCreateForm ? 'Formular schliessen' : 'Instagram-Profil erfassen' }}
                 </button>
             </div>
+
+            <div class="mt-4 grid gap-2 sm:grid-cols-3">
+                <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                    <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Profile</div>
+                    <div class="mt-1 text-lg font-bold text-slate-950">{{ $instagramProfiles->count() }}</div>
+                </div>
+                <div class="rounded-lg border border-indigo-200 bg-indigo-50/70 px-3 py-2.5">
+                    <div class="text-xs font-semibold uppercase tracking-wide text-indigo-700">Scan aktiv</div>
+                    <div class="mt-1 text-lg font-bold text-indigo-900">{{ $monitoredProfiles->count() }}</div>
+                </div>
+                <div class="rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2.5">
+                    <div class="text-xs font-semibold uppercase tracking-wide text-amber-700">Aenderungs-Alerts</div>
+                    <div class="mt-1 text-lg font-bold text-amber-900">{{ $alertProfiles->count() }}</div>
+                </div>
+            </div>
         </div>
-
-
 
         @if($managerStatus)
             <div class="mx-4 mt-4 rounded-lg border p-3 text-sm sm:mx-5 {{ $managerStatusClass }}">
@@ -39,40 +52,39 @@
         @endif
 
         @if($showCreateForm)
-            <div class="border-t border-slate-200 bg-slate-50 px-4 py-5 sm:px-5">
+            <div class="border-t border-slate-200 bg-slate-50/70 px-4 py-5 sm:px-5">
                 <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.5fr)]">
                     <div class="grid gap-4 sm:grid-cols-2">
                         <div>
                             <label for="tracked-first-name" class="mb-1 block text-sm font-medium text-slate-700">Vorname</label>
-                            <input id="tracked-first-name" type="text" wire:model.defer="first_name" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500">
+                            <input id="tracked-first-name" type="text" wire:model.defer="first_name" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                             @error('first_name') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
                         </div>
                         <div>
                             <label for="tracked-last-name" class="mb-1 block text-sm font-medium text-slate-700">Nachname</label>
-                            <input id="tracked-last-name" type="text" wire:model.defer="last_name" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500">
+                            <input id="tracked-last-name" type="text" wire:model.defer="last_name" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                             @error('last_name') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
                         </div>
                         <div>
                             <label for="tracked-alias" class="mb-1 block text-sm font-medium text-slate-700">Alias</label>
-                            <input id="tracked-alias" type="text" wire:model.defer="alias" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500">
+                            <input id="tracked-alias" type="text" wire:model.defer="alias" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500">
                         </div>
                         <div>
                             <label for="tracked-instagram" class="mb-1 block text-sm font-medium text-slate-700">Instagram-Handle</label>
-                            <input id="tracked-instagram" type="text" wire:model.defer="instagram_username" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500" placeholder="@username">
+                            <input id="tracked-instagram" type="text" wire:model.defer="instagram_username" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500" placeholder="@username">
                         </div>
                         <div class="sm:col-span-2">
                             <label for="tracked-notes" class="mb-1 block text-sm font-medium text-slate-700">Interne Notiz</label>
-                            <textarea id="tracked-notes" wire:model.defer="notes" rows="3" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500"></textarea>
+                            <textarea id="tracked-notes" wire:model.defer="notes" rows="3" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"></textarea>
                         </div>
                     </div>
 
                     <div class="rounded-lg border border-slate-200 bg-white p-4">
-                        <div class="h-1.5 w-20 rounded-full bg-gradient-to-r from-amber-400 via-rose-500 to-fuchsia-600"></div>
-                        <h3 class="mt-4 text-base font-bold text-slate-950">Neuer Instagram-Datensatz</h3>
+                        <h3 class="text-base font-bold text-slate-900">Neuer Instagram-Datensatz</h3>
                         <p class="mt-2 text-sm leading-6 text-slate-600">
                             Nach dem Speichern kannst du den Mini-Scan oder die Vollanalyse direkt auf der Detailseite starten.
                         </p>
-                        <button wire:click="createTrackedPerson" class="mt-4 w-full rounded-lg bg-gradient-to-r from-rose-500 to-fuchsia-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-rose-600 hover:to-fuchsia-700">
+                        <button wire:click="createTrackedPerson" class="mt-4 w-full rounded-lg border border-indigo-200 bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700">
                             Profil speichern
                         </button>
                     </div>
@@ -81,7 +93,7 @@
         @endif
     </section>
 
-    <section class="grid gap-4 xl:grid-cols-2">
+    <section class="grid gap-3 xl:grid-cols-2">
         @forelse($trackedPeople as $trackedPerson)
             <x-profile.lists.profile-list-item
                 :tracked-person="$trackedPerson"
