@@ -7,6 +7,7 @@ use App\Models\InstagramPostScan;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\TrackedPersonInstagramSuggestionScan;
+use Illuminate\Support\Carbon;
 
 class TrackedPersonInstagramWorkflowService
 {
@@ -58,36 +59,45 @@ class TrackedPersonInstagramWorkflowService
                 || (! $fullScan && $metricFields !== [])
             )
         ) {
-            if ($progress) {
-                $progress([
-                    'phase' => 'suggestions',
-                    'percent' => 1,
-                    'message' => 'Privates Profil erkannt; Profilvorschlag-Verbindungsscan wird gestartet.',
-                    'foundSuggestions' => 0,
-                    'suggestionConnections' => [],
-                ]);
-            }
+            $recentSuggestionScan = ! $fullScan
+                ? $this->recentSuggestionScanWithinLastHour($trackedPerson)
+                : null;
 
-            try {
-                $privateSuggestionScan = $this->runSuggestionScan(
-                    $trackedPerson->fresh() ?: $trackedPerson,
-                    $progress,
-                );
-                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlag-Scan abgeschlossen mit '
-                    .number_format((int) $privateSuggestionScan->suggestion_matches_count, 0, ',', '.')
-                    .' gefundenen Vorschlag-Verbindungen.';
+            if ($recentSuggestionScan) {
+                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlag-Scan uebersprungen, weil der letzte Vorschlag-Scan erst vor weniger als 60 Minuten lief.';
                 $followUpMessages[] = trim($privateSuggestionScanMessage);
-            } catch (TrackedPersonInstagramScanCancelledException $exception) {
-                throw $exception;
-            } catch (\Throwable $exception) {
-                $privateSuggestionScanFailed = true;
-                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlag-Scan fehlgeschlagen: '.$exception->getMessage();
-                $followUpFailures[] = trim($privateSuggestionScanMessage);
+            } else {
+                if ($progress) {
+                    $progress([
+                        'phase' => 'suggestions',
+                        'percent' => 1,
+                        'message' => 'Privates Profil erkannt; Profilvorschlag-Verbindungsscan wird gestartet.',
+                        'foundSuggestions' => 0,
+                        'suggestionConnections' => [],
+                    ]);
+                }
 
-                ($trackedPerson->fresh() ?: $trackedPerson)->forceFill([
-                    'last_instagram_status_level' => 'partial',
-                    'last_instagram_status_message' => 'Instagram-Analyse abgeschlossen; Vorschlag-Scan fehlgeschlagen: '.$exception->getMessage(),
-                ])->save();
+                try {
+                    $privateSuggestionScan = $this->runSuggestionScan(
+                        $trackedPerson->fresh() ?: $trackedPerson,
+                        $progress,
+                    );
+                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlag-Scan abgeschlossen mit '
+                        .number_format((int) $privateSuggestionScan->suggestion_matches_count, 0, ',', '.')
+                        .' gefundenen Vorschlag-Verbindungen.';
+                    $followUpMessages[] = trim($privateSuggestionScanMessage);
+                } catch (TrackedPersonInstagramScanCancelledException $exception) {
+                    throw $exception;
+                } catch (\Throwable $exception) {
+                    $privateSuggestionScanFailed = true;
+                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlag-Scan fehlgeschlagen: '.$exception->getMessage();
+                    $followUpFailures[] = trim($privateSuggestionScanMessage);
+
+                    ($trackedPerson->fresh() ?: $trackedPerson)->forceFill([
+                        'last_instagram_status_level' => 'partial',
+                        'last_instagram_status_message' => 'Instagram-Analyse abgeschlossen; Vorschlag-Scan fehlgeschlagen: '.$exception->getMessage(),
+                    ])->save();
+                }
             }
         }
 
@@ -204,6 +214,14 @@ class TrackedPersonInstagramWorkflowService
             ->unique()
             ->values()
             ->all();
+    }
+
+    private function recentSuggestionScanWithinLastHour(TrackedPerson $trackedPerson): ?TrackedPersonInstagramSuggestionScan
+    {
+        return $trackedPerson->instagramSuggestionScans()
+            ->where('analyzed_at', '>=', Carbon::now('UTC')->subHour())
+            ->latest('analyzed_at')
+            ->first();
     }
 
     private function snapshotProfileVisibility(?TrackedPersonInstagramSnapshot $snapshot): string
