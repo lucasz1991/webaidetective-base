@@ -68,6 +68,7 @@ class TrackedPersonInstagramProfileListScanService
         ?callable $progress,
         array $relationships,
     ): Collection {
+        $progress = $this->createLiveProgressCallback($contextPerson, $profile, $progress);
         $relationships = collect($relationships)
             ->map(fn ($relationship): string => Str::lower(trim((string) $relationship)))
             ->filter(fn (string $relationship): bool => in_array($relationship, ['followers', 'following'], true))
@@ -217,6 +218,69 @@ class TrackedPersonInstagramProfileListScanService
         if ($progress) {
             $progress($payload);
         }
+    }
+
+    private function createLiveProgressCallback(
+        TrackedPerson $contextPerson,
+        InstagramProfile $profile,
+        ?callable $progress = null,
+    ): callable {
+        return function (array $state) use ($contextPerson, $profile, $progress): void {
+            try {
+                $this->persistRelationshipPreviewProgress($contextPerson, $profile, $state);
+            } catch (\Throwable) {
+                // Live-Fortschritt darf den eigentlichen Listen-Scan nicht abbrechen.
+            }
+
+            if ($progress) {
+                $progress($state);
+            }
+        };
+    }
+
+    private function persistRelationshipPreviewProgress(
+        TrackedPerson $contextPerson,
+        InstagramProfile $profile,
+        array $state,
+    ): void {
+        $this->assertActiveScanCurrent();
+
+        $phase = Str::lower(trim((string) ($state['phase'] ?? '')));
+
+        if (! in_array($phase, ['followers', 'following'], true)) {
+            return;
+        }
+
+        $items = collect(is_array($state['relationshipItems'] ?? null) ? $state['relationshipItems'] : [])
+            ->filter(fn ($item): bool => is_array($item) && filled($item['username'] ?? null))
+            ->values()
+            ->all();
+
+        if ($items === []) {
+            return;
+        }
+
+        $profile = $this->profileRelationshipStore->ensureProfile($profile->username, [
+            'display_name' => $profile->display_name,
+            'full_name' => $profile->full_name,
+            'profile_image_url' => $profile->profile_image_url,
+            'profile_image_path' => $profile->profile_image_path,
+            'profile_visibility' => $profile->profile_visibility,
+            'followers_count' => $profile->followers_count,
+            'following_count' => $profile->following_count,
+            'posts_count' => $profile->posts_count,
+            'last_status_level' => 'partial',
+            'last_status_message' => (string) ($state['message'] ?? 'Profil-Listen-Scan laeuft.'),
+            'last_scanned_at' => now('UTC'),
+        ]) ?: $profile;
+
+        $this->profileRelationshipStore->syncObservedRelationshipPreview(
+            $profile,
+            $contextPerson,
+            $phase,
+            $items,
+            now('UTC'),
+        );
     }
 
     private function payloadCanUpdateProfileVisibility(array $payload, array $relationshipList): bool

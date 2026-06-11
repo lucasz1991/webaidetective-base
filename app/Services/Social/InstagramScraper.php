@@ -742,6 +742,20 @@ class InstagramScraper
         return $progress;
     }
 
+    private function normalizeRelationshipProgress(array $event): array
+    {
+        if (
+            ! in_array((string) ($event['relationship'] ?? ''), ['followers', 'following'], true)
+            || ! array_key_exists('itemsPreview', $event)
+        ) {
+            return [];
+        }
+
+        return [
+            'relationshipItems' => $this->normalizeConnectionProgressItems($event['itemsPreview'] ?? null),
+        ];
+    }
+
     private function normalizeSuggestionDebugSamples(mixed $samples, int $limit): array
     {
         if (! is_array($samples)) {
@@ -844,6 +858,7 @@ class InstagramScraper
             'query' => $query,
             'message' => $this->nullableTrim($event['message'] ?? null)
                 ?: $this->buildProgressMessage($phase, $stage, $loaded, $expected, $openAttempt, $query),
+            ...$this->normalizeRelationshipProgress($event),
             ...$this->normalizeLiveScreenshotProgress($event),
             ...$this->normalizeSuggestionProgress($event),
             ...$this->normalizeScraperProfileProgress($event),

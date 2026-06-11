@@ -289,6 +289,82 @@ class InstagramProfileRelationshipStore
         return $scan;
     }
 
+    public function syncObservedRelationshipPreview(
+        InstagramProfile $sourceProfile,
+        ?TrackedPerson $trackedPerson,
+        string $listType,
+        array $items,
+        mixed $observedAt = null,
+    ): int {
+        if (! $this->isReady() || ! in_array($listType, ['followers', 'following'], true)) {
+            return 0;
+        }
+
+        $observedAt = $this->parseTimestamp($observedAt) ?: now('UTC');
+        $normalizedItems = $this->normalizeRelationshipItems($items);
+        $stored = 0;
+
+        foreach ($normalizedItems as $item) {
+            $relatedProfile = $this->ensureProfile($item['username'] ?? null, [
+                'display_name' => $item['displayName'] ?? null,
+                'profile_url' => $item['profileUrl'] ?? null,
+                'profile_image_url' => $item['profileImageUrl'] ?? $item['profile_image_url'] ?? null,
+                'is_private' => $item['isPrivate'] ?? null,
+                'profile_visibility' => $item['profileVisibility'] ?? null,
+                'followers_count' => $item['followersCount'] ?? null,
+                'following_count' => $item['followingCount'] ?? null,
+                'posts_count' => $item['postsCount'] ?? null,
+            ]);
+
+            if (! $relatedProfile) {
+                continue;
+            }
+
+            $firstSeenAt = $this->parseTimestamp($item['firstSeenAt'] ?? null) ?: $observedAt;
+            $lastSeenAt = $this->parseTimestamp($item['lastSeenAt'] ?? null) ?: $observedAt;
+            $relationship = InstagramProfileRelationship::withTrashed()
+                ->where('source_instagram_profile_id', $sourceProfile->id)
+                ->where('related_instagram_profile_id', $relatedProfile->id)
+                ->where('list_type', $listType)
+                ->first();
+
+            if ($relationship && $relationship->trashed()) {
+                $relationship->restore();
+            }
+
+            if (! $relationship) {
+                $relationship = new InstagramProfileRelationship([
+                    'source_instagram_profile_id' => $sourceProfile->id,
+                    'related_instagram_profile_id' => $relatedProfile->id,
+                    'list_type' => $listType,
+                    'first_seen_scan_id' => null,
+                    'first_seen_at' => $firstSeenAt,
+                ]);
+            }
+
+            $relationship->forceFill([
+                'last_seen_scan_id' => null,
+                'status' => 'active',
+                'display_name_snapshot' => $item['displayName'] ?? null,
+                'profile_url_snapshot' => $item['profileUrl'] ?? null,
+                'first_seen_at' => $relationship->first_seen_at ?: $firstSeenAt,
+                'last_seen_at' => $lastSeenAt,
+                'removed_scan_id' => null,
+                'removed_at' => null,
+                'evidence' => [
+                    'source' => 'progress_preview',
+                    'tracked_person_id' => $trackedPerson?->id,
+                    'last_item' => $item,
+                    'observed_at' => optional($observedAt)->toIso8601String(),
+                ],
+            ])->save();
+
+            $stored++;
+        }
+
+        return $stored;
+    }
+
     public function ensureProfile(mixed $username, array $attributes = []): ?InstagramProfile
     {
         if (! $this->isReady()) {

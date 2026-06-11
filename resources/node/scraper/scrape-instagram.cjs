@@ -1,6 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const { attachScanBilling } = require('./lib/scan-billing.cjs');
+const { runInstagramFullScanFlow } = require('./scrape-instagram-full.cjs');
+const { runInstagramListScanFlow } = require('./scrape-instagram-list.cjs');
+const { runInstagramPostsScanFlow } = require('./scrape-instagram-posts.cjs');
 const { runProfileSuggestionConnectionScan: runProfileSuggestionConnectionScanFromModule } = require('./scrape-instagram-suggestions.cjs');
 const {
   configureRuntimeEnvironment,
@@ -54,6 +57,16 @@ const isFollowersSearchMode = ['followers-search', 'search-followers'].includes(
 const isFollowingSearchMode = ['following-search', 'search-following'].includes(operationMode);
 const isSuggestionsMode = ['suggestions', 'profile-suggestions', 'suggestion-connections'].includes(operationMode);
 const isPostsMode = ['posts', 'post-scan'].includes(operationMode);
+const isFullScanMode = ['analyze', 'profile', 'basic', 'grunddaten'].includes(operationMode);
+const isListScanMode = [
+  'followers',
+  'following',
+  'followers-search',
+  'search-followers',
+  'following-search',
+  'search-following',
+  'public-connections-batch',
+].includes(operationMode);
 const isRelationshipSearchOnlyMode = isFollowersSearchMode || isFollowingSearchMode;
 const isRelationshipOnlyMode = isFollowersOnlyMode || isFollowingOnlyMode || isRelationshipSearchOnlyMode;
 const shouldCollectFollowers = operationMode === 'analyze' || isFollowersOnlyMode || isFollowersSearchMode;
@@ -1196,6 +1209,31 @@ function parseInstagramMetricCount(rawValue = '') {
   const decimalValue = Number.parseFloat(numericPart.replace(',', '.'));
 
   return Number.isFinite(decimalValue) ? Math.round(decimalValue * multiplier) : null;
+}
+
+function buildRelationshipProgressPreview(usersByUsername, limit = 60) {
+  if (!(usersByUsername instanceof Map)) {
+    return [];
+  }
+
+  return Array.from(usersByUsername.values())
+    .slice(0, Math.max(1, limit))
+    .map((item) => ({
+      username: item.username || null,
+      displayName: item.displayName || null,
+      profileUrl: item.profileUrl || null,
+      profileImageUrl: item.profileImageUrl || null,
+      profileVisibility: item.profileVisibility || null,
+      isPrivate: typeof item.isPrivate === 'boolean' ? item.isPrivate : null,
+      postsCount: hasFiniteNumericValue(item.postsCount) ? Number(item.postsCount) : null,
+      followersCount: hasFiniteNumericValue(item.followersCount) ? Number(item.followersCount) : null,
+      followingCount: hasFiniteNumericValue(item.followingCount) ? Number(item.followingCount) : null,
+      hoverCard: item.hoverCard && typeof item.hoverCard === 'object' ? item.hoverCard : null,
+      firstSeenAt: item.firstSeenAt || null,
+      lastSeenAt: item.lastSeenAt || null,
+      sourceLists: Array.isArray(item.sourceLists) ? item.sourceLists : [],
+    }))
+    .filter((item) => item.username);
 }
 
 function extractPostMetricFromHtml(html = '', keys = []) {
@@ -3672,6 +3710,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
         unchangedRounds,
         atBottom: Boolean(lastScrollState?.atBottom),
         suggestionsVisible,
+        itemsPreview: buildRelationshipProgressPreview(usersByUsername),
         ...livePreview,
       });
 
@@ -3733,6 +3772,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
       maxScrollRounds,
       complete: targetReached(),
       reason: stopReason,
+      itemsPreview: buildRelationshipProgressPreview(usersByUsername),
     });
 
     await closeInstagramDialog(page);
@@ -3824,6 +3864,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
       searchExpandedQueryCount: result.searchExpandedQueryCount,
       reason: result.searchStopReason,
       complete: targetReached(),
+      itemsPreview: buildRelationshipProgressPreview(usersByUsername),
     });
 
     if (searchResult.gracefullyStopped) {
@@ -3875,6 +3916,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     complete: result.complete,
     reason: result.reason,
     rateLimited: result.rateLimited,
+    itemsPreview: buildRelationshipProgressPreview(usersByUsername),
   });
 
   return result;
@@ -8211,225 +8253,178 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       usedAccountKeys: new Set([getScraperAccountKey(runtimeConfig)].filter(Boolean)),
       cookieSaveDisabled: false,
     };
-
-    if (operationMode === 'public-connections-batch') {
-      const targetUsername = normalizeInstagramUsername(runtimeConfig.relationshipSearchTargetUsername || '');
-      const batchPayload = await runPublicConnectionBatch(
-        page,
-        runtimeState,
-        notes,
-        username,
-        targetUsername,
-        {
-          screenshotPath: artifacts.screenshotPath,
-        },
-      );
-      debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
-      const responsePayload = attachScanBilling({
-        ...batchPayload,
-        username,
-        finalUrl: page.url(),
-        htmlBytes: 0,
-        htmlPath: null,
-        htmlPreview: '',
-        notes: dedupe(notes),
-        cookieDiagnostics,
-        loginDiagnostics,
-        profile: null,
-        profileUrl,
-        screenshotPath: debugScreenshotPath,
-        scrapedAt: new Date().toISOString(),
-        screenshotMode: debugScreenshotPath ? 'page' : null,
-        title: await page.title().catch(() => null),
-        warnings: dedupe([
-          ...consoleMessages,
-          ...(cookieDiagnostics.warnings || []),
-          ...(loginDiagnostics.warnings || []),
-        ]),
-        durationMs: Date.now() - startedAt,
+    let gracefullyStopped = false;
+    const scanState = {
+      runtimeConfig,
+      cookieFilePath,
+      cookieDiagnostics,
+      loginDiagnostics,
+      initialHtml,
+      initialProfile,
+      title,
+      finalUrl,
+      postsScanResult,
+      suggestionScanResult,
+      gracefullyStopped,
+      batchPayload: null,
+    };
+    const flowContext = {
+      page,
+      username,
+      profileUrl,
+      runtimeState,
+      notes,
+      consoleMessages,
+      scanState,
+      flags: {
         operationMode,
-        debugLogPath,
-      }, runtimeConfig);
-      flushRunDebug(responsePayload);
-      console.log(JSON.stringify(responsePayload));
+        artifacts,
+        shouldCollectFollowers,
+        shouldCollectFollowing,
+      },
+      helpers: {
+        captureLivePreviewScreenshot,
+        collectInstagramPosts,
+        collectProfileInfo,
+        collectRelationshipListWithAccountSwitches,
+        markGracefulStopIfRequested,
+        navigateWithSoftTimeout,
+        normalizeInstagramUsername,
+        progressLog,
+        runPublicConnectionBatch,
+        sleep,
+      },
+    };
 
-      return;
-    }
+    if (isFullScanMode) {
+      await runInstagramFullScanFlow(flowContext);
+    } else if (isListScanMode) {
+      await runInstagramListScanFlow(flowContext);
 
-    progressLog('profile-opening', {
-      relationship: null,
-      url: profileUrl,
-    });
+      if (scanState.batchPayload) {
+        runtimeConfig = scanState.runtimeConfig;
+        cookieFilePath = scanState.cookieFilePath;
+        cookieDiagnostics = scanState.cookieDiagnostics;
+        loginDiagnostics = scanState.loginDiagnostics;
+        debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
+        const responsePayload = attachScanBilling({
+          ...scanState.batchPayload,
+          username,
+          finalUrl: page.url(),
+          htmlBytes: 0,
+          htmlPath: null,
+          htmlPreview: '',
+          notes: dedupe(notes),
+          cookieDiagnostics,
+          loginDiagnostics,
+          profile: null,
+          profileUrl,
+          screenshotPath: debugScreenshotPath,
+          scrapedAt: new Date().toISOString(),
+          screenshotMode: debugScreenshotPath ? 'page' : null,
+          title: await page.title().catch(() => null),
+          warnings: dedupe([
+            ...consoleMessages,
+            ...(cookieDiagnostics.warnings || []),
+            ...(loginDiagnostics.warnings || []),
+          ]),
+          durationMs: Date.now() - startedAt,
+          operationMode,
+          debugLogPath,
+        }, runtimeConfig);
+        flushRunDebug(responsePayload);
+        console.log(JSON.stringify(responsePayload));
 
-    const profileNavigation = await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
+        return;
+      }
+    } else if (isPostsMode) {
+      await runInstagramPostsScanFlow(flowContext);
+    } else {
+      progressLog('profile-opening', {
+        relationship: null,
+        url: profileUrl,
+      });
 
-    if (!profileNavigation.ok) {
-      notes.push(`Profilseite konnte nicht stabil geladen werden: ${profileNavigation.error}`);
-    }
+      const profileNavigation = await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
 
-    progressLog('profile-page-loaded', {
-      relationship: null,
-      url: page.url(),
-      ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
-    });
+      if (!profileNavigation.ok) {
+        notes.push(`Profilseite konnte nicht stabil geladen werden: ${profileNavigation.error}`);
+      }
 
-    await sleep(1800);
+      progressLog('profile-page-loaded', {
+        relationship: null,
+        url: page.url(),
+        ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+      });
 
-    initialHtml = await page.content();
-    initialProfile = await collectProfileInfo(page, username);
-    title = await page.title().catch(() => null);
-    finalUrl = page.url();
+      await sleep(1800);
 
-    progressLog('profile-collected', {
-      usernameSeen: Boolean(initialProfile.usernameSeen),
-      isPrivate: Boolean(initialProfile.isPrivate),
-      requiresLogin: Boolean(initialProfile.requiresLogin),
-      imageCount: initialProfile.imageCount || 0,
-      ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
-    });
-
-    let gracefullyStopped = Boolean(markGracefulStopIfRequested(null, {
-      loaded: 0,
-      expectedCount: 0,
-    }));
-
-    if (gracefullyStopped) {
-      notes.push('Instagram-Scan wurde ueber die Oberflaeche nach den Grunddaten beendet.');
-    }
-
-    if (isPostsMode && !gracefullyStopped) {
-      postsScanResult = await collectInstagramPosts(
-        page,
-        initialProfile,
-        username,
-        profileUrl,
-        runtimeConfig,
-      );
-      initialProfile.postsScan = postsScanResult;
-      initialHtml = await page.content().catch(() => initialHtml);
-      title = await page.title().catch(() => title);
+      initialHtml = await page.content();
+      initialProfile = await collectProfileInfo(page, username);
+      title = await page.title().catch(() => null);
       finalUrl = page.url();
 
-      if (postsScanResult.gracefullyStopped) {
-        gracefullyStopped = true;
+      progressLog('profile-collected', {
+        usernameSeen: Boolean(initialProfile.usernameSeen),
+        isPrivate: Boolean(initialProfile.isPrivate),
+        requiresLogin: Boolean(initialProfile.requiresLogin),
+        imageCount: initialProfile.imageCount || 0,
+        ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+      });
+
+      gracefullyStopped = Boolean(markGracefulStopIfRequested(null, {
+        loaded: 0,
+        expectedCount: 0,
+      }));
+
+      if (gracefullyStopped) {
+        notes.push('Instagram-Scan wurde ueber die Oberflaeche nach den Grunddaten beendet.');
+      }
+
+      if (isSuggestionsMode && !gracefullyStopped) {
+        suggestionScanResult = await runProfileSuggestionConnectionScan(
+          page,
+          runtimeState,
+          notes,
+          username,
+          profileUrl,
+        );
+        initialProfile.suggestionScan = suggestionScanResult;
+        initialHtml = await page.content().catch(() => initialHtml);
+        title = await page.title().catch(() => title);
+        finalUrl = page.url();
+
+        if (suggestionScanResult.gracefullyStopped) {
+          gracefullyStopped = true;
+        }
       }
     }
 
-    if (isSuggestionsMode && !gracefullyStopped) {
-      suggestionScanResult = await runProfileSuggestionConnectionScan(
-        page,
-        runtimeState,
-        notes,
-        username,
-        profileUrl,
-      );
-      initialProfile.suggestionScan = suggestionScanResult;
-      initialHtml = await page.content().catch(() => initialHtml);
-      title = await page.title().catch(() => title);
-      finalUrl = page.url();
-
-      if (suggestionScanResult.gracefullyStopped) {
-        gracefullyStopped = true;
-      }
+    if (!isFullScanMode && !isListScanMode && !isPostsMode) {
+      scanState.runtimeConfig = runtimeState.runtimeConfig;
+      scanState.cookieFilePath = runtimeState.cookieFilePath;
+      scanState.cookieDiagnostics = runtimeState.cookieDiagnostics;
+      scanState.loginDiagnostics = runtimeState.loginDiagnostics;
+      scanState.initialHtml = initialHtml;
+      scanState.initialProfile = initialProfile;
+      scanState.title = title;
+      scanState.finalUrl = finalUrl;
+      scanState.postsScanResult = postsScanResult;
+      scanState.suggestionScanResult = suggestionScanResult;
+      scanState.gracefullyStopped = gracefullyStopped;
     }
 
-    if (shouldCollectFollowers && !gracefullyStopped) {
-      const followersResult = await collectRelationshipListWithAccountSwitches(
-        page,
-        username,
-        initialProfile,
-        'followers',
-        runtimeState,
-        notes,
-        profileUrl,
-      );
-
-      initialProfile = followersResult.profile;
-      initialProfile.followersList = followersResult.list;
-      runtimeConfig = runtimeState.runtimeConfig;
-      cookieFilePath = runtimeState.cookieFilePath;
-      cookieDiagnostics = runtimeState.cookieDiagnostics;
-      loginDiagnostics = runtimeState.loginDiagnostics;
-
-      if (followersResult.html !== null) {
-        initialHtml = followersResult.html;
-      }
-
-      if (followersResult.title !== null) {
-        title = followersResult.title;
-      }
-
-      finalUrl = followersResult.finalUrl || page.url();
-
-      if (initialProfile.followersList?.rateLimited) {
-        notes.push('Instagram hat die Followerliste per Rate-Limit-Meldung blockiert; die Listenphase wurde abgebrochen.');
-        consoleMessages.push('rate-limit: instagram-rate-limit followers');
-      } else if (initialProfile.followersList?.listTemporarilyUnavailable) {
-        notes.push('Followerliste zeigte waehrend des Scans ploetzlich keine Profile mehr; mit der naechsten Listenphase wird fortgesetzt.');
-      } else if (initialProfile.followersList?.gracefullyStopped) {
-        gracefullyStopped = true;
-        notes.push('Followerliste wurde ueber die Oberflaeche beendet; bisherige Eintraege werden gespeichert.');
-      } else if (initialProfile.followersList?.available) {
-        notes.push(`Followerliste ausgelesen: ${initialProfile.followersList.count} Eintraege.`);
-      } else if (initialProfile.followersList?.attempted) {
-        notes.push('Followerliste konnte nicht ausgelesen werden.');
-      }
-
-      if (page.url().includes('/followers')) {
-        await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
-        await sleep(900);
-      }
-    }
-
-    if (shouldCollectFollowing && !gracefullyStopped) {
-      const followingResult = await collectRelationshipListWithAccountSwitches(
-        page,
-        username,
-        initialProfile,
-        'following',
-        runtimeState,
-        notes,
-        profileUrl,
-      );
-
-      initialProfile = followingResult.profile;
-      initialProfile.followingList = followingResult.list;
-      runtimeConfig = runtimeState.runtimeConfig;
-      cookieFilePath = runtimeState.cookieFilePath;
-      cookieDiagnostics = runtimeState.cookieDiagnostics;
-      loginDiagnostics = runtimeState.loginDiagnostics;
-
-      if (followingResult.html !== null) {
-        initialHtml = followingResult.html;
-      }
-
-      if (followingResult.title !== null) {
-        title = followingResult.title;
-      }
-
-      finalUrl = followingResult.finalUrl || page.url();
-
-      if (initialProfile.followingList?.rateLimited) {
-        notes.push('Instagram hat die Gefolgt-Liste per Rate-Limit-Meldung blockiert; die Listenphase wurde abgebrochen.');
-        consoleMessages.push('rate-limit: instagram-rate-limit following');
-      } else if (initialProfile.followingList?.listTemporarilyUnavailable) {
-        notes.push('Gefolgt-Liste zeigte waehrend des Scans ploetzlich keine Profile mehr; die Listenphase wurde beendet.');
-      } else if (initialProfile.followingList?.gracefullyStopped) {
-        gracefullyStopped = true;
-        notes.push('Gefolgt-Liste wurde ueber die Oberflaeche beendet; bisherige Eintraege werden gespeichert.');
-      } else if (initialProfile.followingList?.available) {
-        notes.push(`Gefolgt-Liste ausgelesen: ${initialProfile.followingList.count} Eintraege.`);
-      } else if (initialProfile.followingList?.attempted) {
-        notes.push('Gefolgt-Liste konnte nicht ausgelesen werden.');
-      }
-
-      if (page.url().includes('/followers') || page.url().includes('/following')) {
-        await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
-        await sleep(900);
-      }
-    }
-
-    finalUrl = page.url();
+    runtimeConfig = scanState.runtimeConfig;
+    cookieFilePath = scanState.cookieFilePath;
+    cookieDiagnostics = scanState.cookieDiagnostics;
+    loginDiagnostics = scanState.loginDiagnostics;
+    initialHtml = scanState.initialHtml;
+    initialProfile = scanState.initialProfile;
+    title = scanState.title;
+    finalUrl = scanState.finalUrl || page.url();
+    postsScanResult = scanState.postsScanResult;
+    suggestionScanResult = scanState.suggestionScanResult;
+    gracefullyStopped = Boolean(scanState.gracefullyStopped);
 
     if (finalUrl.includes('/accounts/login')) {
       notes.push('Instagram hat den Seitenaufruf direkt auf die Login-Seite umgeleitet.');

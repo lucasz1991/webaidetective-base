@@ -28,6 +28,10 @@ class TrackedPersonInstagramAnalysisService
 
     private ?array $activeScanControl = null;
 
+    private ?TrackedPersonInstagramSnapshot $activeProgressSnapshot = null;
+
+    private array $progressSnapshotThrottle = [];
+
     public function analyze(
         TrackedPerson $trackedPerson,
         ?callable $progress = null,
@@ -59,6 +63,8 @@ class TrackedPersonInstagramAnalysisService
             $lock->release();
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
             $this->activeScanControl = null;
+            $this->activeProgressSnapshot = null;
+            $this->progressSnapshotThrottle = [];
         }
     }
 
@@ -98,6 +104,8 @@ class TrackedPersonInstagramAnalysisService
             $lock->release();
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
             $this->activeScanControl = null;
+            $this->activeProgressSnapshot = null;
+            $this->progressSnapshotThrottle = [];
         }
     }
 
@@ -106,6 +114,8 @@ class TrackedPersonInstagramAnalysisService
         ?callable $progress = null,
         bool $fullScan = false,
     ): TrackedPersonInstagramSnapshot {
+        $progress = $this->createTrackedPersonProgressCallback($trackedPerson, $progress);
+
         $this->reportProgress($progress, [
             'phase' => 'start',
             'percent' => 1,
@@ -291,6 +301,8 @@ class TrackedPersonInstagramAnalysisService
             ($fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' @'.$trackedPerson->instagram_username,
         );
 
+        $this->discardActiveProgressSnapshot($snapshot->id);
+
         return $snapshot->fresh('media');
     }
 
@@ -299,6 +311,7 @@ class TrackedPersonInstagramAnalysisService
         string $relationship,
         ?callable $progress = null,
     ): TrackedPersonInstagramSnapshot {
+        $progress = $this->createTrackedPersonProgressCallback($trackedPerson, $progress);
         $isFollowers = $relationship === 'followers';
         $label = $isFollowers ? 'Followerliste' : 'Gefolgt-Liste';
         $payloadKey = $isFollowers ? 'followersList' : 'followingList';
@@ -520,7 +533,280 @@ class TrackedPersonInstagramAnalysisService
             'Instagram-'.$label.' @'.$trackedPerson->instagram_username,
         );
 
+        $this->discardActiveProgressSnapshot($snapshot->id);
+
         return $snapshot->fresh('media');
+    }
+
+    private function createTrackedPersonProgressCallback(
+        TrackedPerson $trackedPerson,
+        ?callable $progress = null,
+    ): callable {
+        return function (array $state) use ($trackedPerson, $progress): void {
+            try {
+                $this->persistTrackedPersonProgressSnapshot($trackedPerson, $state);
+            } catch (\Throwable) {
+                // Live-Fortschritt darf den laufenden Scan nicht abbrechen.
+            }
+
+            if ($progress) {
+                $progress($state);
+            }
+        };
+    }
+
+    private function persistTrackedPersonProgressSnapshot(TrackedPerson $trackedPerson, array $state): void
+    {
+        $this->assertActiveScanCurrent();
+
+        $phase = Str::lower(trim((string) ($state['phase'] ?? 'analysis')));
+        $stage = Str::lower(trim((string) ($state['stage'] ?? '')));
+
+        if (! in_array($phase, ['profile', 'followers', 'following', 'done', 'error'], true)) {
+            return;
+        }
+
+        if (! $this->shouldPersistProgressSnapshotState($phase, $stage, $state)) {
+            return;
+        }
+
+        $trackedPerson = $trackedPerson->fresh(['latestInstagramSnapshot']) ?: $trackedPerson;
+        $existingSnapshot = $this->activeProgressSnapshot?->fresh();
+        $baselineSnapshot = $existingSnapshot ?: $this->previousComparableSnapshot($trackedPerson);
+        $existingPayload = is_array($existingSnapshot?->raw_payload) ? $existingSnapshot->raw_payload : [];
+        $existingExtractedProfile = is_array(data_get($existingPayload, 'extractedProfile'))
+            ? data_get($existingPayload, 'extractedProfile')
+            : [];
+        $baselineExtractedProfile = is_array(data_get($baselineSnapshot?->raw_payload, 'extractedProfile'))
+            ? data_get($baselineSnapshot?->raw_payload, 'extractedProfile')
+            : [];
+        $relationshipItems = $this->normalizeProgressRelationshipItems($state['relationshipItems'] ?? []);
+        $now = now('UTC');
+        $statusLevel = $phase === 'error' ? 'error' : 'partial';
+        $statusMessage = (string) ($state['message'] ?? 'Instagram-Scan laeuft; Zwischenstand wird gespeichert.');
+        $extractedProfile = array_merge([
+            'fullName' => $existingSnapshot?->full_name ?: $baselineSnapshot?->full_name,
+            'biography' => $existingSnapshot?->biography ?: $baselineSnapshot?->biography,
+            'isPrivate' => data_get($existingExtractedProfile, 'isPrivate', data_get($baselineExtractedProfile, 'isPrivate')),
+            'profileVisibility' => data_get($existingExtractedProfile, 'profileVisibility', data_get($baselineExtractedProfile, 'profileVisibility', 'unknown')),
+            'postsCount' => $existingSnapshot?->posts_count ?? $trackedPerson->instagram_posts_count ?? $baselineSnapshot?->posts_count,
+            'followersCount' => $existingSnapshot?->followers_count ?? $trackedPerson->instagram_followers_count ?? $baselineSnapshot?->followers_count,
+            'followingCount' => $existingSnapshot?->following_count ?? $trackedPerson->instagram_following_count ?? $baselineSnapshot?->following_count,
+            'countSources' => data_get($existingExtractedProfile, 'countSources', data_get($baselineExtractedProfile, 'countSources', [])),
+            'countWarnings' => data_get($existingExtractedProfile, 'countWarnings', data_get($baselineExtractedProfile, 'countWarnings', [])),
+            'visibleCountsComplete' => (bool) data_get($existingExtractedProfile, 'visibleCountsComplete', data_get($baselineExtractedProfile, 'visibleCountsComplete', false)),
+            'followersList' => is_array(data_get($existingExtractedProfile, 'followersList')) ? data_get($existingExtractedProfile, 'followersList') : (is_array(data_get($baselineExtractedProfile, 'followersList')) ? data_get($baselineExtractedProfile, 'followersList') : []),
+            'followingList' => is_array(data_get($existingExtractedProfile, 'followingList')) ? data_get($existingExtractedProfile, 'followingList') : (is_array(data_get($baselineExtractedProfile, 'followingList')) ? data_get($baselineExtractedProfile, 'followingList') : []),
+            'profileImageHash' => $existingSnapshot?->profile_image_hash ?: $baselineSnapshot?->profile_image_hash,
+        ], $existingExtractedProfile);
+
+        if (array_key_exists('isPrivate', $state)) {
+            $extractedProfile['isPrivate'] = is_bool($state['isPrivate']) ? $state['isPrivate'] : $extractedProfile['isPrivate'];
+            if (is_bool($extractedProfile['isPrivate'])) {
+                $extractedProfile['profileVisibility'] = $extractedProfile['isPrivate'] ? 'private' : 'public';
+            }
+        }
+
+        if (in_array($phase, ['followers', 'following'], true)) {
+            $payloadKey = $phase === 'followers' ? 'followersList' : 'followingList';
+            $observedCount = max(
+                count($relationshipItems),
+                (int) ($state['loaded'] ?? data_get($extractedProfile, $payloadKey.'.observedCount', 0)),
+            );
+            $existingList = is_array($extractedProfile[$payloadKey] ?? null) ? $extractedProfile[$payloadKey] : [];
+            $isRateLimited = (bool) ($existingList['rateLimited'] ?? false)
+                || $stage === 'relationship-rate-limited';
+            $isStopped = (bool) ($existingList['gracefullyStopped'] ?? false)
+                || $stage === 'scan-stop-requested'
+                || (bool) ($state['gracefullyStopped'] ?? false);
+            $isComplete = ($stage === 'relationship-complete')
+                && ! $isRateLimited
+                && ! $isStopped;
+
+            $extractedProfile[$payloadKey] = [
+                ...$existingList,
+                'attempted' => true,
+                'available' => $observedCount > 0,
+                'complete' => $isComplete,
+                'count' => $observedCount,
+                'activeCount' => $observedCount,
+                'observedCount' => $observedCount,
+                'expectedCount' => (int) ($state['expected'] ?? ($existingList['expectedCount'] ?? 0)),
+                'rateLimited' => $isRateLimited,
+                'gracefullyStopped' => $isStopped,
+                'reason' => $stage !== '' ? $stage : ($existingList['reason'] ?? null),
+                'lastProgressStage' => $stage,
+                'lastProgressAt' => $now->toIso8601String(),
+                'observedPreview' => $relationshipItems !== [] ? $relationshipItems : ($existingList['observedPreview'] ?? []),
+                'itemsPreview' => $relationshipItems !== [] ? $relationshipItems : ($existingList['itemsPreview'] ?? []),
+            ];
+        }
+
+        $payload = [
+            ...$existingPayload,
+            'ok' => false,
+            'statusLevel' => $statusLevel,
+            'statusMessage' => $statusMessage,
+            'warnings' => array_values(array_unique(array_filter($existingPayload['warnings'] ?? []))),
+            'debugLogPath' => data_get($existingPayload, 'debugLogPath'),
+            'extractedProfile' => $extractedProfile,
+            'analysisPolicy' => [
+                ...((is_array($existingPayload['analysisPolicy'] ?? null) ? $existingPayload['analysisPolicy'] : [])),
+                'progressSnapshot' => true,
+                'invalidComparisonBaseline' => true,
+                'lastProgressPhase' => $phase,
+                'lastProgressStage' => $stage,
+                'lastProgressPercent' => max(0, min(100, (int) ($state['percent'] ?? 0))),
+                'lastProgressAt' => $now->toIso8601String(),
+            ],
+        ];
+
+        if (filled($state['liveScreenshotUrl'] ?? null)) {
+            $payload['liveScreenshotUrl'] = (string) $state['liveScreenshotUrl'];
+        }
+
+        $snapshotData = [
+            'instagram_username' => $trackedPerson->instagram_username,
+            'full_name' => $extractedProfile['fullName'] ?? $baselineSnapshot?->full_name,
+            'biography' => $extractedProfile['biography'] ?? $baselineSnapshot?->biography,
+            'posts_count' => $this->nullableProgressInteger($extractedProfile['postsCount'] ?? null),
+            'followers_count' => $this->nullableProgressInteger($extractedProfile['followersCount'] ?? null),
+            'following_count' => $this->nullableProgressInteger($extractedProfile['followingCount'] ?? null),
+            'profile_image_url' => $existingSnapshot?->profile_image_url ?: $baselineSnapshot?->profile_image_url,
+            'profile_image_path' => $existingSnapshot?->profile_image_path ?: $baselineSnapshot?->profile_image_path,
+            'profile_image_hash' => $existingSnapshot?->profile_image_hash ?: $baselineSnapshot?->profile_image_hash,
+            'screenshot_path' => null,
+            'html_path' => null,
+            'status_level' => $statusLevel,
+            'status_message' => $statusMessage,
+            'has_changes' => false,
+            'detected_changes' => [],
+            'raw_payload' => $payload,
+            'analyzed_at' => $now,
+        ];
+
+        if ($existingSnapshot) {
+            $existingSnapshot->forceFill($snapshotData)->save();
+            $snapshot = $existingSnapshot->fresh();
+        } else {
+            $snapshot = $trackedPerson->instagramSnapshots()->create($snapshotData);
+        }
+
+        $this->activeProgressSnapshot = $snapshot;
+
+        $trackedPerson->forceFill(array_filter([
+            'last_instagram_status_level' => $statusLevel,
+            'last_instagram_status_message' => $statusMessage,
+            'last_instagram_analyzed_at' => $now,
+            'instagram_followers_count' => $this->nullableProgressInteger($extractedProfile['followersCount'] ?? null),
+            'instagram_following_count' => $this->nullableProgressInteger($extractedProfile['followingCount'] ?? null),
+            'instagram_posts_count' => $this->nullableProgressInteger($extractedProfile['postsCount'] ?? null),
+        ], static fn ($value): bool => $value !== null))->save();
+
+        $sourceProfile = $this->profileRelationshipStore->syncTrackedPersonProfile($trackedPerson, [
+            'last_status_level' => $statusLevel,
+            'last_status_message' => $statusMessage,
+            'last_scanned_at' => $now,
+        ]);
+
+        if ($sourceProfile && in_array($phase, ['followers', 'following'], true) && $relationshipItems !== []) {
+            $this->profileRelationshipStore->syncObservedRelationshipPreview(
+                $sourceProfile,
+                $trackedPerson,
+                $phase,
+                $relationshipItems,
+                $now,
+            );
+        }
+    }
+
+    private function shouldPersistProgressSnapshotState(string $phase, string $stage, array $state): bool
+    {
+        $hasRelationshipItems = is_array($state['relationshipItems'] ?? null) && $state['relationshipItems'] !== [];
+        $isTerminal = in_array($phase, ['done', 'error'], true)
+            || in_array($stage, ['relationship-complete', 'relationship-rate-limited', 'scan-stop-requested', 'profile-collected'], true)
+            || (bool) ($state['gracefullyStopped'] ?? false);
+
+        if (! $hasRelationshipItems && ! $isTerminal && $phase !== 'profile') {
+            return false;
+        }
+
+        $signature = implode('|', [
+            $phase,
+            $stage,
+            (string) ($state['loaded'] ?? ''),
+            (string) ($state['expected'] ?? ''),
+            (string) count(is_array($state['relationshipItems'] ?? null) ? $state['relationshipItems'] : []),
+            (string) ($state['percent'] ?? ''),
+        ]);
+        $now = microtime(true);
+        $last = $this->progressSnapshotThrottle[$phase] ?? null;
+
+        if (! $isTerminal && $last && $last['signature'] === $signature && ($now - ($last['at'] ?? 0)) < 4.0) {
+            return false;
+        }
+
+        if (! $isTerminal && $last && ($now - ($last['at'] ?? 0)) < 4.0) {
+            return false;
+        }
+
+        $this->progressSnapshotThrottle[$phase] = [
+            'signature' => $signature,
+            'at' => $now,
+        ];
+
+        return true;
+    }
+
+    private function normalizeProgressRelationshipItems(mixed $items): array
+    {
+        if (! is_array($items)) {
+            return [];
+        }
+
+        return collect($items)
+            ->filter(fn ($item): bool => is_array($item) && filled($item['username'] ?? null))
+            ->map(function (array $item): array {
+                return [
+                    'username' => Str::lower(trim((string) ($item['username'] ?? ''))),
+                    'displayName' => filled($item['displayName'] ?? null) ? trim((string) $item['displayName']) : null,
+                    'profileUrl' => filled($item['profileUrl'] ?? null) ? (string) $item['profileUrl'] : null,
+                    'profileImageUrl' => filled($item['profileImageUrl'] ?? $item['profile_image_url'] ?? null)
+                        ? (string) ($item['profileImageUrl'] ?? $item['profile_image_url'])
+                        : null,
+                    'profileVisibility' => in_array(($item['profileVisibility'] ?? null), ['public', 'private', 'unknown'], true)
+                        ? $item['profileVisibility']
+                        : null,
+                    'isPrivate' => is_bool($item['isPrivate'] ?? null) ? $item['isPrivate'] : null,
+                    'postsCount' => is_numeric($item['postsCount'] ?? null) ? (int) $item['postsCount'] : null,
+                    'followersCount' => is_numeric($item['followersCount'] ?? null) ? (int) $item['followersCount'] : null,
+                    'followingCount' => is_numeric($item['followingCount'] ?? null) ? (int) $item['followingCount'] : null,
+                    'hoverCard' => is_array($item['hoverCard'] ?? null) ? $item['hoverCard'] : null,
+                    'firstSeenAt' => is_scalar($item['firstSeenAt'] ?? null) ? (string) $item['firstSeenAt'] : null,
+                    'lastSeenAt' => is_scalar($item['lastSeenAt'] ?? null) ? (string) $item['lastSeenAt'] : null,
+                ];
+            })
+            ->filter(fn (array $item): bool => filled($item['username']))
+            ->unique('username')
+            ->values()
+            ->all();
+    }
+
+    private function nullableProgressInteger(mixed $value): ?int
+    {
+        return is_numeric($value) ? (int) $value : null;
+    }
+
+    private function discardActiveProgressSnapshot(?int $exceptSnapshotId = null): void
+    {
+        $snapshot = $this->activeProgressSnapshot?->fresh();
+
+        if (! $snapshot || ($exceptSnapshotId !== null && (int) $snapshot->id === (int) $exceptSnapshotId)) {
+            return;
+        }
+
+        $snapshot->delete();
+        $this->activeProgressSnapshot = null;
     }
 
     private function analysisLockKey(TrackedPerson $trackedPerson): string
