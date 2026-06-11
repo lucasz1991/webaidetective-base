@@ -14,9 +14,9 @@ class InstagramProfileDetail extends Component
 {
     public int $instagramProfileId;
 
-    public bool $showFollowersModal = false;
+    public bool $showListModal = false;
 
-    public bool $showFollowingModal = false;
+    public string $activeListType = 'followers';
 
     public ?string $detailStatus = null;
 
@@ -142,6 +142,16 @@ class InstagramProfileDetail extends Component
     public function scanInstagramFollowingList(): void
     {
         $this->runRelationshipListScan('following');
+    }
+
+    public function openListModal(string $listType): void
+    {
+        if (! in_array($listType, ['followers', 'following'], true)) {
+            return;
+        }
+
+        $this->activeListType = $listType;
+        $this->showListModal = true;
     }
 
     public function scanInstagramSuggestions(): void

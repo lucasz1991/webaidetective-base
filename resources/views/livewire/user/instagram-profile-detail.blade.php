@@ -1,4 +1,4 @@
-<div class="container mx-auto space-y-5 px-5 py-6">
+<div class="container mx-auto space-y-5 px-5 py-6" x-data="{ actionsOpen: false }">
     @php
         $visibility = $profile->profile_visibility ?: 'unknown';
         $visibilityLabel = match ($visibility) {
@@ -49,6 +49,134 @@
         </div>
     @endif
 
+    <div class="flex items-center justify-between gap-3">
+        <a
+            href="{{ url()->previous() }}"
+            class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50"
+        >
+            Zurueck
+        </a>
+
+        <div class="relative">
+            <button
+                type="button"
+                @click="actionsOpen = ! actionsOpen"
+                class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50"
+            >
+                Aktionen
+                <span class="ml-2 text-slate-500">▾</span>
+            </button>
+
+            <div
+                x-show="actionsOpen"
+                x-cloak
+                @click.outside="actionsOpen = false"
+                class="absolute right-0 top-full z-20 mt-2 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
+            >
+                <div class="flex flex-col p-2">
+                    @if($trackedPerson)
+                        <a
+                            href="{{ route('tracked-people.show', $trackedPerson->id) }}"
+                            wire:navigate
+                            @click="actionsOpen = false"
+                            class="rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                        >
+                            Beobachtete Person
+                        </a>
+                    @endif
+
+                    <a
+                        href="{{ $profile->profile_url ?: 'https://www.instagram.com/'.$profile->username.'/' }}"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        @click="actionsOpen = false"
+                        class="rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                    >
+                        Instagram oeffnen
+                    </a>
+
+                    <button
+                        type="button"
+                        @click="actionsOpen = false"
+                        wire:click="analyzeInstagramMini"
+                        wire:loading.attr="disabled"
+                        class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                        Mini-Scan
+                    </button>
+                    <button
+                        type="button"
+                        @click="actionsOpen = false"
+                        wire:click="analyzeInstagram"
+                        wire:loading.attr="disabled"
+                        class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-pink-700 hover:bg-pink-50 disabled:opacity-50"
+                    >
+                        Vollanalyse
+                    </button>
+
+                    @if($visibility === 'public')
+                        <button
+                            type="button"
+                            @click="actionsOpen = false"
+                            wire:click="scanInstagramFollowersList"
+                            wire:loading.attr="disabled"
+                            class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-pink-700 hover:bg-pink-50 disabled:opacity-50"
+                        >
+                            Follower scannen
+                        </button>
+                        <button
+                            type="button"
+                            @click="actionsOpen = false"
+                            wire:click="scanInstagramFollowingList"
+                            wire:loading.attr="disabled"
+                            class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-pink-700 hover:bg-pink-50 disabled:opacity-50"
+                        >
+                            Gefolgt scannen
+                        </button>
+                        <button
+                            type="button"
+                            @click="actionsOpen = false"
+                            wire:click="scanInstagramPosts"
+                            wire:loading.attr="disabled"
+                            class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+                        >
+                            Beitraege scannen
+                        </button>
+                    @endif
+
+                    @if($visibility === 'private')
+                        <button
+                            type="button"
+                            @click="actionsOpen = false"
+                            wire:click="scanInstagramSuggestions"
+                            wire:loading.attr="disabled"
+                            class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:opacity-50"
+                        >
+                            Vorschlaege scannen
+                        </button>
+                    @endif
+
+                    <button
+                        type="button"
+                        @click="actionsOpen = false"
+                        wire:click="openListModal('followers')"
+                        class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                    >
+                        Follower-Liste ansehen
+                    </button>
+                    <button
+                        type="button"
+                        @click="actionsOpen = false"
+                        wire:click="openListModal('following')"
+                        class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                    >
+                        Gefolgt-Liste ansehen
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="flex flex-col gap-5 p-5 lg:flex-row lg:items-start lg:justify-between">
             <div class="flex min-w-0 gap-4">
@@ -84,22 +212,12 @@
                 </div>
             </div>
 
-            <div class="flex flex-wrap gap-2">
-                @if($trackedPerson)
-                    <a href="{{ route('tracked-people.show', $trackedPerson->id) }}" wire:navigate class="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800">
-                        Beobachtete Person
-                    </a>
-                @endif
-                <a href="{{ $profile->profile_url ?: 'https://www.instagram.com/'.$profile->username.'/' }}" target="_blank" rel="noopener noreferrer" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                    Instagram oeffnen
-                </a>
-            </div>
         </div>
 
         <div class="grid grid-cols-2 gap-px bg-slate-200 sm:grid-cols-3 xl:grid-cols-5">
             <button
                 type="button"
-                wire:click="$set('showFollowersModal', true)"
+                wire:click="openListModal('followers')"
                 class="bg-white px-5 py-4 text-left transition hover:bg-pink-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-pink-500"
                 title="Followerliste oeffnen"
             >
@@ -109,7 +227,7 @@
             </button>
             <button
                 type="button"
-                wire:click="$set('showFollowingModal', true)"
+                wire:click="openListModal('following')"
                 class="bg-white px-5 py-4 text-left transition hover:bg-pink-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-pink-500"
                 title="Gefolgt-Liste oeffnen"
             >
@@ -140,44 +258,13 @@
         <div class="flex flex-wrap items-center justify-between gap-3">
             <div>
                 <h2 class="text-base font-bold text-slate-950">Scans und gespeicherte Listen</h2>
-                <p class="mt-1 text-sm text-slate-500">Die Aktionen entsprechen dem Detail einer beobachteten Person.</p>
+                <p class="mt-1 text-sm text-slate-500">Alle Scan- und Listenaktionen findest du jetzt gesammelt oben rechts im Aktionsmenue.</p>
             </div>
             @if(! $trackedPerson)
                 <span class="rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
                     Beim ersten Scan wird das Profil automatisch als beobachtet angelegt.
                 </span>
             @endif
-        </div>
-
-        <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            <button type="button" wire:click="analyzeInstagramMini" wire:loading.attr="disabled" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:opacity-50">
-                Mini-Scan
-            </button>
-            <button type="button" wire:click="analyzeInstagram" wire:loading.attr="disabled" class="rounded-lg bg-pink-600 px-4 py-2 text-sm font-semibold text-white hover:bg-pink-700 disabled:opacity-50">
-                Vollanalyse
-            </button>
-            @if($visibility === 'public')
-                <button type="button" wire:click="scanInstagramFollowersList" wire:loading.attr="disabled" class="rounded-lg border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-100 disabled:opacity-50">
-                    Follower scannen
-                </button>
-                <button type="button" wire:click="scanInstagramFollowingList" wire:loading.attr="disabled" class="rounded-lg border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 hover:bg-pink-100 disabled:opacity-50">
-                    Gefolgt scannen
-                </button>
-                <button type="button" wire:click="scanInstagramPosts" wire:loading.attr="disabled" class="rounded-lg border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 hover:bg-violet-100 disabled:opacity-50">
-                    Beitraege scannen
-                </button>
-            @endif
-            @if($visibility === 'private')
-                <button type="button" wire:click="scanInstagramSuggestions" wire:loading.attr="disabled" class="rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-4 py-2 text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-100 disabled:opacity-50">
-                    Vorschlaege scannen
-                </button>
-            @endif
-            <button type="button" wire:click="$set('showFollowersModal', true)" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                Follower-Liste ansehen
-            </button>
-            <button type="button" wire:click="$set('showFollowingModal', true)" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                Gefolgt-Liste ansehen
-            </button>
         </div>
     </section>
 
@@ -302,6 +389,9 @@
         </div>
     </section>
 
-    <x-instagram-profile-list-modal model="showFollowersModal" title="Followerliste" :scan="$latestFollowersScan" />
-    <x-instagram-profile-list-modal model="showFollowingModal" title="Gefolgt-Liste" :scan="$latestFollowingScan" />
+    <x-instagram-profile-list-modal
+        model="showListModal"
+        :title="$activeListType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste'"
+        :scan="$activeListType === 'followers' ? $latestFollowersScan : $latestFollowingScan"
+    />
 </div>
