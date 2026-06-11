@@ -212,7 +212,7 @@
                 </div>
             </div>
 
-        </div>
+        </div> 
 
         <div class="grid grid-cols-2 gap-px bg-slate-200 sm:grid-cols-3 xl:grid-cols-5">
             <button
