@@ -1,4 +1,4 @@
-<div class="container mx-auto space-y-5 px-5 py-6" x-data="{ actionsOpen: false }">
+<div class="container mx-auto space-y-5 px-5 py-6" x-data="{ actionsOpen: false, scansOpen: false }">
     @php
         $visibility = $profile->profile_visibility ?: 'unknown';
         $visibilityLabel = match ($visibility) {
@@ -46,10 +46,105 @@
             Zurueck
         </a>
 
-        <div class="relative">
+        <div class="flex items-center gap-2">
+            <div class="relative">
             <button
                 type="button"
-                @click="actionsOpen = ! actionsOpen"
+                @click="scansOpen = ! scansOpen; actionsOpen = false"
+                class="inline-flex items-center justify-center rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+            >
+                Scans
+                <span class="ml-2 text-slate-300">▾</span>
+            </button>
+
+            <div
+                x-show="scansOpen"
+                x-cloak
+                @click.outside="scansOpen = false"
+                class="absolute right-0 top-full z-30 mt-2 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
+            >
+                <div class="border-b border-slate-100 px-4 py-3">
+                    <div class="text-xs font-bold uppercase tracking-wide text-slate-500">Profil scannen</div>
+                    <div class="mt-1 text-xs text-slate-500">{{ $visibilityLabel }}es Instagram-Profil</div>
+                </div>
+                <div class="flex flex-col p-2">
+                    <button
+                        type="button"
+                        @click="scansOpen = false"
+                        wire:click="analyzeInstagramMini"
+                        wire:loading.attr="disabled"
+                        wire:target="analyzeInstagramMini"
+                        class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                        Mini-Scan
+                        <span class="mt-0.5 block text-xs font-normal text-slate-500">Profilwerte schnell aktualisieren</span>
+                    </button>
+                    <button
+                        type="button"
+                        @click="scansOpen = false"
+                        wire:click="analyzeInstagram"
+                        wire:loading.attr="disabled"
+                        wire:target="analyzeInstagram"
+                        class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-pink-700 hover:bg-pink-50 disabled:opacity-50"
+                    >
+                        Vollanalyse
+                        <span class="mt-0.5 block text-xs font-normal text-pink-500">Profil und passende Folge-Scans</span>
+                    </button>
+
+                    @if($visibility === 'public')
+                        <div class="my-1 border-t border-slate-100"></div>
+                        <button
+                            type="button"
+                            @click="scansOpen = false"
+                            wire:click="scanInstagramFollowersList"
+                            wire:loading.attr="disabled"
+                            wire:target="scanInstagramFollowersList"
+                            class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                        >
+                            Followerliste scannen
+                        </button>
+                        <button
+                            type="button"
+                            @click="scansOpen = false"
+                            wire:click="scanInstagramFollowingList"
+                            wire:loading.attr="disabled"
+                            wire:target="scanInstagramFollowingList"
+                            class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                        >
+                            Gefolgt-Liste scannen
+                        </button>
+                        <button
+                            type="button"
+                            @click="scansOpen = false"
+                            wire:click="scanInstagramPosts"
+                            wire:loading.attr="disabled"
+                            wire:target="scanInstagramPosts"
+                            class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+                        >
+                            Beitraege scannen
+                        </button>
+                    @elseif($visibility === 'private')
+                        <div class="my-1 border-t border-slate-100"></div>
+                        <button
+                            type="button"
+                            @click="scansOpen = false"
+                            wire:click="scanInstagramSuggestions"
+                            wire:loading.attr="disabled"
+                            wire:target="scanInstagramSuggestions"
+                            class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:opacity-50"
+                        >
+                            Vorschlaege scannen
+                            <span class="mt-0.5 block text-xs font-normal text-fuchsia-500">Verbindungen bei privaten Profilen ermitteln</span>
+                        </button>
+                    @endif
+                </div>
+            </div>
+            </div>
+
+            <div class="relative">
+            <button
+                type="button"
+                @click="actionsOpen = ! actionsOpen; scansOpen = false"
                 class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50"
             >
                 Aktionen
@@ -87,67 +182,6 @@
                     <button
                         type="button"
                         @click="actionsOpen = false"
-                        wire:click="analyzeInstagramMini"
-                        wire:loading.attr="disabled"
-                        class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
-                    >
-                        Mini-Scan
-                    </button>
-                    <button
-                        type="button"
-                        @click="actionsOpen = false"
-                        wire:click="analyzeInstagram"
-                        wire:loading.attr="disabled"
-                        class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-pink-700 hover:bg-pink-50 disabled:opacity-50"
-                    >
-                        Vollanalyse
-                    </button>
-
-                    @if($visibility === 'public')
-                        <button
-                            type="button"
-                            @click="actionsOpen = false"
-                            wire:click="scanInstagramFollowersList"
-                            wire:loading.attr="disabled"
-                            class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-pink-700 hover:bg-pink-50 disabled:opacity-50"
-                        >
-                            Follower scannen
-                        </button>
-                        <button
-                            type="button"
-                            @click="actionsOpen = false"
-                            wire:click="scanInstagramFollowingList"
-                            wire:loading.attr="disabled"
-                            class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-pink-700 hover:bg-pink-50 disabled:opacity-50"
-                        >
-                            Gefolgt scannen
-                        </button>
-                        <button
-                            type="button"
-                            @click="actionsOpen = false"
-                            wire:click="scanInstagramPosts"
-                            wire:loading.attr="disabled"
-                            class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
-                        >
-                            Beitraege scannen
-                        </button>
-                    @endif
-
-                    @if($visibility === 'private')
-                        <button
-                            type="button"
-                            @click="actionsOpen = false"
-                            wire:click="scanInstagramSuggestions"
-                            wire:loading.attr="disabled"
-                            class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:opacity-50"
-                        >
-                            Vorschlaege scannen
-                        </button>
-                    @endif
-
-                    <button
-                        type="button"
-                        @click="actionsOpen = false"
                         wire:click="openListModal('followers')"
                         class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
                     >
@@ -162,6 +196,7 @@
                         Gefolgt-Liste ansehen
                     </button>
                 </div>
+            </div>
             </div>
         </div>
     </div>
@@ -271,7 +306,7 @@
     <div class="grid gap-5 xl:grid-cols-2">
         <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 class="text-base font-bold text-slate-950">Folgt diesen Profilen</h2>
-            <div class="mt-4 space-y-2">
+            <div class="mt-4 max-h-80 space-y-2 overflow-y-auto pr-2">
                 @forelse($profile->sourceRelationships as $relationship)
                     @php($related = $relationship->relatedInstagramProfile)
                     @if($related)
@@ -295,8 +330,9 @@
                 </span>
             @endif
         </div>
-        <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            @forelse($profile->posts as $post)
+        <div class="mt-4 max-h-[42rem] overflow-y-auto pr-2">
+            <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                @forelse($profile->posts as $post)
                 @php($primaryMedia = $post->media->first())
                 @php($mediaUrl = $primaryMedia?->media_url)
                 @php($previewUrl = $primaryMedia?->preview_media_url ?: $post->thumbnail_storage_url)
@@ -335,15 +371,16 @@
                         </a>
                     </div>
                 </article>
-            @empty
-                <p class="text-sm text-slate-500">Noch keine Beitraege gespeichert.</p>
-            @endforelse
+                @empty
+                    <p class="text-sm text-slate-500">Noch keine Beitraege gespeichert.</p>
+                @endforelse
+            </div>
         </div>
     </section>
 
     <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <h2 class="text-base font-bold text-slate-950">Wird von diesen Profilen referenziert</h2>
-            <div class="mt-4 space-y-2">
+            <div class="mt-4 max-h-80 space-y-2 overflow-y-auto pr-2">
                 @forelse($profile->relatedRelationships as $relationship)
                     @php($source = $relationship->sourceInstagramProfile)
                     @if($source)
@@ -361,9 +398,9 @@
 
     <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h2 class="text-base font-bold text-slate-950">Letzte Listenscans</h2>
-        <div class="mt-4 overflow-x-auto">
+        <div class="mt-4 max-h-96 overflow-auto">
             <table class="min-w-full divide-y divide-slate-200 text-sm">
-                <thead class="text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <thead class="sticky top-0 z-10 bg-white text-left text-xs font-semibold uppercase tracking-wide text-slate-500 shadow-sm">
                     <tr>
                         <th class="px-3 py-2">Liste</th>
                         <th class="px-3 py-2">Status</th>
