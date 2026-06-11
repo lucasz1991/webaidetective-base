@@ -15,12 +15,14 @@
     $statusLabel = match ($statusLevel) {
         'success' => $isStale ? 'Veraltet' : 'Aktuell',
         'partial' => 'Laeuft',
+        'cancelled' => 'Beendet',
         'error' => 'Fehler',
         default => 'Offen',
     };
     $statusIconClass = match (true) {
         $statusLevel === 'error' => 'text-rose-600 hover:bg-rose-50',
         $statusLevel === 'partial' => 'text-amber-600 hover:bg-amber-50',
+        $statusLevel === 'cancelled' => 'text-slate-600 hover:bg-slate-100',
         $isStale => 'text-sky-600 hover:bg-sky-50',
         $statusLevel === 'success' => 'text-emerald-600 hover:bg-emerald-50',
         default => 'text-slate-400 hover:bg-slate-50',
@@ -28,6 +30,7 @@
     $statusBadgeClass = match (true) {
         $statusLevel === 'error' => 'border-rose-200 bg-rose-50 text-rose-700',
         $statusLevel === 'partial' => 'border-amber-200 bg-amber-50 text-amber-800',
+        $statusLevel === 'cancelled' => 'border-slate-300 bg-slate-100 text-slate-700',
         $isStale => 'border-sky-200 bg-sky-50 text-sky-700',
         $statusLevel === 'success' => 'border-emerald-200 bg-emerald-50 text-emerald-700',
         default => 'border-slate-200 bg-slate-50 text-slate-500',

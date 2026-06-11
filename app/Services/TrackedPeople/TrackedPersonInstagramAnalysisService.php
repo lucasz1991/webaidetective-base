@@ -180,7 +180,7 @@ class TrackedPersonInstagramAnalysisService
                 'profile_image_hash' => null,
                 'screenshot_path' => $this->scraper->resolvePublicStoragePath($payload['screenshotPath'] ?? null),
                 'html_path' => $this->scraper->resolvePublicStoragePath($payload['htmlPath'] ?? null),
-                'status_level' => $payload['statusLevel'] ?? 'error',
+                'status_level' => $this->resolveTerminalStatusLevel($payload, $attemptInfo),
                 'status_message' => $this->resolveStatusMessage($payload, $attemptInfo),
                 'has_changes' => false,
                 'detected_changes' => [],
@@ -419,7 +419,7 @@ class TrackedPersonInstagramAnalysisService
                 'profile_image_hash' => null,
                 'screenshot_path' => $this->scraper->resolvePublicStoragePath($payload['screenshotPath'] ?? null),
                 'html_path' => $this->scraper->resolvePublicStoragePath($payload['htmlPath'] ?? null),
-                'status_level' => $payload['statusLevel'] ?? 'error',
+                'status_level' => $this->resolveTerminalStatusLevel($payload, $attemptInfo),
                 'status_message' => $this->resolveStatusMessage($payload, $attemptInfo),
                 'has_changes' => false,
                 'detected_changes' => [],
@@ -582,7 +582,11 @@ class TrackedPersonInstagramAnalysisService
             : [];
         $relationshipItems = $this->normalizeProgressRelationshipItems($state['relationshipItems'] ?? []);
         $now = now('UTC');
-        $statusLevel = $phase === 'error' ? 'error' : 'partial';
+        $wasCancelled = $stage === 'scan-stop-requested'
+            || (bool) ($state['gracefullyStopped'] ?? false);
+        $statusLevel = $phase === 'error'
+            ? 'error'
+            : ($wasCancelled ? 'cancelled' : 'partial');
         $statusMessage = (string) ($state['message'] ?? 'Instagram-Scan laeuft; Zwischenstand wird gespeichert.');
         $extractedProfile = array_merge([
             'fullName' => $existingSnapshot?->full_name ?: $baselineSnapshot?->full_name,
@@ -675,7 +679,8 @@ class TrackedPersonInstagramAnalysisService
             'profile_image_url' => $existingSnapshot?->profile_image_url ?: $baselineSnapshot?->profile_image_url,
             'profile_image_path' => $existingSnapshot?->profile_image_path ?: $baselineSnapshot?->profile_image_path,
             'profile_image_hash' => $existingSnapshot?->profile_image_hash ?: $baselineSnapshot?->profile_image_hash,
-            'screenshot_path' => null,
+            'screenshot_path' => $this->publicStoragePathFromUrl($state['liveScreenshotUrl'] ?? null)
+                ?: $existingSnapshot?->screenshot_path,
             'html_path' => null,
             'status_level' => $statusLevel,
             'status_message' => $statusMessage,
@@ -795,6 +800,23 @@ class TrackedPersonInstagramAnalysisService
     private function nullableProgressInteger(mixed $value): ?int
     {
         return is_numeric($value) ? (int) $value : null;
+    }
+
+    private function publicStoragePathFromUrl(mixed $url): ?string
+    {
+        if (! is_scalar($url)) {
+            return null;
+        }
+
+        $path = parse_url(trim((string) $url), PHP_URL_PATH);
+
+        if (! is_string($path) || ! str_contains($path, '/storage/')) {
+            return null;
+        }
+
+        $relativePath = ltrim(Str::after($path, '/storage/'), '/');
+
+        return $relativePath !== '' ? urldecode($relativePath) : null;
     }
 
     private function discardActiveProgressSnapshot(?int $exceptSnapshotId = null): void
@@ -1246,6 +1268,25 @@ class TrackedPersonInstagramAnalysisService
         }
 
         return $statusMessage;
+    }
+
+    private function resolveTerminalStatusLevel(array $payload, array $attemptInfo): string
+    {
+        if ((bool) ($payload['gracefullyStopped'] ?? false) || (bool) ($attemptInfo['gracefully_stopped'] ?? false)) {
+            return 'cancelled';
+        }
+
+        foreach (($attemptInfo['phases'] ?? []) as $phase) {
+            if (is_array($phase) && (bool) ($phase['gracefullyStopped'] ?? false)) {
+                return 'cancelled';
+            }
+        }
+
+        $statusLevel = Str::lower(trim((string) ($payload['statusLevel'] ?? 'error')));
+
+        return in_array($statusLevel, ['success', 'partial', 'error', 'cancelled'], true)
+            ? $statusLevel
+            : 'error';
     }
 
     private function reportProgress(?callable $progress, array $payload): void

@@ -58,10 +58,10 @@ class RunTrackedPersonInstagramToolScan implements ShouldQueue, ShouldBeUnique
                 default => throw new \InvalidArgumentException('Unbekannter Scan-Typ: '.$this->scanType),
             };
         } catch (TrackedPersonInstagramScanCancelledException) {
-            $trackedPerson->forceFill([
-                'last_instagram_status_level' => 'partial',
-                'last_instagram_status_message' => $this->label().' wurde beendet, weil ein neuer Scan gestartet wurde.',
-            ])->save();
+            $trackedPerson->markInstagramScanTerminal(
+                'cancelled',
+                $this->label().' wurde beendet, weil ein neuer Scan gestartet wurde.',
+            );
         } catch (\Throwable $exception) {
             Log::warning('AI-ausgeloester Instagram-Scan fehlgeschlagen.', [
                 'tracked_person_id' => $trackedPerson->id,
@@ -69,10 +69,10 @@ class RunTrackedPersonInstagramToolScan implements ShouldQueue, ShouldBeUnique
                 'error' => $exception->getMessage(),
             ]);
 
-            $trackedPerson->forceFill([
-                'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => $this->label().' fehlgeschlagen: '.$exception->getMessage(),
-            ])->save();
+            $trackedPerson->markInstagramScanTerminal(
+                'error',
+                $this->label().' fehlgeschlagen: '.$exception->getMessage(),
+            );
         }
     }
 

@@ -99,6 +99,46 @@ class TrackedPerson extends Model
         return $this->hasMany(TrackedPersonInstagramProfileLink::class);
     }
 
+    public function markInstagramScanTerminal(string $statusLevel, string $statusMessage): void
+    {
+        $statusLevel = in_array($statusLevel, ['success', 'error', 'cancelled'], true)
+            ? $statusLevel
+            : 'error';
+        $timestamp = now('UTC');
+
+        $this->forceFill([
+            'last_instagram_status_level' => $statusLevel,
+            'last_instagram_status_message' => $statusMessage,
+            'last_instagram_analyzed_at' => $timestamp,
+        ])->save();
+
+        $progressSnapshot = $this->instagramSnapshots()->latest('id')->first();
+
+        if (
+            ! $progressSnapshot
+            || ! (bool) data_get($progressSnapshot->raw_payload, 'analysisPolicy.progressSnapshot', false)
+        ) {
+            return;
+        }
+
+        $payload = is_array($progressSnapshot->raw_payload) ? $progressSnapshot->raw_payload : [];
+        $payload['statusLevel'] = $statusLevel;
+        $payload['statusMessage'] = $statusMessage;
+        $payload['analysisPolicy'] = [
+            ...(is_array($payload['analysisPolicy'] ?? null) ? $payload['analysisPolicy'] : []),
+            'progressSnapshot' => false,
+            'terminalStatus' => $statusLevel,
+            'terminatedAt' => $timestamp->toIso8601String(),
+        ];
+
+        $progressSnapshot->forceFill([
+            'status_level' => $statusLevel,
+            'status_message' => $statusMessage,
+            'raw_payload' => $payload,
+            'analyzed_at' => $timestamp,
+        ])->save();
+    }
+
     public function instagramPublicProfileScans(): HasMany
     {
         return $this->hasMany(TrackedPersonInstagramPublicProfileScan::class);

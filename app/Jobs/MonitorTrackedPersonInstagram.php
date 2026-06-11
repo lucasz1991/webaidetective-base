@@ -66,6 +66,11 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             );
             $snapshot = $runResult['snapshot'];
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            $trackedPerson->markInstagramScanTerminal(
+                'cancelled',
+                'Instagram-Scan wurde abgebrochen, weil ein neuer Scan gestartet wurde.',
+            );
+
             Log::info('Instagram-Monitoring-Scan wurde beendet, weil ein neuer Scan fuer dieselbe Person gestartet wurde.', [
                 'tracked_person_id' => $trackedPerson->id,
                 'instagram_username' => $trackedPerson->instagram_username,
@@ -91,10 +96,10 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
                 'error' => $exception->getMessage(),
             ]);
 
-            $trackedPerson->forceFill([
-                'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => ($this->isFullScan() ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
-            ])->save();
+            $trackedPerson->markInstagramScanTerminal(
+                'error',
+                ($this->isFullScan() ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
+            );
 
             return;
         }

@@ -287,6 +287,7 @@ class TrackedPersonDetail extends Component
 
             $scans = app(TrackedPersonInstagramPublicProfileScanService::class)->scan($trackedPerson, $progress);
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            $this->markInstagramScanCancelled($trackedPerson, 'Public-Profile-Verbindungsscan wurde abgebrochen.');
             $this->streamInstagramProgress([
                 'phase' => 'done',
                 'percent' => 100,
@@ -296,6 +297,10 @@ class TrackedPersonDetail extends Component
 
             return;
         } catch (\Throwable $exception) {
+            $trackedPerson->markInstagramScanTerminal(
+                'error',
+                'Public-Profile-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(),
+            );
             $this->streamInstagramProgress([
                 'phase' => 'error',
                 'percent' => 100,
@@ -358,6 +363,7 @@ class TrackedPersonDetail extends Component
 
             $scan = app(TrackedPersonInstagramWorkflowService::class)->runSuggestionScan($trackedPerson, $progress);
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            $this->markInstagramScanCancelled($trackedPerson, 'Profilvorschlag-Verbindungsscan wurde abgebrochen.');
             $this->streamInstagramProgress([
                 'phase' => 'done',
                 'percent' => 100,
@@ -367,6 +373,10 @@ class TrackedPersonDetail extends Component
 
             return;
         } catch (\Throwable $exception) {
+            $trackedPerson->markInstagramScanTerminal(
+                'error',
+                'Profilvorschlag-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(),
+            );
             $this->streamInstagramProgress([
                 'phase' => 'error',
                 'percent' => 100,
@@ -425,10 +435,15 @@ class TrackedPersonDetail extends Component
             $scan = app(TrackedPersonInstagramWorkflowService::class)
                 ->runPostScan($trackedPerson, $trackedPerson->latestInstagramSnapshot, $progress);
         } catch (TrackedPersonInstagramScanCancelledException) {
+            $this->markInstagramScanCancelled($trackedPerson, 'Instagram-Beitragsscan wurde abgebrochen.');
             $this->setDetailStatus('Der Instagram-Beitragsscan wurde beendet.', 'partial');
 
             return;
         } catch (\Throwable $exception) {
+            $trackedPerson->markInstagramScanTerminal(
+                'error',
+                'Instagram-Beitragsscan fehlgeschlagen: '.$exception->getMessage(),
+            );
             $this->setDetailStatus('Instagram-Beitragsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
 
             return;
@@ -482,6 +497,10 @@ class TrackedPersonDetail extends Component
                 $progress,
             );
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            $this->markInstagramScanCancelled(
+                $trackedPerson,
+                ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' wurde abgebrochen.',
+            );
             $this->streamInstagramProgress([
                 'phase' => 'done',
                 'percent' => 100,
@@ -491,10 +510,10 @@ class TrackedPersonDetail extends Component
 
             return;
         } catch (\Throwable $exception) {
-            $trackedPerson->forceFill([
-                'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
-            ])->save();
+            $trackedPerson->markInstagramScanTerminal(
+                'error',
+                ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
+            );
 
             $this->streamInstagramProgress([
                 'phase' => 'error',
@@ -552,6 +571,7 @@ class TrackedPersonDetail extends Component
             $snapshot = app(TrackedPersonInstagramAnalysisService::class)
                 ->scanRelationshipList($trackedPerson, $relationship, $progress);
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            $this->markInstagramScanCancelled($trackedPerson, $label.'-Scan wurde abgebrochen.');
             $this->streamInstagramProgress([
                 'phase' => 'done',
                 'percent' => 100,
@@ -561,10 +581,10 @@ class TrackedPersonDetail extends Component
 
             return;
         } catch (\Throwable $exception) {
-            $trackedPerson->forceFill([
-                'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => $label.'-Scan fehlgeschlagen: '.$exception->getMessage(),
-            ])->save();
+            $trackedPerson->markInstagramScanTerminal(
+                'error',
+                $label.'-Scan fehlgeschlagen: '.$exception->getMessage(),
+            );
 
             $this->streamInstagramProgress([
                 'phase' => 'error',
@@ -684,6 +704,11 @@ class TrackedPersonDetail extends Component
             true,
         );
         $this->streamInstagramConnectionResults($state);
+    }
+
+    private function markInstagramScanCancelled(TrackedPerson $trackedPerson, string $message): void
+    {
+        $trackedPerson->markInstagramScanTerminal('cancelled', $message);
     }
 
     private function streamInstagramLivePreview(array $state): void

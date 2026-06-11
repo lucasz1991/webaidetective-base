@@ -163,7 +163,9 @@ class TrackedPersonInstagramWorkflowService
 
         $resolvedStatusLevel = $snapshot->status_level === 'success'
             ? 'success'
-            : ($snapshot->status_level === 'partial' ? 'partial' : 'error');
+            : (in_array($snapshot->status_level, ['partial', 'cancelled'], true)
+                ? $snapshot->status_level
+                : 'error');
 
         if (
             $privateSuggestionScanFailed
