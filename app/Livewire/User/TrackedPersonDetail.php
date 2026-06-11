@@ -1117,6 +1117,13 @@ class TrackedPersonDetail extends Component
                     ])
                     ->latest('analyzed_at')
                     ->limit(20),
+                'instagramSuggestionScans' => fn ($query) => $query
+                    ->latest('analyzed_at')
+                    ->limit(20),
+                'instagramInferredConnections' => fn ($query) => $query
+                    ->with(['publicProfile', 'candidateInstagramProfile'])
+                    ->latest('last_seen_at')
+                    ->limit(100),
                 'currentInstagramProfile.postScans' => fn ($query) => $query
                     ->where('user_id', Auth::id())
                     ->latest('scanned_at')
@@ -1258,6 +1265,18 @@ class TrackedPersonDetail extends Component
             'latestFollowingStats' => $latestFollowingStats,
             'latestFollowerListAvailable' => $latestFollowerListAvailable,
             'latestFollowingListAvailable' => $latestFollowingListAvailable,
+            'inferredInstagramFollowers' => $trackedPerson->instagramInferredConnections
+                ->where('relationship_type', 'follows_target')
+                ->unique('candidate_username')
+                ->values(),
+            'inferredInstagramFollowing' => $trackedPerson->instagramInferredConnections
+                ->where('relationship_type', 'followed_by_target')
+                ->unique('candidate_username')
+                ->values(),
+            'suggestionInstagramConnections' => $trackedPerson->instagramInferredConnections
+                ->where('relationship_type', 'suggestion_connection')
+                ->unique('candidate_username')
+                ->values(),
             'latestScrapePhases' => $latestScrapePhases,
             'latestProfileVisibility' => $latestProfileVisibility,
             'latestProfileVisibilityLabel' => $this->profileVisibilityLabel($latestProfileVisibility),
@@ -1271,6 +1290,8 @@ class TrackedPersonDetail extends Component
             'snapshotScreenshots' => fn ($instagramSnapshot): Collection => $this->snapshotScreenshots($instagramSnapshot),
             'publicProfileRows' => $this->publicProfileRows($trackedPerson),
             'publicProfileCandidateRows' => $this->publicProfileCandidateRows($publicProfileCandidates),
+            'connectionScanRows' => $this->connectionScanRows($trackedPerson->instagramPublicProfileScans),
+            'suggestionScanRows' => $this->suggestionScanRows($trackedPerson->instagramSuggestionScans),
             'latestSnapshotStatusClass' => $this->snapshotStatusClass($latestSnapshot?->status_level),
             'latestSnapshotScreenshots' => $this->snapshotScreenshots($latestSnapshot),
             'latestScrapePhaseRows' => $this->scrapePhaseRows($latestScrapePhases ?? collect()),
