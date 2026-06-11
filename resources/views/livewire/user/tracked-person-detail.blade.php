@@ -77,60 +77,66 @@
         >
             Zurueck
         </a>
-        <div x-data="{ menuOpen: false }" class="relative">
-            <button
-                type="button"
-                @click="menuOpen = ! menuOpen"
-                class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-4 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50"
-            >
-                Aktionen
-                <span class="ml-2 text-slate-500">▾</span>
-            </button>
-            <div
-                x-show="menuOpen"
-                x-cloak
-                @click.outside="menuOpen = false"
-                class="absolute right-0 top-full z-20 mt-2 w-64 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl"
-            >
-                <div class="flex flex-col p-2">
-                    <button
-                        type="button"
-                        @click="menuOpen = false"
-                        wire:click="confirmTrackedPersonDeletion"
-                        class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-rose-700 hover:bg-rose-50"
-                    >
-                        Person löschen
-                    </button>
-                    <button
-                        type="button"
-                        @click="menuOpen = false"
-                        wire:click="analyzeInstagramMini"
-                        wire:loading.attr="disabled"
-                        wire:target="analyzeInstagramMini"
-                        @disabled(! $trackedPerson->instagram_username)
-                        class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        Mini-Scan
-                    </button>
-                    <button
-                        type="button"
-                        @click="menuOpen = false"
-                        wire:click="$set('showSettingsModal', true)"
-                        class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
-                    >
-                        Einstellungen
-                    </button>
-                    <button
-                        type="button"
-                        @click="menuOpen = false"
-                        wire:click="scanInstagramSuggestions"
-                        wire:loading.attr="disabled"
-                        wire:target="scanInstagramSuggestions"
-                        @disabled(! $trackedPerson->instagram_username || ! $latestProfileIsPrivate)
-                        class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        Vorschläge prüfen
-                    </button>
+        <div class="flex items-center gap-3">
+            <x-profile.profile-monitoring-dropdown
+                :tracked-person="$trackedPerson"
+                :on-detail-page="true"
+            />
+            <div x-data="{ menuOpen: false }" class="relative">
+                <button
+                    type="button"
+                    @click="menuOpen = ! menuOpen"
+                    class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-4 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50"
+                >
+                    Aktionen
+                    <span class="ml-2 text-slate-500">▾</span>
+                </button>
+                <div
+                    x-show="menuOpen"
+                    x-cloak
+                    @click.outside="menuOpen = false"
+                    class="absolute right-0 top-full z-20 mt-2 w-64 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl"
+                >
+                    <div class="flex flex-col p-2">
+                        <button
+                            type="button"
+                            @click="menuOpen = false"
+                            wire:click="confirmTrackedPersonDeletion"
+                            class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-rose-700 hover:bg-rose-50"
+                        >
+                            Person löschen
+                        </button>
+                        <button
+                            type="button"
+                            @click="menuOpen = false"
+                            wire:click="analyzeInstagramMini"
+                            wire:loading.attr="disabled"
+                            wire:target="analyzeInstagramMini"
+                            @disabled(! $trackedPerson->instagram_username)
+                            class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Mini-Scan
+                        </button>
+                        <button
+                            type="button"
+                            @click="menuOpen = false"
+                            wire:click="$set('showSettingsModal', true)"
+                            class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                        >
+                            Einstellungen
+                        </button>
+                        <button
+                            type="button"
+                            @click="menuOpen = false"
+                            wire:click="scanInstagramSuggestions"
+                            wire:loading.attr="disabled"
+                            wire:target="scanInstagramSuggestions"
+                            @disabled(! $trackedPerson->instagram_username || ! $latestProfileIsPrivate)
+                            class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Vorschläge prüfen
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

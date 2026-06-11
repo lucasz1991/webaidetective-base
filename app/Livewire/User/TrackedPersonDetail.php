@@ -147,6 +147,46 @@ class TrackedPersonDetail extends Component
         $this->dispatch('tracked-person-refresh');
     }
 
+    public function setMonitoringEnabled(int $trackedPersonId, bool $enabled): void
+    {
+        if ($trackedPersonId !== $this->trackedPersonId) {
+            return;
+        }
+
+        $trackedPerson = $this->resolveTrackedPerson();
+        $trackedPerson->update([
+            'monitoring_enabled' => $enabled,
+            'monitoring_interval_minutes' => max(15, (int) ($trackedPerson->monitoring_interval_minutes ?: 60)),
+        ]);
+
+        $this->fillFormFromModel($trackedPerson->fresh());
+        $this->setDetailStatus(
+            $enabled ? 'Dauerbeobachtung wurde aktiviert.' : 'Dauerbeobachtung wurde deaktiviert.',
+            'success',
+        );
+    }
+
+    public function setMonitoringInterval(int $trackedPersonId, int $intervalMinutes): void
+    {
+        if ($trackedPersonId !== $this->trackedPersonId) {
+            return;
+        }
+
+        $allowedIntervals = [15, 30, 60, 120, 360, 720, 1440, 4320, 10080];
+        $intervalMinutes = in_array($intervalMinutes, $allowedIntervals, true)
+            ? $intervalMinutes
+            : 60;
+
+        $trackedPerson = $this->resolveTrackedPerson();
+        $trackedPerson->update([
+            'monitoring_enabled' => true,
+            'monitoring_interval_minutes' => $intervalMinutes,
+        ]);
+
+        $this->fillFormFromModel($trackedPerson->fresh());
+        $this->setDetailStatus('Dauerbeobachtungsintervall wurde aktualisiert.', 'success');
+    }
+
     public function confirmTrackedPersonDeletion(): void
     {
         $this->showDeleteConfirmationModal = true;
