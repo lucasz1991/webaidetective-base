@@ -38,17 +38,6 @@
         </div>
     </div>
 
-    @if($detailStatus)
-        <div @class([
-            'rounded-lg border p-3 text-sm',
-            'border-emerald-200 bg-emerald-50 text-emerald-900' => $detailStatusLevel === 'success',
-            'border-amber-200 bg-amber-50 text-amber-950' => $detailStatusLevel === 'partial',
-            'border-rose-200 bg-rose-50 text-rose-900' => $detailStatusLevel === 'error',
-        ])>
-            {{ $detailStatus }}
-        </div>
-    @endif
-
     <div class="flex items-center justify-between gap-3">
         <a
             href="{{ url()->previous() }}"
@@ -176,6 +165,17 @@
             </div>
         </div>
     </div>
+
+    @if($detailStatus)
+        <div @class([
+            'rounded-lg border p-3 text-sm',
+            'border-emerald-200 bg-emerald-50 text-emerald-900' => $detailStatusLevel === 'success',
+            'border-amber-200 bg-amber-50 text-amber-950' => $detailStatusLevel === 'partial',
+            'border-rose-200 bg-rose-50 text-rose-900' => $detailStatusLevel === 'error',
+        ])>
+            {{ $detailStatus }}
+        </div>
+    @endif
 
     <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <div class="flex flex-col gap-5 p-5 lg:flex-row lg:items-start lg:justify-between">
