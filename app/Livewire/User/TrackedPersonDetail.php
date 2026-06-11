@@ -5,6 +5,7 @@ namespace App\Livewire\User;
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\InstagramProfile;
 use App\Models\TrackedPerson;
+use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramMedia;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Support\PublicAssetUrl;
@@ -1064,6 +1065,36 @@ class TrackedPersonDetail extends Component
         $this->dispatch('tracked-person-refresh');
     }
 
+    public function deleteReconstructedProfileCandidate(string $candidateUsername): void
+    {
+        $trackedPerson = $this->resolveTrackedPerson();
+        $candidateUsername = ltrim($this->normalizeHandle($candidateUsername) ?? '', '@');
+
+        if ($candidateUsername === '') {
+            $this->setDetailStatus('Rekonstruiertes Profil konnte nicht entfernt werden.', 'error');
+
+            return;
+        }
+
+        $deleted = TrackedPersonInstagramInferredConnection::query()
+            ->where('tracked_person_id', $trackedPerson->id)
+            ->where('candidate_username', $candidateUsername)
+            ->delete();
+
+        if ($deleted < 1) {
+            $this->setDetailStatus('Es wurden keine rekonstruierten Verbindungen zum Entfernen gefunden.', 'partial');
+
+            return;
+        }
+
+        if ($this->publicProfileTrackedPersonId === 'reconstructed:'.$candidateUsername) {
+            $this->publicProfileTrackedPersonId = '';
+        }
+
+        $this->setDetailStatus('Rekonstruiertes Profil wurde entfernt.', 'success');
+        $this->dispatch('tracked-person-refresh');
+    }
+
     public function render()
     {
         if ($this->compact) {
@@ -1086,13 +1117,6 @@ class TrackedPersonDetail extends Component
                     ])
                     ->latest('analyzed_at')
                     ->limit(20),
-                'instagramSuggestionScans' => fn ($query) => $query
-                    ->latest('analyzed_at')
-                    ->limit(20),
-                'instagramInferredConnections' => fn ($query) => $query
-                    ->with(['publicProfile', 'candidateInstagramProfile'])
-                    ->latest('last_seen_at')
-                    ->limit(100),
                 'currentInstagramProfile.postScans' => fn ($query) => $query
                     ->where('user_id', Auth::id())
                     ->latest('scanned_at')
@@ -1134,6 +1158,14 @@ class TrackedPersonDetail extends Component
                 'extractedProfile.profileVisibility',
             ) === 'public')
             ->values();
+        $reconstructedProfileCandidates = TrackedPersonInstagramInferredConnection::query()
+            ->where('tracked_person_id', $trackedPerson->id)
+            ->whereIn('relationship_type', ['follows_target', 'followed_by_target', 'suggestion_connection'])
+            ->with('candidateInstagramProfile')
+            ->latest('last_seen_at')
+            ->get(['candidate_username', 'candidate_display_name', 'relationship_type', 'last_seen_at', 'candidate_instagram_profile_id', 'source_public_username'])
+            ->unique('candidate_username')
+            ->values();
         $relationshipProfileImages = $this->relationshipProfileImagesForSnapshot($trackedPerson->latestInstagramSnapshot);
 
         $view = view('livewire.user.tracked-person-detail', [
@@ -1141,6 +1173,8 @@ class TrackedPersonDetail extends Component
             'profileImageHistory' => $profileImageHistory,
             'publicProfileCandidates' => $publicProfileCandidates,
             'relationshipProfileImages' => $relationshipProfileImages,
+            'reconstructedProfileCandidates' => $reconstructedProfileCandidates,
+            'profilePickerRows' => $this->profilePickerRows($publicProfileCandidates, $reconstructedProfileCandidates),
         ] + $this->instagramDetailViewData($trackedPerson, $relationshipProfileImages, $publicProfileCandidates));
 
         if (request()->routeIs('tracked-people.show')) {
@@ -1224,18 +1258,6 @@ class TrackedPersonDetail extends Component
             'latestFollowingStats' => $latestFollowingStats,
             'latestFollowerListAvailable' => $latestFollowerListAvailable,
             'latestFollowingListAvailable' => $latestFollowingListAvailable,
-            'inferredInstagramFollowers' => $trackedPerson->instagramInferredConnections
-                ->where('relationship_type', 'follows_target')
-                ->unique('candidate_username')
-                ->values(),
-            'inferredInstagramFollowing' => $trackedPerson->instagramInferredConnections
-                ->where('relationship_type', 'followed_by_target')
-                ->unique('candidate_username')
-                ->values(),
-            'suggestionInstagramConnections' => $trackedPerson->instagramInferredConnections
-                ->where('relationship_type', 'suggestion_connection')
-                ->unique('candidate_username')
-                ->values(),
             'latestScrapePhases' => $latestScrapePhases,
             'latestProfileVisibility' => $latestProfileVisibility,
             'latestProfileVisibilityLabel' => $this->profileVisibilityLabel($latestProfileVisibility),
@@ -1249,11 +1271,6 @@ class TrackedPersonDetail extends Component
             'snapshotScreenshots' => fn ($instagramSnapshot): Collection => $this->snapshotScreenshots($instagramSnapshot),
             'publicProfileRows' => $this->publicProfileRows($trackedPerson),
             'publicProfileCandidateRows' => $this->publicProfileCandidateRows($publicProfileCandidates),
-            'reconstructedProfileCandidates' => $this->reconstructedProfileCandidates(
-                $trackedPerson->instagramInferredConnections,
-            ),
-            'connectionScanRows' => $this->connectionScanRows($trackedPerson->instagramPublicProfileScans),
-            'suggestionScanRows' => $this->suggestionScanRows($trackedPerson->instagramSuggestionScans),
             'latestSnapshotStatusClass' => $this->snapshotStatusClass($latestSnapshot?->status_level),
             'latestSnapshotScreenshots' => $this->snapshotScreenshots($latestSnapshot),
             'latestScrapePhaseRows' => $this->scrapePhaseRows($latestScrapePhases ?? collect()),
@@ -1607,6 +1624,54 @@ class TrackedPersonDetail extends Component
                     default => 'unbekannt',
                 },
             ])
+            ->values();
+    }
+
+    private function profilePickerRows(Collection $publicProfileCandidates, Collection $reconstructedProfileCandidates): Collection
+    {
+        $trackedRows = $publicProfileCandidates
+            ->map(function (TrackedPerson $candidate) {
+                $visibility = match (data_get($candidate->latestInstagramSnapshot?->raw_payload, 'extractedProfile.profileVisibility')) {
+                    'public' => 'oeffentlich',
+                    'private' => 'privat',
+                    default => 'unbekannt',
+                };
+
+                return (object) [
+                    'type' => 'tracked',
+                    'value' => (string) $candidate->id,
+                    'title' => '@'.$candidate->instagram_username,
+                    'subtitle' => $candidate->display_name ?: 'Beobachtetes Profil',
+                    'meta' => 'Beobachtet · '.$visibility,
+                    'imageUrl' => $candidate->profile_image_url,
+                    'canDelete' => false,
+                    'deleteValue' => null,
+                ];
+            });
+
+        $reconstructedRows = $reconstructedProfileCandidates
+            ->map(function ($candidate) {
+                $profile = $candidate->candidateInstagramProfile;
+                $visibility = match ($profile?->profile_visibility) {
+                    'public' => 'oeffentlich',
+                    'private' => 'privat',
+                    default => 'unbekannt',
+                };
+
+                return (object) [
+                    'type' => 'reconstructed',
+                    'value' => 'reconstructed:'.ltrim((string) $candidate->candidate_username, '@'),
+                    'title' => '@'.ltrim((string) $candidate->candidate_username, '@'),
+                    'subtitle' => $candidate->candidate_display_name ?: ($profile?->display_name ?: 'Rekonstruiertes Profil'),
+                    'meta' => 'Rekonstruiert · '.$visibility.($candidate->source_public_username ? ' · Quelle @'.ltrim((string) $candidate->source_public_username, '@') : ''),
+                    'imageUrl' => $profile?->profile_image_storage_url,
+                    'canDelete' => true,
+                    'deleteValue' => ltrim((string) $candidate->candidate_username, '@'),
+                ];
+            });
+
+        return $trackedRows
+            ->concat($reconstructedRows)
             ->values();
     }
 

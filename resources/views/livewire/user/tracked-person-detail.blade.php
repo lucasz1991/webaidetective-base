@@ -1148,30 +1148,85 @@
                 <div class="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <div>
                         <label class="mb-1 block text-sm font-medium text-slate-700">Beobachtetes Profil</label>
+                        @php($selectedProfilePickerRow = $profilePickerRows->firstWhere('value', (string) $publicProfileTrackedPersonId))
 
-                        <select wire:model.defer="publicProfileTrackedPersonId" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500">
-                            <option value="">Profil auswaehlen</option>
-                            @foreach($publicProfileCandidateRows as $candidateRow)
-                                <option value="{{ $candidateRow->candidate->id }}">
-                                    {{ '@'.$candidateRow->candidate->instagram_username }} - {{ $candidateRow->candidate->display_name }} ({{ $candidateRow->visibilityLabel }})
-                                </option>
-                            @endforeach
+                        <div x-data="{ open: false }" class="relative">
+                            <button
+                                type="button"
+                                @click="open = ! open"
+                                class="flex w-full items-center justify-between rounded-xl border border-slate-300 bg-white px-3 py-2 text-left shadow-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                            >
+                                <div class="flex min-w-0 items-center gap-3">
+                                    @if($selectedProfilePickerRow?->imageUrl)
+                                        <img src="{{ $selectedProfilePickerRow->imageUrl }}" alt="{{ $selectedProfilePickerRow->title }}" class="h-10 w-10 rounded-full object-cover">
+                                    @else
+                                        <div class="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-500">
+                                            {{ strtoupper(substr(ltrim((string) ($selectedProfilePickerRow?->title ?? '@?'), '@'), 0, 1)) }}
+                                        </div>
+                                    @endif
+                                    <div class="min-w-0">
+                                        @if($selectedProfilePickerRow)
+                                            <div class="truncate text-sm font-semibold text-slate-900">{{ $selectedProfilePickerRow->title }}</div>
+                                            <div class="truncate text-xs text-slate-500">{{ $selectedProfilePickerRow->subtitle }}</div>
+                                            <div class="truncate text-[11px] text-slate-400">{{ $selectedProfilePickerRow->meta }}</div>
+                                        @else
+                                            <div class="text-sm font-semibold text-slate-900">Profil auswaehlen</div>
+                                            <div class="text-xs text-slate-500">Beobachtete oder rekonstruierte Profile</div>
+                                        @endif
+                                    </div>
+                                </div>
+                                <span class="ml-3 shrink-0 text-slate-400">▾</span>
+                            </button>
 
-                            @if($reconstructedProfileCandidates->isNotEmpty())
-                                <optgroup label="Rekonstruierte Vorschläge">
-                                    @foreach($reconstructedProfileCandidates as $candidate)
-                                        <option value="reconstructed:{{ ltrim($candidate->candidate_username, '@') }}">
-                                            {{ '@'.ltrim($candidate->candidate_username, '@') }}
-                                            @if($candidate->candidate_display_name)
-                                                - {{ $candidate->candidate_display_name }}
-                                            @else
-                                                - rekonstruierter Vorschlag
-                                            @endif
-                                        </option>
-                                    @endforeach
-                                </optgroup>
-                            @endif
-                        </select>
+                            <div
+                                x-show="open"
+                                x-cloak
+                                @click.outside="open = false"
+                                class="absolute z-20 mt-2 max-h-96 w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
+                            >
+                                <div class="max-h-96 overflow-y-auto p-2">
+                                    @if($profilePickerRows->isNotEmpty())
+                                        <div class="px-2 pb-1 pt-1 text-[11px] font-semibold uppercase tracking-wide text-slate-400">Auswahl</div>
+                                        @foreach($profilePickerRows as $pickerRow)
+                                            <div class="flex items-center gap-2 rounded-xl p-2 hover:bg-slate-50">
+                                                <button
+                                                    type="button"
+                                                    @click="open = false"
+                                                    wire:click="$set('publicProfileTrackedPersonId', '{{ $pickerRow->value }}')"
+                                                    class="flex min-w-0 flex-1 items-center gap-3 text-left"
+                                                >
+                                                    @if($pickerRow->imageUrl)
+                                                        <img src="{{ $pickerRow->imageUrl }}" alt="{{ $pickerRow->title }}" class="h-10 w-10 rounded-full object-cover">
+                                                    @else
+                                                        <div class="flex h-10 w-10 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-500">
+                                                            {{ strtoupper(substr(ltrim((string) $pickerRow->title, '@'), 0, 1)) }}
+                                                        </div>
+                                                    @endif
+                                                    <div class="min-w-0">
+                                                        <div class="truncate text-sm font-semibold text-slate-900">{{ $pickerRow->title }}</div>
+                                                        <div class="truncate text-xs text-slate-500">{{ $pickerRow->subtitle }}</div>
+                                                        <div class="truncate text-[11px] text-slate-400">{{ $pickerRow->meta }}</div>
+                                                    </div>
+                                                </button>
+
+                                                @if($pickerRow->canDelete)
+                                                    <button
+                                                        type="button"
+                                                        wire:click="deleteReconstructedProfileCandidate('{{ $pickerRow->deleteValue }}')"
+                                                        wire:confirm="Rekonstruiertes Profil wirklich entfernen? Alle zugehörigen rekonstruierten Verbindungen werden gelöscht."
+                                                        class="shrink-0 rounded-lg border border-rose-200 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-50"
+                                                    >
+                                                        Löschen
+                                                    </button>
+                                                @endif
+                                            </div>
+                                        @endforeach
+                                    @else
+                                        <div class="p-3 text-sm text-slate-500">Keine Profile zur Auswahl vorhanden.</div>
+                                    @endif
+                                </div>
+                            </div>
+                        </div>
                         @error('publicProfileTrackedPersonId') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
                         @if($publicProfileCandidates->isEmpty() && $reconstructedProfileCandidates->isEmpty())
                             <p class="mt-2 text-xs text-amber-700">
