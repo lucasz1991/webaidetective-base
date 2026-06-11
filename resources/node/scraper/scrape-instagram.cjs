@@ -1164,18 +1164,31 @@ async function collectProfileInfo(page, username) {
     )
     .catch(() => 0);
 
+  const isPrivate = /dieses profil ist privat|this account is private/i.test(bodyText + ' ' + (description || ''));
+  const requiresLogin = /melde dich an|anmelden|log in|sign up/i.test(bodyText);
+  const usernameSeen =
+    bodyText.toLowerCase().includes(username.toLowerCase()) ||
+    (ogTitle || '').toLowerCase().includes(username.toLowerCase());
+  const hasVisibleCounts = [counts.posts, counts.followers, counts.following].some((value) => Number.isFinite(value));
+  const profileVisibility = isPrivate
+    ? 'private'
+    : ((!requiresLogin && (hasVisibleCounts || usernameSeen)) ? 'public' : 'unknown');
+
   return {
     bodyTextPreview: bodyText.slice(0, 1200),
     counts,
     description,
     imageCount,
-    isPrivate: /dieses profil ist privat|this account is private/i.test(bodyText + ' ' + (description || '')),
+    isPrivate,
     ogImage,
+    profileImageUrl: ogImage,
     ogTitle,
-    requiresLogin: /melde dich an|anmelden|log in|sign up/i.test(bodyText),
-    usernameSeen:
-      bodyText.toLowerCase().includes(username.toLowerCase()) ||
-      (ogTitle || '').toLowerCase().includes(username.toLowerCase()),
+    requiresLogin,
+    usernameSeen,
+    profileVisibility,
+    postsCount: Number.isFinite(counts.posts) ? counts.posts : null,
+    followersCount: Number.isFinite(counts.followers) ? counts.followers : null,
+    followingCount: Number.isFinite(counts.following) ? counts.following : null,
   };
 }
 

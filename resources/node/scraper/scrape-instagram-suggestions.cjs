@@ -43,6 +43,39 @@ function suggestionCandidateErrorRequiresAbort(error, page) {
     || message.includes('verbindung zu chrome/puppeteer wurde getrennt');
 }
 
+function resolveCandidateProfileImageUrl(candidate = {}, candidateProfile = {}, candidateHoverCard = null) {
+  return candidate.profileImageUrl
+    || candidate.profile_image_url
+    || candidateHoverCard?.profileImageUrl
+    || candidateProfile.profileImageUrl
+    || candidateProfile.ogImage
+    || null;
+}
+
+function resolveCandidateProfileVisibility(candidate = {}, candidateProfile = {}, candidateHoverCard = null) {
+  if (candidateHoverCard?.profileVisibility === 'public' || candidateHoverCard?.profileVisibility === 'private') {
+    return candidateHoverCard.profileVisibility;
+  }
+
+  if (candidate.profileVisibility === 'public' || candidate.profileVisibility === 'private') {
+    return candidate.profileVisibility;
+  }
+
+  if (candidateProfile.profileVisibility === 'public' || candidateProfile.profileVisibility === 'private') {
+    return candidateProfile.profileVisibility;
+  }
+
+  if (candidateProfile.isPrivate === true) {
+    return 'private';
+  }
+
+  if (candidateProfile.isPrivate === false) {
+    return 'public';
+  }
+
+  return null;
+}
+
 async function runProfileSuggestionConnectionScan(deps, page, runtimeState, notes, targetUsername, profileUrl) {
   const {
     captureLivePreviewScreenshot,
@@ -552,6 +585,8 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
       const candidateHoverCard = candidate.hoverCard && typeof candidate.hoverCard === 'object'
         ? candidate.hoverCard
         : null;
+      const candidateProfileImageUrl = resolveCandidateProfileImageUrl(candidate, candidateProfile, candidateHoverCard);
+      const candidateProfileVisibility = resolveCandidateProfileVisibility(candidate, candidateProfile, candidateHoverCard);
       const candidateIsPublic = candidateProfile.isPrivate === false
         || (candidateProfile.isPrivate !== true && candidateHoverCard?.isPrivate === false)
         || (!candidateProfile.isPrivate && !candidateProfile.requiresLogin);
@@ -622,11 +657,18 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
           ...candidate,
           checked: true,
           checkMode: 'public-lists',
-          profileVisibility: candidateHoverCard?.profileVisibility || candidate.profileVisibility || (candidateProfile.isPrivate === false ? 'public' : null),
+          profileImageUrl: candidateProfileImageUrl,
+          profileVisibility: candidateProfileVisibility || (candidateProfile.isPrivate === false ? 'public' : null),
           isPrivate: typeof candidateHoverCard?.isPrivate === 'boolean' ? candidateHoverCard.isPrivate : candidateProfile.isPrivate,
-          postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount) ? Number(candidateHoverCard.postsCount) : candidate.postsCount,
-          followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount) ? Number(candidateHoverCard.followersCount) : candidate.followersCount,
-          followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount) ? Number(candidateHoverCard.followingCount) : candidate.followingCount,
+          postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount)
+            ? Number(candidateHoverCard.postsCount)
+            : (hasFiniteNumericValue(candidate.postsCount) ? Number(candidate.postsCount) : candidateProfile.postsCount),
+          followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount)
+            ? Number(candidateHoverCard.followersCount)
+            : (hasFiniteNumericValue(candidate.followersCount) ? Number(candidate.followersCount) : candidateProfile.followersCount),
+          followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount)
+            ? Number(candidateHoverCard.followingCount)
+            : (hasFiniteNumericValue(candidate.followingCount) ? Number(candidate.followingCount) : candidateProfile.followingCount),
           hoverCard: candidateHoverCard,
           targetFoundAsSuggestion: false,
           targetFoundInPublicLists: targetFound,
@@ -666,12 +708,18 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
             username: candidate.username,
             displayName: candidate.displayName || null,
             profileUrl: candidate.profileUrl,
-            profileImageUrl: candidate.profileImageUrl || null,
-            profileVisibility: candidateHoverCard?.profileVisibility || candidate.profileVisibility || 'public',
+            profileImageUrl: candidateProfileImageUrl,
+            profileVisibility: candidateProfileVisibility || 'public',
             isPrivate: typeof candidateHoverCard?.isPrivate === 'boolean' ? candidateHoverCard.isPrivate : false,
-            postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount) ? Number(candidateHoverCard.postsCount) : candidate.postsCount,
-            followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount) ? Number(candidateHoverCard.followersCount) : candidate.followersCount,
-            followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount) ? Number(candidateHoverCard.followingCount) : candidate.followingCount,
+            postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount)
+              ? Number(candidateHoverCard.postsCount)
+              : (hasFiniteNumericValue(candidate.postsCount) ? Number(candidate.postsCount) : candidateProfile.postsCount),
+            followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount)
+              ? Number(candidateHoverCard.followersCount)
+              : (hasFiniteNumericValue(candidate.followersCount) ? Number(candidate.followersCount) : candidateProfile.followersCount),
+            followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount)
+              ? Number(candidateHoverCard.followingCount)
+              : (hasFiniteNumericValue(candidate.followingCount) ? Number(candidate.followingCount) : candidateProfile.followingCount),
             hoverCard: candidateHoverCard,
             sourceSuggestionUsername: candidate.username,
             sourcePublicUsername: candidate.username,
@@ -749,11 +797,18 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
           ...candidate,
           checked: true,
           checkMode: 'profile-suggestions',
-          profileVisibility: candidateHoverCard?.profileVisibility || candidate.profileVisibility || (candidateProfile.isPrivate === true ? 'private' : null),
+          profileImageUrl: candidateProfileImageUrl,
+          profileVisibility: candidateProfileVisibility || (candidateProfile.isPrivate === true ? 'private' : null),
           isPrivate: typeof candidateHoverCard?.isPrivate === 'boolean' ? candidateHoverCard.isPrivate : candidateProfile.isPrivate,
-          postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount) ? Number(candidateHoverCard.postsCount) : candidate.postsCount,
-          followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount) ? Number(candidateHoverCard.followersCount) : candidate.followersCount,
-          followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount) ? Number(candidateHoverCard.followingCount) : candidate.followingCount,
+          postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount)
+            ? Number(candidateHoverCard.postsCount)
+            : (hasFiniteNumericValue(candidate.postsCount) ? Number(candidate.postsCount) : candidateProfile.postsCount),
+          followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount)
+            ? Number(candidateHoverCard.followersCount)
+            : (hasFiniteNumericValue(candidate.followersCount) ? Number(candidate.followersCount) : candidateProfile.followersCount),
+          followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount)
+            ? Number(candidateHoverCard.followingCount)
+            : (hasFiniteNumericValue(candidate.followingCount) ? Number(candidate.followingCount) : candidateProfile.followingCount),
           hoverCard: candidateHoverCard,
           targetFoundAsSuggestion: targetFound,
           finalDismissedAfterSecondMiss: definitiveNoMatch && Number(candidate.previousNoMatchChecks || 0) >= 1,
@@ -779,12 +834,18 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
             username: candidate.username,
             displayName: candidate.displayName || null,
             profileUrl: candidate.profileUrl,
-            profileImageUrl: candidate.profileImageUrl || null,
-            profileVisibility: candidateHoverCard?.profileVisibility || candidate.profileVisibility || null,
+            profileImageUrl: candidateProfileImageUrl,
+            profileVisibility: candidateProfileVisibility,
             isPrivate: typeof candidateHoverCard?.isPrivate === 'boolean' ? candidateHoverCard.isPrivate : candidateProfile.isPrivate,
-            postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount) ? Number(candidateHoverCard.postsCount) : candidate.postsCount,
-            followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount) ? Number(candidateHoverCard.followersCount) : candidate.followersCount,
-            followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount) ? Number(candidateHoverCard.followingCount) : candidate.followingCount,
+            postsCount: hasFiniteNumericValue(candidateHoverCard?.postsCount)
+              ? Number(candidateHoverCard.postsCount)
+              : (hasFiniteNumericValue(candidate.postsCount) ? Number(candidate.postsCount) : candidateProfile.postsCount),
+            followersCount: hasFiniteNumericValue(candidateHoverCard?.followersCount)
+              ? Number(candidateHoverCard.followersCount)
+              : (hasFiniteNumericValue(candidate.followersCount) ? Number(candidate.followersCount) : candidateProfile.followersCount),
+            followingCount: hasFiniteNumericValue(candidateHoverCard?.followingCount)
+              ? Number(candidateHoverCard.followingCount)
+              : (hasFiniteNumericValue(candidate.followingCount) ? Number(candidate.followingCount) : candidateProfile.followingCount),
             hoverCard: candidateHoverCard,
             sourceSuggestionUsername: candidate.username,
             sourcePublicUsername: candidate.username,

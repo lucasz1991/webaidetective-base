@@ -244,6 +244,7 @@ class TrackedPersonInstagramSuggestionScanService
                 'analyzed_at' => $analyzedAt,
             ]);
 
+            $this->storeObservedSuggestionProfiles($trackedPerson, $payload, $analyzedAt);
             $this->storeInferredSuggestionConnections(
                 $trackedPerson,
                 $scan,
@@ -294,6 +295,18 @@ class TrackedPersonInstagramSuggestionScanService
                 'display_name' => $this->nullableTrim($connection['displayName'] ?? null),
                 'profile_url' => $this->nullableTrim($connection['profileUrl'] ?? null),
                 'profile_image_url' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
+                'is_private' => $this->normalizeSuggestionProfileIsPrivate($connection),
+                'profile_visibility' => $this->normalizeSuggestionProfileVisibility($connection),
+                'posts_count' => is_numeric($connection['postsCount'] ?? null) ? (int) $connection['postsCount'] : null,
+                'followers_count' => is_numeric($connection['followersCount'] ?? null) ? (int) $connection['followersCount'] : null,
+                'following_count' => is_numeric($connection['followingCount'] ?? null) ? (int) $connection['followingCount'] : null,
+                'last_scanned_at' => $seenAt,
+                'raw_profile' => [
+                    'source' => 'suggestion_scan_match',
+                    'tracked_person_id' => $trackedPerson->id,
+                    'suggestion_scan_id' => $scan?->id,
+                    'source_public_username' => $sourceUsername,
+                ],
             ]);
             $existing = TrackedPersonInstagramInferredConnection::query()
                 ->where('tracked_person_id', $trackedPerson->id)
@@ -332,6 +345,47 @@ class TrackedPersonInstagramSuggestionScanService
                     ...$this->profileColumnData($candidateProfile?->id, $candidateProfile?->id),
                 ],
             );
+        }
+    }
+
+    private function storeObservedSuggestionProfiles(
+        TrackedPerson $trackedPerson,
+        array $payload,
+        \Illuminate\Support\Carbon $seenAt,
+    ): void {
+        $scanPayload = $this->suggestionPayload($payload);
+        $candidates = $this->mergeObservedSuggestionItems(
+            $this->normalizeObservedSuggestionItems($scanPayload['observedSuggestions'] ?? []),
+            $this->normalizeObservedSuggestionItems($scanPayload['checkedCandidates'] ?? []),
+            $this->normalizeObservedSuggestionItems($scanPayload['matches'] ?? []),
+            $this->normalizeObservedSuggestionItems($payload['suggestionConnections'] ?? []),
+        );
+
+        foreach ($candidates as $candidate) {
+            $username = $this->scraper->normalizeInstagramUsername((string) ($candidate['username'] ?? ''));
+
+            if ($username === null) {
+                continue;
+            }
+
+            $this->profileRelationshipStore->ensureProfile($username, [
+                'display_name' => $this->nullableTrim($candidate['displayName'] ?? null),
+                'profile_url' => $this->nullableTrim($candidate['profileUrl'] ?? null),
+                'profile_image_url' => $this->nullableTrim($candidate['profileImageUrl'] ?? $candidate['profile_image_url'] ?? null),
+                'is_private' => $this->normalizeSuggestionProfileIsPrivate($candidate),
+                'profile_visibility' => $this->normalizeSuggestionProfileVisibility($candidate),
+                'posts_count' => is_numeric($candidate['postsCount'] ?? null) ? (int) $candidate['postsCount'] : null,
+                'followers_count' => is_numeric($candidate['followersCount'] ?? null) ? (int) $candidate['followersCount'] : null,
+                'following_count' => is_numeric($candidate['followingCount'] ?? null) ? (int) $candidate['followingCount'] : null,
+                'last_scanned_at' => $seenAt,
+                'raw_profile' => [
+                    'source' => 'suggestion_scan_observed',
+                    'tracked_person_id' => $trackedPerson->id,
+                    'matched' => (bool) ($candidate['matched'] ?? false),
+                    'checked' => (bool) ($candidate['checked'] ?? false),
+                    'skipped_reason' => $this->nullableTrim($candidate['skippedReason'] ?? null),
+                ],
+            ]);
         }
     }
 
@@ -617,6 +671,9 @@ class TrackedPersonInstagramSuggestionScanService
                     ? $item['profileVisibility']
                     : null,
                 'isPrivate' => is_bool($item['isPrivate'] ?? null) ? $item['isPrivate'] : null,
+                'postsCount' => is_numeric($item['postsCount'] ?? null) ? (int) $item['postsCount'] : null,
+                'followersCount' => is_numeric($item['followersCount'] ?? null) ? (int) $item['followersCount'] : null,
+                'followingCount' => is_numeric($item['followingCount'] ?? null) ? (int) $item['followingCount'] : null,
                 'checked' => array_key_exists('checked', $item) ? (bool) $item['checked'] : false,
                 'skipped' => array_key_exists('skipped', $item) ? (bool) $item['skipped'] : false,
                 'matched' => array_key_exists('matched', $item) ? (bool) $item['matched'] : false,
@@ -739,5 +796,37 @@ class TrackedPersonInstagramSuggestionScanService
         $value = trim((string) $value);
 
         return $value !== '' ? $value : null;
+    }
+
+    private function normalizeSuggestionProfileVisibility(array $item): ?string
+    {
+        $visibility = $this->nullableTrim($item['profileVisibility'] ?? $item['profile_visibility'] ?? null);
+
+        if (in_array($visibility, ['public', 'private', 'unknown'], true)) {
+            return $visibility;
+        }
+
+        $isPrivate = $this->normalizeSuggestionProfileIsPrivate($item);
+
+        return $isPrivate === null ? null : ($isPrivate ? 'private' : 'public');
+    }
+
+    private function normalizeSuggestionProfileIsPrivate(array $item): ?bool
+    {
+        if (is_bool($item['isPrivate'] ?? null)) {
+            return $item['isPrivate'];
+        }
+
+        if (is_bool($item['is_private'] ?? null)) {
+            return $item['is_private'];
+        }
+
+        $visibility = $this->nullableTrim($item['profileVisibility'] ?? $item['profile_visibility'] ?? null);
+
+        return match ($visibility) {
+            'private' => true,
+            'public' => false,
+            default => null,
+        };
     }
 }
