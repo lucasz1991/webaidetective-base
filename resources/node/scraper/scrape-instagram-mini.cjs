@@ -1,11 +1,6 @@
 #!/usr/bin/env node
 
-const path = require('path');
-const { spawn } = require('child_process');
-
-function normalizeMode(value) {
-  return String(value || '').trim().toLowerCase();
-}
+const { runInstagramScraperModeWrapper } = require('./lib/instagram-scraper-mode-wrapper.cjs');
 
 function buildMiniProfile(profile = {}) {
   const counts = profile && typeof profile.counts === 'object' && profile.counts !== null
@@ -70,77 +65,8 @@ function buildMiniPayload(payload = {}) {
   };
 }
 
-function emitAndExit(payload, code = 0) {
-  process.stdout.write(`${JSON.stringify(payload)}\n`, () => {
-    process.exit(code);
-  });
-}
-
-function run() {
-  const defaultMode = 'mini';
-  const allowedModes = new Set(['mini', 'mini-scan', 'public', 'public-profile']);
-  const requestedMode = normalizeMode(process.argv[4] || defaultMode);
-  const operationMode = allowedModes.has(requestedMode) ? requestedMode : defaultMode;
-  const scraperScriptPath = path.resolve(__dirname, './scrape-instagram.cjs');
-  const childArgs = [
-    scraperScriptPath,
-    process.argv[2] || '',
-    process.argv[3] || '',
-    operationMode,
-  ];
-
-  const child = spawn(process.execPath, childArgs, {
-    env: process.env,
-    cwd: path.resolve(__dirname, '../../..'),
-    stdio: ['inherit', 'pipe', 'pipe'],
-  });
-
-  let stdout = '';
-
-  child.stdout.on('data', (chunk) => {
-    stdout += chunk.toString();
-  });
-
-  child.stderr.on('data', (chunk) => {
-    process.stderr.write(chunk);
-  });
-
-  child.on('error', (error) => {
-    emitAndExit({
-      ok: false,
-      statusLevel: 'error',
-      statusMessage: `Instagram-Mini-Scan fehlgeschlagen: ${error.message}`,
-      error: error.message,
-      operationMode: 'mini',
-    }, 1);
-  });
-
-  child.on('close', (code) => {
-    const rawOutput = stdout.trim();
-    const outputLine = rawOutput.split(/\r?\n/).filter(Boolean).pop() || '';
-
-    if (outputLine === '') {
-      emitAndExit({
-        ok: false,
-        statusLevel: 'error',
-        statusMessage: 'Instagram-Mini-Scan fehlgeschlagen: Kein Output vom Basisskript.',
-        operationMode: 'mini',
-      }, code || 1);
-      return;
-    }
-
-    try {
-      const payload = JSON.parse(outputLine);
-      emitAndExit(buildMiniPayload(payload), code || 0);
-    } catch (error) {
-      emitAndExit({
-        ok: false,
-        statusLevel: 'error',
-        statusMessage: `Instagram-Mini-Scan fehlgeschlagen: Output konnte nicht verarbeitet werden (${error.message}).`,
-        operationMode: 'mini',
-      }, code || 1);
-    }
-  });
-}
-
-run();
+runInstagramScraperModeWrapper({
+  defaultMode: 'mini',
+  allowedModes: ['mini', 'mini-scan', 'public', 'public-profile'],
+  transformPayload: (payload) => buildMiniPayload(payload),
+});

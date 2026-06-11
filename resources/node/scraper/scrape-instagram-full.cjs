@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-const { runInstagramScraperEntrypoint } = require('./lib/instagram-scraper-entrypoint.cjs');
+const { runInstagramScraperModeWrapper } = require('./lib/instagram-scraper-mode-wrapper.cjs');
 
-runInstagramScraperEntrypoint({
+runInstagramScraperModeWrapper({
   defaultMode: 'analyze',
   allowedModes: ['analyze', 'profile', 'basic', 'grunddaten'],
 });
