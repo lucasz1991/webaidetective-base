@@ -887,6 +887,9 @@ class InstagramProfileRelationshipStore
             'search_queries' => array_values(is_array($relationshipList['searchQueries'] ?? null) ? $relationshipList['searchQueries'] : []),
             'search_added_count' => (int) ($relationshipList['searchAddedCount'] ?? 0),
             'search_stop_reason' => $relationshipList['searchStopReason'] ?? null,
+            'partitioned' => (bool) ($relationshipList['partitioned'] ?? false),
+            'partition_threshold' => (int) ($relationshipList['partitionThreshold'] ?? 250),
+            'partition_max_items' => (int) ($relationshipList['partitionMaxItems'] ?? 250),
         ];
     }
 

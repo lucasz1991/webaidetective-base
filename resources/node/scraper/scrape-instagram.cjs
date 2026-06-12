@@ -107,6 +107,11 @@ const runtimeConfigDefaults = {
   followerListMaxItems: DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS,
   followingListMaxItems: DEFAULT_MAX_RELATIONSHIP_LIST_ITEMS,
   relationshipListMaxScrollRounds: DEFAULT_MAX_RELATIONSHIP_LIST_SCROLL_ROUNDS,
+  relationshipPartitionLargeLists: true,
+  relationshipPartitionThreshold: 250,
+  relationshipSearchQueriesPerDialog: 8,
+  relationshipSearchPartitionMaxItems: 250,
+  relationshipProgressCheckpointSize: 250,
   expectedFollowerCount: 0,
   expectedFollowingCount: 0,
   relationshipPrioritizedSearchUsernames: {
@@ -1224,13 +1229,13 @@ function parseInstagramMetricCount(rawValue = '') {
   return Number.isFinite(decimalValue) ? Math.round(decimalValue * multiplier) : null;
 }
 
-function buildRelationshipProgressPreview(usersByUsername, limit = 60) {
+function buildRelationshipProgressPreview(usersByUsername, limit = 250) {
   if (!(usersByUsername instanceof Map)) {
     return [];
   }
 
   return Array.from(usersByUsername.values())
-    .slice(0, Math.max(1, limit))
+    .slice(-Math.max(1, limit))
     .map((item) => ({
       username: item.username || null,
       displayName: item.displayName || null,
@@ -2900,7 +2905,7 @@ function scoreRelationshipSearchQuery(query, usersByUsername) {
 
 function buildSecondLevelRelationshipSearchQueries(queryStats, usersByUsername, alreadyQueuedQueries) {
   const productiveBaseQueries = queryStats
-    .filter((stat) => stat.depth === 1 && (stat.visibleCount > 0 || stat.addedCount > 0))
+    .filter((stat) => stat.depth === 1 && stat.stopReason === 'search-partition-item-limit')
     .map((stat) => stat.query)
     .filter((query) => query.length === 1);
   const candidates = new Set();
@@ -2979,6 +2984,18 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     3,
     1,
   ));
+  const queriesPerDialog = Math.max(
+    1,
+    Math.floor(normalizeNumberAtLeast(runtimeConfig.relationshipSearchQueriesPerDialog, 8, 1)),
+  );
+  const checkpointSize = Math.max(
+    25,
+    normalizeOptionalPositiveInteger(runtimeConfig.relationshipProgressCheckpointSize, 250) || 250,
+  );
+  const partitionMaxItems = Math.max(
+    25,
+    normalizeOptionalPositiveInteger(runtimeConfig.relationshipSearchPartitionMaxItems, 250) || 250,
+  );
   const queryQueue = [
     ...prioritizedQueries.map((query) => ({ query, depth: 0, source: 'missing-known-profile' })),
     ...queries.map((query) => ({ query, depth: 1, source: 'alphabet-partition' })),
@@ -3132,6 +3149,33 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       break;
     }
 
+    if (queryIndex > 0 && queryIndex % queriesPerDialog === 0) {
+      await setRelationshipDialogSearchQuery(page, '', searchWaitMs);
+      await closeInstagramDialog(page);
+
+      progressLog('relationship-search-batch-complete', {
+        relationship: normalizedRelationship,
+        loaded: usersByUsername.size,
+        expectedCount,
+        queryIndex,
+        queryCount: queryQueue.length,
+        queriesPerDialog,
+        itemsPreview: buildRelationshipProgressPreview(usersByUsername, checkpointSize),
+        message: `${queryIndex} alphabetische Suchsegmente abgeschlossen und zwischengespeichert.`,
+        ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+      });
+
+      await sleep(1200);
+      searchDialogState = await openDialogWithSearchInput();
+      opened = searchDialogState.opened;
+      inputAvailable = searchDialogState.inputAvailable;
+
+      if (!opened || !inputAvailable) {
+        stopReason = searchDialogState.stopReason || 'search-input-not-found-after-batch';
+        break;
+      }
+    }
+
     let queryApplied = await setRelationshipDialogSearchQuery(page, query, searchWaitMs);
 
     if (!queryApplied && openAttempts < searchInputMaxAttempts) {
@@ -3244,6 +3288,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
         source,
         queryIndex: queryIndex + 1,
         queryCount: queryQueue.length,
+        itemsPreview: buildRelationshipProgressPreview(usersByUsername, checkpointSize),
         ...livePreview,
       });
 
@@ -3265,6 +3310,11 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
           : searchTargetUsername && usersByUsername.has(searchTargetUsername)
           ? 'target-found'
           : 'max-items-reached';
+        break;
+      }
+
+      if (depth >= 1 && queryVisibleUsernames.size >= partitionMaxItems) {
+        queryStopReason = 'search-partition-item-limit';
         break;
       }
 
@@ -3320,6 +3370,8 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       queryIndex: queryIndex + 1,
       queryCount: queryQueue.length,
       visibleCount: queryVisibleUsernames.size,
+      partitionMaxItems,
+      itemsPreview: buildRelationshipProgressPreview(usersByUsername, checkpointSize),
     });
 
     queryStats.push({
@@ -3364,6 +3416,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
         queryQueue.push({
           query: secondLevelQuery,
           depth: 2,
+          source: 'alphabet-subpartition',
         });
       }
 
@@ -3541,6 +3594,12 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   );
   const hasItemLimit = maxItems > 0;
   const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
+  const partitionThreshold = Math.max(
+    1,
+    normalizeOptionalPositiveInteger(runtimeConfig.relationshipPartitionThreshold, 250) || 250,
+  );
+  let usePartitionedCollection = runtimeConfig.relationshipPartitionLargeLists !== false
+    && expectedCount > partitionThreshold;
   const result = {
     attempted: false,
     available: false,
@@ -3563,6 +3622,9 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     searchStopReason: null,
     searchMaxDepth: 0,
     searchExpandedQueryCount: 0,
+    partitioned: usePartitionedCollection,
+    partitionThreshold,
+    partitionMaxItems: runtimeConfig.relationshipSearchPartitionMaxItems || 250,
     listTemporarilyUnavailable: false,
   };
 
@@ -3594,7 +3656,19 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     return expectedCount > 0 && usersByUsername.size >= expectedCount;
   };
 
-  while (totalScrollRounds < maxScrollRounds && !targetReached()) {
+  if (usePartitionedCollection) {
+    stopReason = 'partitioned-large-list';
+    progressLog('relationship-partition-mode', {
+      relationship: normalizedRelationship,
+      loaded: 0,
+      expectedCount,
+      maxItems,
+      partitionThreshold,
+      message: `${normalizedRelationship}-Liste hat mehr als ${partitionThreshold} Eintraege und wird direkt alphabetisch segmentiert.`,
+    });
+  }
+
+  while (!usePartitionedCollection && totalScrollRounds < maxScrollRounds && !targetReached()) {
     if (markGracefulStopIfRequested(normalizedRelationship, {
       loaded: usersByUsername.size,
       expectedCount,
@@ -3745,6 +3819,28 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
         break;
       }
 
+      if (
+        runtimeConfig.relationshipPartitionLargeLists !== false
+        && usersByUsername.size > partitionThreshold
+      ) {
+        usePartitionedCollection = true;
+        result.partitioned = true;
+        stopReason = 'partition-threshold-reached';
+        progressLog('relationship-partition-mode', {
+          relationship: normalizedRelationship,
+          loaded: usersByUsername.size,
+          expectedCount,
+          maxItems,
+          partitionThreshold,
+          itemsPreview: buildRelationshipProgressPreview(
+            usersByUsername,
+            runtimeConfig.relationshipProgressCheckpointSize || 250,
+          ),
+          message: `${normalizedRelationship}-Liste hat ${usersByUsername.size} Eintraege erreicht; der Zwischenstand wird gespeichert und alphabetisch fortgesetzt.`,
+        });
+        break;
+      }
+
       if (suggestionsVisible) {
         stopReason = 'suggestions-section-reached';
         break;
@@ -3827,7 +3923,8 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     usersByUsername,
   );
   const shouldAttemptRelationshipSearch = Boolean(
-    missingKnownRelationshipSearchQueries.length > 0
+    usePartitionedCollection
+    || missingKnownRelationshipSearchQueries.length > 0
     || (Array.isArray(runtimeConfig.relationshipSearchPartitionQueries)
       && runtimeConfig.relationshipSearchPartitionQueries.length > 0)
     || normalizeInstagramUsername(options.targetUsername || runtimeConfig.relationshipSearchTargetUsername || ''),
@@ -3877,7 +3974,10 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
       searchExpandedQueryCount: result.searchExpandedQueryCount,
       reason: result.searchStopReason,
       complete: targetReached(),
-      itemsPreview: buildRelationshipProgressPreview(usersByUsername),
+      itemsPreview: buildRelationshipProgressPreview(
+        usersByUsername,
+        runtimeConfig.relationshipProgressCheckpointSize || 250,
+      ),
     });
 
     if (searchResult.gracefullyStopped) {
@@ -3929,7 +4029,12 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     complete: result.complete,
     reason: result.reason,
     rateLimited: result.rateLimited,
-    itemsPreview: buildRelationshipProgressPreview(usersByUsername),
+    partitioned: usePartitionedCollection,
+    partitionThreshold,
+    itemsPreview: buildRelationshipProgressPreview(
+      usersByUsername,
+      runtimeConfig.relationshipProgressCheckpointSize || 250,
+    ),
   });
 
   return result;

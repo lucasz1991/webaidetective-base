@@ -547,7 +547,7 @@ class InstagramScraper
         return trim('instagram-rate-limit'.($relationship ? ':'.$relationship : '').($stage ? ':'.$stage : ''));
     }
 
-    private function normalizeConnectionProgressItems(mixed $items): array
+    private function normalizeConnectionProgressItems(mixed $items, int $limit = 40): array
     {
         if (! is_array($items)) {
             return [];
@@ -555,7 +555,7 @@ class InstagramScraper
 
         $normalizedItems = [];
 
-        foreach (array_slice($items, 0, 40) as $item) {
+        foreach (array_slice($items, 0, max(1, $limit)) as $item) {
             if (! is_array($item) || ! is_scalar($item['username'] ?? null)) {
                 continue;
             }
@@ -751,7 +751,7 @@ class InstagramScraper
         }
 
         return [
-            'relationshipItems' => $this->normalizeConnectionProgressItems($event['itemsPreview'] ?? null),
+            'relationshipItems' => $this->normalizeConnectionProgressItems($event['itemsPreview'] ?? null, 250),
         ];
     }
 
@@ -813,9 +813,11 @@ class InstagramScraper
         $query = (string) ($event['query'] ?? '');
         $phasePercent = match ($stage) {
             'relationship-opening' => 2,
+            'relationship-partition-mode' => 3,
             'scan-stop-requested' => 99,
             'relationship-search-opening' => $expected > 0 ? min(98, max(5, (int) floor(($loaded / max(1, $expected)) * 100))) : 55,
             'relationship-search-query-start' => $expected > 0 ? min(98, max(5, (int) floor(($loaded / max(1, $expected)) * 100))) : 60,
+            'relationship-search-batch-complete' => $expected > 0 ? min(98, max(5, (int) floor(($loaded / max(1, $expected)) * 100))) : 70,
             'relationship-search-complete' => $expected > 0 && $loaded < $expected ? 98 : 100,
             'relationship-dialog-missing' => 100,
             'relationship-complete' => 100,

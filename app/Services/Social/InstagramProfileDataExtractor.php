@@ -133,6 +133,9 @@ class InstagramProfileDataExtractor
             'searchStopReason' => data_get($relationshipList, 'searchStopReason'),
             'searchMaxDepth' => (int) data_get($relationshipList, 'searchMaxDepth', 0),
             'searchExpandedQueryCount' => (int) data_get($relationshipList, 'searchExpandedQueryCount', 0),
+            'partitioned' => (bool) data_get($relationshipList, 'partitioned', false),
+            'partitionThreshold' => (int) data_get($relationshipList, 'partitionThreshold', 250),
+            'partitionMaxItems' => (int) data_get($relationshipList, 'partitionMaxItems', 250),
             'items' => $items,
         ];
     }
@@ -404,8 +407,7 @@ class InstagramProfileDataExtractor
         array $htmlCounts,
         bool $allowFallbackCounts = false,
         array $selectedSources = [],
-    ): array
-    {
+    ): array {
         $warnings = [];
         $metricLabels = [
             'posts' => 'Beitragszahl',

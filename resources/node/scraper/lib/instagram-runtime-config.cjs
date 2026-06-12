@@ -95,6 +95,38 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
         merged.relationshipListMaxScrollRounds,
       ) || merged.relationshipListMaxScrollRounds || defaultMaxRelationshipListScrollRounds,
     ),
+    relationshipPartitionLargeLists: input?.relationshipPartitionLargeLists !== false
+      && input?.relationship_partition_large_lists !== false
+      && merged.relationshipPartitionLargeLists !== false,
+    relationshipPartitionThreshold: Math.max(
+      1,
+      normalizeOptionalPositiveInteger(
+        input?.relationshipPartitionThreshold || input?.relationship_partition_threshold,
+        merged.relationshipPartitionThreshold || 250,
+      ) || 250,
+    ),
+    relationshipSearchQueriesPerDialog: Math.max(
+      1,
+      Math.floor(normalizeNumberAtLeast(
+        input?.relationshipSearchQueriesPerDialog || input?.relationship_search_queries_per_dialog,
+        merged.relationshipSearchQueriesPerDialog || 8,
+        1,
+      )),
+    ),
+    relationshipSearchPartitionMaxItems: Math.max(
+      25,
+      normalizeOptionalPositiveInteger(
+        input?.relationshipSearchPartitionMaxItems || input?.relationship_search_partition_max_items,
+        merged.relationshipSearchPartitionMaxItems || 250,
+      ) || 250,
+    ),
+    relationshipProgressCheckpointSize: Math.max(
+      25,
+      normalizeOptionalPositiveInteger(
+        input?.relationshipProgressCheckpointSize || input?.relationship_progress_checkpoint_size,
+        merged.relationshipProgressCheckpointSize || 250,
+      ) || 250,
+    ),
     expectedFollowerCount: normalizeOptionalPositiveInteger(input?.expectedFollowerCount, merged.expectedFollowerCount),
     expectedFollowingCount: normalizeOptionalPositiveInteger(input?.expectedFollowingCount, merged.expectedFollowingCount),
     relationshipPrioritizedSearchUsernames: normalizeRelationshipSearchUsernameMap(
