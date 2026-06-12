@@ -10,7 +10,7 @@
     wire:loading.class="cursor-wait"
     x-data="{
         mapFullscreen: false,
-        filterPanelOpen: false,
+        filterMenu: null,
         networkNode: { id: null, type: null, isKnownProfile: false },
         nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, detailUrl: null, name: '', handle: '', x: 0, y: 0 },
         openMap() {
@@ -28,7 +28,7 @@
             }
 
             this.mapFullscreen = false;
-            this.filterPanelOpen = false;
+            this.filterMenu = null;
             this.closeNodeMenu();
             document.documentElement.classList.remove('overflow-hidden');
             this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } })));
@@ -208,18 +208,145 @@
                 : 'grid-cols-1 gap-4'"
         >
             <section
-                class="relative overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm"
+                class="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-100 shadow-sm"
                 x-bind:class="mapFullscreen ? '!min-h-screen !rounded-none !border-0 !shadow-none' : ''"
             >
-                <div x-show="mapFullscreen" x-cloak class="absolute left-3 top-3 z-30">
-                    <button
-                        type="button"
-                        x-on:click="filterPanelOpen = ! filterPanelOpen"
-                        x-bind:aria-expanded="filterPanelOpen"
-                        class="rounded-lg border border-slate-200 bg-white/95 px-4 py-2 text-sm font-semibold text-slate-700 shadow-md backdrop-blur transition hover:bg-white"
-                    >
-                        Filter
-                    </button>
+                <div x-show="mapFullscreen" x-cloak class="absolute left-3 top-3 z-30 flex max-w-[calc(100%-7.5rem)] flex-wrap items-start gap-2">
+                    <div class="relative" x-on:click.outside="if (filterMenu === 'connections') filterMenu = null">
+                        <button
+                            type="button"
+                            x-on:click="filterMenu = filterMenu === 'connections' ? null : 'connections'"
+                            x-bind:aria-expanded="filterMenu === 'connections'"
+                            class="rounded-lg border border-slate-200 bg-white/95 px-4 py-2 text-sm font-semibold text-slate-700 shadow-md backdrop-blur transition hover:bg-white"
+                        >
+                            Verbindungen
+                        </button>
+                        <div
+                            x-show="filterMenu === 'connections'"
+                            x-cloak
+                            class="absolute left-0 top-full mt-2 w-[min(340px,calc(100vw-1.5rem))] rounded-lg border border-slate-200 bg-white/95 p-3 shadow-xl backdrop-blur-md"
+                        >
+                            <div class="grid gap-2 text-xs font-semibold">
+                                <button type="button" data-network-filter="public" data-active-classes="border-sky-300 bg-sky-50 text-sky-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-2 text-left transition" aria-pressed="true">
+                                    Bekannte Profile
+                                </button>
+                                <button type="button" data-network-filter="inferred" data-active-classes="border-rose-300 bg-rose-50 text-rose-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-2 text-left transition" aria-pressed="true">
+                                    Rekonstruktionen und Vorschlaege
+                                </button>
+                                <button type="button" data-network-filter="tracked" data-active-classes="border-emerald-300 bg-emerald-50 text-emerald-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-2 text-left transition" aria-pressed="true">
+                                    Follower/Gefolgt
+                                </button>
+                                <button type="button" data-network-filter="direct" data-active-classes="border-slate-900 bg-slate-900 text-white" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-2 text-left transition" aria-pressed="false">
+                                    Nur direkt verbundene Profile
+                                </button>
+                            </div>
+                            <div class="mt-3 border-t border-slate-200 pt-3 text-xs text-slate-600">
+                                <div class="mb-2 font-bold uppercase tracking-wide text-slate-500">Farben</div>
+                                <div class="grid gap-2">
+                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-emerald-600"></span> Gegenseitiges Folgen</div>
+                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-green-500"></span> Einseitiges Folgen</div>
+                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-sky-600"></span> Bekannte Profil-Verknuepfung</div>
+                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-indigo-600"></span> Profil-Relationship</div>
+                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-rose-600"></span> Rekonstruiert</div>
+                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-amber-500"></span> Vorschlag</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="relative" x-on:click.outside="if (filterMenu === 'visibility') filterMenu = null">
+                        <button
+                            type="button"
+                            x-on:click="filterMenu = filterMenu === 'visibility' ? null : 'visibility'"
+                            x-bind:aria-expanded="filterMenu === 'visibility'"
+                            class="rounded-lg border border-slate-200 bg-white/95 px-4 py-2 text-sm font-semibold text-slate-700 shadow-md backdrop-blur transition hover:bg-white"
+                        >
+                            Sichtbarkeit
+                        </button>
+                        <div
+                            x-show="filterMenu === 'visibility'"
+                            x-cloak
+                            class="absolute left-0 top-full mt-2 grid w-[min(320px,calc(100vw-1.5rem))] gap-3 rounded-lg border border-slate-200 bg-white/95 p-3 text-xs font-semibold text-slate-600 shadow-xl backdrop-blur-md"
+                        >
+                            <label class="grid gap-1.5">
+                                <span>Minimale Verbindungen</span>
+                                <select data-network-filter-min-degree class="rounded-lg border-slate-200 bg-white text-sm font-bold text-slate-900 focus:border-slate-400 focus:ring-slate-400">
+                                    <option value="0">0</option>
+                                    <option value="1">1</option>
+                                    <option value="2" selected>2</option>
+                                    <option value="3">3</option>
+                                    <option value="4">4</option>
+                                    <option value="5">5</option>
+                                    <option value="8">8</option>
+                                </select>
+                            </label>
+                            <label class="grid gap-1.5">
+                                <span>Maximal sichtbare Profile</span>
+                                <select data-network-filter-max-profiles class="rounded-lg border-slate-200 bg-white text-sm font-bold text-slate-900 focus:border-slate-400 focus:ring-slate-400">
+                                    <option value="25">25</option>
+                                    <option value="50">50</option>
+                                    <option value="100" selected>100</option>
+                                    <option value="150">150</option>
+                                    <option value="250">250</option>
+                                    <option value="500">500</option>
+                                    <option value="0">Alle</option>
+                                </select>
+                            </label>
+                            <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 leading-5">
+                                <div data-network-visible-profiles-count>0 sichtbar</div>
+                                <div>Effektives Minimum: <span data-network-effective-min-degree>0</span></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="relative" x-on:click.outside="if (filterMenu === 'display') filterMenu = null">
+                        <button
+                            type="button"
+                            x-on:click="filterMenu = filterMenu === 'display' ? null : 'display'"
+                            x-bind:aria-expanded="filterMenu === 'display'"
+                            class="rounded-lg border border-slate-200 bg-white/95 px-4 py-2 text-sm font-semibold text-slate-700 shadow-md backdrop-blur transition hover:bg-white"
+                        >
+                            Darstellung
+                        </button>
+                        <div
+                            x-show="filterMenu === 'display'"
+                            x-cloak
+                            class="absolute left-0 top-full mt-2 grid w-[min(400px,calc(100vw-1.5rem))] gap-3 rounded-lg border border-slate-200 bg-white/95 p-3 text-xs font-semibold text-slate-600 shadow-xl backdrop-blur-md"
+                        >
+                            <label class="grid gap-1.5">
+                                <span>Anordnung</span>
+                                <select data-network-layout-mode class="rounded-lg border-slate-200 bg-white text-sm font-bold text-slate-900 focus:border-slate-400 focus:ring-slate-400">
+                                    <option value="clusters">Cluster</option>
+                                    <option value="spiral">Spirale</option>
+                                    <option value="radial">Radial</option>
+                                    <option value="concentric">Ringe</option>
+                                    <option value="grid">Raster</option>
+                                </select>
+                            </label>
+                            <label class="grid grid-cols-[7.5rem_1fr_3.5rem] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <span>Abstand</span>
+                                <input type="range" min="50" max="500" step="10" value="100" data-network-layout-spacing class="w-full accent-slate-900">
+                                <span class="text-right text-slate-900" data-network-layout-spacing-value>100%</span>
+                            </label>
+                            <label class="grid grid-cols-[7.5rem_1fr_3.5rem] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <span>Icongroesse</span>
+                                <input type="range" min="50" max="500" step="10" value="100" data-network-icon-scale class="w-full accent-slate-900">
+                                <span class="text-right text-slate-900" data-network-icon-scale-value>100%</span>
+                            </label>
+                            <label class="grid grid-cols-[7.5rem_1fr_3.5rem] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <span>Unterschied</span>
+                                <input type="range" min="0" max="400" step="10" value="100" data-network-size-variance class="w-full accent-slate-900">
+                                <span class="text-right text-slate-900" data-network-size-variance-value>100%</span>
+                            </label>
+                            <div class="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
+                                <button type="button" data-network-action="zoom-out" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 transition hover:bg-slate-50">-</button>
+                                <button type="button" data-network-action="zoom-in" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 transition hover:bg-slate-50">+</button>
+                                <button type="button" data-network-action="fit" class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 transition hover:bg-slate-50">Reset</button>
+                                <button type="button" data-network-layout-reset class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 transition hover:bg-slate-50">Neu anordnen</button>
+                            </div>
+                            <div class="text-slate-500" data-network-layout-state>Nicht gespeichert</div>
+                        </div>
+                    </div>
                 </div>
 
                 <button
@@ -232,104 +359,18 @@
                     Schliessen
                 </button>
 
-                <div
-                    x-show="mapFullscreen && filterPanelOpen"
-                    x-cloak
-                    x-on:click.outside="filterPanelOpen = false"
-                    class="absolute left-3 top-14 z-20 flex max-h-[calc(100vh-4.5rem)] w-[min(440px,calc(100%-1.5rem))] flex-col gap-3 overflow-y-auto rounded-lg border border-slate-200 bg-white/95 p-3 shadow-xl backdrop-blur-md"
-                >
-                    <div class="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-600">
-                        <button type="button" data-network-filter="public" data-active-classes="border-sky-300 bg-sky-50 text-sky-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="true">
-                            Bekannte Profile
-                        </button>
-                        <button type="button" data-network-filter="inferred" data-active-classes="border-pink-300 bg-pink-50 text-pink-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="true">
-                            Rekonstruktionen
-                        </button>
-                        <button type="button" data-network-filter="tracked" data-active-classes="border-emerald-300 bg-emerald-50 text-emerald-800" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="true">
-                            Follower/Gefolgt
-                        </button>
-                        <button type="button" data-network-filter="direct" data-active-classes="border-slate-900 bg-slate-900 text-white" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="rounded-lg border px-3 py-1.5 transition" aria-pressed="false">
-                            Direkt verbunden
-                        </button>
-                        <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-slate-600">
-                            <span>Min. Verbindungen</span>
-                            <select data-network-filter-min-degree class="border-0 bg-transparent p-0 text-xs font-bold text-slate-900 focus:ring-0">
-                                <option value="0">0</option>
-                                <option value="1">1</option>
-                                <option value="2" selected>2</option>
-                                <option value="3">3</option>
-                                <option value="4">4</option>
-                                <option value="5">5</option>
-                                <option value="8">8</option>
-                            </select>
-                        </label>
-                        <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-slate-600">
-                            <span>Max. Profile</span>
-                            <select data-network-filter-max-profiles class="border-0 bg-transparent p-0 text-xs font-bold text-slate-900 focus:ring-0">
-                                <option value="25">25</option>
-                                <option value="50">50</option>
-                                <option value="100" selected>100</option>
-                                <option value="150">150</option>
-                                <option value="250">250</option>
-                                <option value="500">500</option>
-                                <option value="0">Alle</option>
-                            </select>
-                        </label>
-                        <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-slate-600">
-                            <span>Darstellung</span>
-                            <select data-network-layout-mode class="border-0 bg-transparent p-0 text-xs font-bold text-slate-900 focus:ring-0">
-                                <option value="clusters">Cluster</option>
-                                <option value="spiral">Spirale</option>
-                                <option value="radial">Radial</option>
-                                <option value="concentric">Ringe</option>
-                                <option value="grid">Raster</option>
-                            </select>
-                        </label>
-                        <span class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-slate-600">
-                            <span data-network-visible-profiles-count>0 sichtbar</span>
-                            <span class="text-slate-400">|</span>
-                            <span>effektiv min: <span data-network-effective-min-degree>0</span></span>
-                            <span class="text-slate-400">|</span>
-                            <span data-network-layout-state>Nicht gespeichert</span>
-                        </span>
-                    </div>
-                    <div class="grid gap-2 border-t border-slate-200 pt-3 text-xs font-semibold text-slate-600">
-                        <label class="grid grid-cols-[8rem_1fr_3.5rem] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                            <span>Abstand</span>
-                            <input type="range" min="50" max="500" step="10" value="100" data-network-layout-spacing class="w-full accent-slate-900">
-                            <span class="text-right text-slate-900" data-network-layout-spacing-value>100%</span>
-                        </label>
-                        <label class="grid grid-cols-[8rem_1fr_3.5rem] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                            <span>Icongroesse</span>
-                            <input type="range" min="50" max="500" step="10" value="100" data-network-icon-scale class="w-full accent-slate-900">
-                            <span class="text-right text-slate-900" data-network-icon-scale-value>100%</span>
-                        </label>
-                        <label class="grid grid-cols-[8rem_1fr_3.5rem] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                            <span>Groessenunterschied</span>
-                            <input type="range" min="0" max="400" step="10" value="100" data-network-size-variance class="w-full accent-slate-900">
-                            <span class="text-right text-slate-900" data-network-size-variance-value>100%</span>
-                        </label>
-                    </div>
-                    <div class="flex items-center gap-2 border-t border-slate-200 pt-3 text-xs font-semibold text-slate-600">
-                        <button type="button" data-network-action="zoom-out" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">-</button>
-                        <button type="button" data-network-action="zoom-in" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">+</button>
-                        <button type="button" data-network-action="fit" class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">Reset</button>
-                        <button type="button" data-network-layout-reset class="rounded-lg border border-slate-200 px-3 py-1.5 transition hover:bg-slate-50">Neu anordnen</button>
-                    </div>
-                </div>
-
                 @if($trackedPeople->isEmpty())
                     <div class="p-8 text-sm text-slate-500">
                         Noch keine Personen vorhanden. Lege zuerst Personen an, damit das Netzwerk dargestellt werden kann.
                     </div>
                 @else
                     <div
-                        class="relative bg-slate-50"
+                        class="relative bg-slate-100"
                         x-bind:class="mapFullscreen ? 'h-screen min-h-0' : 'h-[420px] min-h-[420px] cursor-zoom-in'"
                         x-on:click="if (!mapFullscreen) openMap()"
                         wire:ignore
                     >
-                        <div data-network-canvas class="absolute inset-0"></div>
+                        <div data-network-canvas class="absolute inset-0 bg-slate-100"></div>
                         <div data-network-profile-overlays class="pointer-events-none absolute inset-0 z-[4]"></div>
                         <div
                             x-show="!mapFullscreen"

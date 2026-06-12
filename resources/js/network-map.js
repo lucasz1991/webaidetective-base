@@ -362,24 +362,48 @@ function edgeKindPriority(kind) {
     return { actual: 3, reconstructed: 2, suggestion: 1 }[kind] || 0;
 }
 
+function actualConnectionState(evidences, mutualFollowing) {
+    if (mutualFollowing) {
+        return 'mutual';
+    }
+
+    const types = new Set(evidences.map((evidence) => evidence.type));
+
+    if (types.has('tracked-profile-rel')) {
+        return 'profile-relationship';
+    }
+
+    if (types.has('tracked-list')) {
+        return 'following';
+    }
+
+    return 'known-profile';
+}
+
 function edgeRenderState(source, target, evidences) {
     const visibleEvidences = evidences?.length ? evidences : [];
     const strongest = visibleEvidences
         .map((evidence) => evidence.kind)
         .sort((left, right) => edgeKindPriority(right) - edgeKindPriority(left))[0] || 'reconstructed';
-    const lineColor = {
-        actual: '#22c55e',
-        reconstructed: '#ef4444',
-        suggestion: '#f59e0b',
-    }[strongest] || '#ef4444';
     const directionalEvidences = visibleEvidences.filter((evidence) => evidence.directional);
     const hasForwardDirection = directionalEvidences.some((evidence) => evidence.from === source && evidence.to === target);
     const hasReverseDirection = directionalEvidences.some((evidence) => evidence.from === target && evidence.to === source);
     const mutualFollowing = strongest === 'actual' && hasForwardDirection && hasReverseDirection;
+    const connectionState = strongest === 'actual'
+        ? actualConnectionState(visibleEvidences.filter((evidence) => evidence.kind === 'actual'), mutualFollowing)
+        : strongest;
+    const lineColor = {
+        mutual: '#059669',
+        following: '#22c55e',
+        'known-profile': '#0284c7',
+        'profile-relationship': '#4f46e5',
+        reconstructed: '#e11d48',
+        suggestion: '#f59e0b',
+    }[connectionState] || '#64748b';
     const labels = [...new Set(visibleEvidences.map((evidence) => evidence.label).filter(Boolean))];
 
     return {
-        connectionState: strongest,
+        connectionState,
         mutualFollowing,
         lineColor,
         sourceArrowColor: lineColor,
