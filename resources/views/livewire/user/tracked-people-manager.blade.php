@@ -13,7 +13,14 @@
 
     <section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div class="border-b border-slate-200 px-3 py-3 sm:px-5 sm:py-4">
-            <div class="flex justify-end">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <div class="text-sm font-semibold text-slate-600">
+                    Beobachtete Profile:
+                    <span class="text-slate-950">{{ number_format($trackedPeople->count()) }}</span>
+                    @if($trackingLimit !== null)
+                        / {{ number_format($trackingLimit) }}
+                    @endif
+                </div>
                 <button
                     wire:click="toggleCreateForm"
                     class="inline-flex w-full sm:w-auto items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-indigo-600 to-violet-600 px-3 py-2 sm:px-4 sm:py-2.5 text-xs sm:text-sm font-semibold text-white shadow-sm transition hover:from-indigo-700 hover:to-violet-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
@@ -21,7 +28,7 @@
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                         <path fill-rule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clip-rule="evenodd" />
                     </svg>
-                    <span>{{ $showCreateForm ? 'Formular schliessen' : 'Instagram-Profil erfassen' }}</span>
+                    <span>{{ $showCreateForm ? 'Formular schliessen' : 'Beobachtetes Profil anlegen' }}</span>
                 </button>
             </div>
         </div>
@@ -61,12 +68,12 @@
                     </div>
 
                     <div class="rounded-lg border border-slate-200 bg-white p-4">
-                        <h3 class="text-base font-bold text-slate-900">Neuer Instagram-Datensatz</h3>
+                        <h3 class="text-base font-bold text-slate-900">Neues beobachtetes Profil</h3>
                         <p class="mt-2 text-sm leading-6 text-slate-600">
-                            Nach dem Speichern kannst du den Mini-Scan oder die Vollanalyse direkt auf der Detailseite starten.
+                            Diese bewusste Anlage aktiviert dauerhaftes Tracking und zaehlt gegen das Profil-Limit deines Tarifs. Ein normaler Instagram-Scan legt keine beobachtete Person an.
                         </p>
                         <button wire:click="createTrackedPerson" class="mt-4 w-full rounded-lg border border-indigo-200 bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700">
-                            Profil speichern
+                            Beobachtung anlegen
                         </button>
                     </div>
                 </div>
@@ -82,7 +89,7 @@
             />
         @empty
             <div class="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-600">
-                Noch keine Instagram-Profile gespeichert.
+                Noch keine beobachteten Profile angelegt.
             </div>
         @endforelse
     </section>

@@ -5,8 +5,11 @@ namespace App\Livewire\User;
 use App\Models\InstagramProfile;
 use App\Models\TrackedPerson;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
-use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
+use App\Services\TrackedPeople\InstagramProfileScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramPostScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
+use App\Services\TrackedPeople\TrackedPersonQuotaService;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
 
@@ -158,7 +161,17 @@ class InstagramProfileDetail extends Component
     {
         @set_time_limit(0);
 
-        $trackedPerson = $this->resolveOrCreateTrackedPerson();
+        $profile = $this->resolveProfile();
+        $trackedPerson = $this->findTrackedPerson($profile);
+
+        if (! $trackedPerson) {
+            $this->setStatus(
+                'Vorschlagsscans sind zielpersonenbezogen. Lege das Profil zuerst ausdruecklich als beobachtetes Profil an.',
+                'partial',
+            );
+
+            return;
+        }
 
         try {
             $scan = app(TrackedPersonInstagramWorkflowService::class)
@@ -179,11 +192,11 @@ class InstagramProfileDetail extends Component
     {
         @set_time_limit(0);
 
-        $trackedPerson = $this->resolveOrCreateTrackedPerson();
+        $profile = $this->resolveProfile();
 
         try {
-            $scan = app(TrackedPersonInstagramWorkflowService::class)
-                ->runPostScan($trackedPerson);
+            $scan = app(TrackedPersonInstagramPostScanService::class)
+                ->scanProfile($profile, (int) Auth::id());
             $this->setStatus(
                 'Beitragsscan abgeschlossen: '
                     .number_format($scan->observed_count).' geprueft, '
@@ -200,12 +213,12 @@ class InstagramProfileDetail extends Component
     {
         @set_time_limit(0);
 
-        $trackedPerson = $this->resolveOrCreateTrackedPerson();
+        $profile = $this->resolveProfile();
 
         try {
-            $result = app(TrackedPersonInstagramWorkflowService::class)
-                ->runAnalysis($trackedPerson, $fullScan);
-            $this->setStatus($result['resolvedStatusMessage'], $result['resolvedStatusLevel']);
+            $result = app(InstagramProfileScanService::class)
+                ->scan($profile, (int) Auth::id(), $fullScan);
+            $this->setStatus($result['statusMessage'], $result['statusLevel']);
         } catch (\Throwable $exception) {
             $this->setStatus(
                 ($fullScan ? 'Vollanalyse' : 'Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
@@ -218,46 +231,52 @@ class InstagramProfileDetail extends Component
     {
         @set_time_limit(0);
 
-        $trackedPerson = $this->resolveOrCreateTrackedPerson();
+        $profile = $this->resolveProfile();
         $label = $relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste';
 
         try {
-            $snapshot = app(TrackedPersonInstagramAnalysisService::class)
-                ->scanRelationshipList($trackedPerson, $relationship);
-            $payloadKey = $relationship === 'followers' ? 'followersList' : 'followingList';
-            $list = data_get($snapshot->raw_payload, 'extractedProfile.'.$payloadKey, []);
+            $scan = app(TrackedPersonInstagramProfileListScanService::class)
+                ->scan(null, $profile, null, [$relationship], (int) Auth::id())
+                ->first();
             $this->setStatus(
-                $label.' gescannt: '.number_format((int) data_get($list, 'activeCount', 0)).' aktive Eintraege.',
-                $snapshot->status_level === 'success' ? 'success' : 'partial',
+                $label.' gescannt: '.number_format((int) ($scan?->active_count ?? 0)).' aktive Eintraege.',
+                $scan?->status_level === 'success' ? 'success' : 'partial',
             );
         } catch (\Throwable $exception) {
             $this->setStatus($label.'-Scan fehlgeschlagen: '.$exception->getMessage(), 'error');
         }
     }
 
-    private function resolveOrCreateTrackedPerson(): TrackedPerson
+    public function addAsTrackedPerson(): void
     {
         $profile = $this->resolveProfile();
         $trackedPerson = $this->findTrackedPerson($profile);
 
         if ($trackedPerson) {
-            return $trackedPerson;
+            $this->setStatus('Dieses Profil wird bereits beobachtet.', 'partial');
+
+            return;
         }
 
         $user = Auth::user();
-        $displayName = trim((string) ($profile->display_name ?: $profile->full_name ?: $profile->username));
-        $nameParts = preg_split('/\s+/', $displayName, 2) ?: [];
-        $trackedPerson = $user->trackedPeople()->create([
-            'first_name' => $nameParts[0] ?? $profile->username,
-            'last_name' => $nameParts[1] ?? '',
-            'alias' => $displayName,
-            'instagram_username' => $profile->username,
-            'current_instagram_profile_id' => $profile->id,
-            'is_primary' => ! $user->trackedPeople()->where('is_primary', true)->exists(),
-        ]);
-        app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($trackedPerson);
 
-        return $trackedPerson->fresh();
+        try {
+            app(TrackedPersonQuotaService::class)->assertCanCreate($user);
+            $displayName = trim((string) ($profile->display_name ?: $profile->full_name ?: $profile->username));
+            $nameParts = preg_split('/\s+/', $displayName, 2) ?: [];
+            $trackedPerson = $user->trackedPeople()->create([
+                'first_name' => $nameParts[0] ?? $profile->username,
+                'last_name' => $nameParts[1] ?? '',
+                'alias' => $displayName,
+                'instagram_username' => $profile->username,
+                'current_instagram_profile_id' => $profile->id,
+                'is_primary' => ! $user->trackedPeople()->where('is_primary', true)->exists(),
+            ]);
+            app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($trackedPerson);
+            $this->setStatus('Profil wurde als beobachtetes Profil angelegt.', 'success');
+        } catch (\Throwable $exception) {
+            $this->setStatus('Profil konnte nicht beobachtet werden: '.$exception->getMessage(), 'error');
+        }
     }
 
     private function findTrackedPerson(InstagramProfile $profile): ?TrackedPerson

@@ -2,8 +2,8 @@
 
 namespace App\Services\Ai;
 
-use App\Jobs\ScanInstagramProfileJob;
 use App\Jobs\RunTrackedPersonInstagramToolScan;
+use App\Jobs\ScanInstagramProfileJob;
 use App\Livewire\User\NetworkMap;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScanItem;
@@ -12,6 +12,7 @@ use App\Models\TrackedPerson;
 use App\Models\TrackedPersonPublicProfile;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
+use App\Services\TrackedPeople\TrackedPersonQuotaService;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -172,6 +173,66 @@ class InvestigationAssistantToolService
         ];
     }
 
+    public function contextualPageContext($user, array $uiContext): array
+    {
+        $context = [
+            ...$this->conversationContext($user),
+            'page' => [
+                'route_name' => $uiContext['route_name'] ?? null,
+                'path' => $uiContext['path'] ?? null,
+                'title' => $uiContext['page_title'] ?? null,
+            ],
+            'network_map' => [
+                'open' => (bool) ($uiContext['network_map_open'] ?? false),
+                'fullscreen' => (bool) ($uiContext['network_map_fullscreen'] ?? false),
+                'map_id' => $uiContext['network_map_id'] ?? null,
+            ],
+            'selected_item' => [
+                'node_id' => $uiContext['selected_node_id'] ?? null,
+                'node_type' => $uiContext['selected_node_type'] ?? null,
+                'name' => $uiContext['selected_profile_name'] ?? null,
+                'username' => $this->normalizeUsername($uiContext['selected_profile_username'] ?? null),
+                'profile_preview_open' => (bool) ($uiContext['selected_profile_open'] ?? false),
+            ],
+        ];
+
+        if (! $user) {
+            return $context;
+        }
+
+        $trackedPersonId = (int) (
+            $uiContext['tracked_person_id']
+            ?? $uiContext['network_focus_tracked_person_id']
+            ?? 0
+        );
+        $selectedUsername = $this->normalizeUsername($uiContext['selected_profile_username'] ?? null);
+
+        if ($trackedPersonId > 0) {
+            $profileContext = $this->getProfileContext($user, ['tracked_person_id' => $trackedPersonId]);
+
+            if ($profileContext['ok'] ?? false) {
+                $context['current_profile'] = $profileContext;
+            }
+        } elseif ($selectedUsername) {
+            $trackedPerson = $this->resolveTrackedPerson($user, ['instagram_username' => $selectedUsername]);
+
+            if ($trackedPerson) {
+                $context['current_profile'] = $this->getProfileContext($user, [
+                    'tracked_person_id' => $trackedPerson->id,
+                ]);
+            }
+        }
+
+        $instagramProfileId = (int) ($uiContext['instagram_profile_id'] ?? 0);
+        $instagramProfile = $this->accessibleInstagramProfile($user, $instagramProfileId, $selectedUsername);
+
+        if ($instagramProfile) {
+            $context['current_instagram_profile'] = $this->instagramProfileContext($user, $instagramProfile);
+        }
+
+        return $context;
+    }
+
     private function listTrackedPeople($user, array $arguments): array
     {
         $query = trim((string) ($arguments['query'] ?? ''));
@@ -320,6 +381,7 @@ class InvestigationAssistantToolService
         $payload = array_filter($payload, fn ($value): bool => $value !== null && $value !== '');
 
         if (! $person) {
+            app(TrackedPersonQuotaService::class)->assertCanCreate($user);
             $payload['first_name'] = $payload['first_name'] ?? 'Instagram';
             $payload['last_name'] = $payload['last_name'] ?? '@'.$instagramUsername;
             $payload['is_primary'] = ! $user->trackedPeople()->where('is_primary', true)->exists();
@@ -636,6 +698,113 @@ class InvestigationAssistantToolService
         ];
     }
 
+    private function instagramProfileContext($user, InstagramProfile $profile): array
+    {
+        $userId = (int) $user->id;
+        $outgoingQuery = $profile->sourceRelationships()
+            ->where('status', 'active')
+            ->whereNull('removed_at')
+            ->whereHas('scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId));
+        $incomingQuery = $profile->relatedRelationships()
+            ->where('status', 'active')
+            ->whereNull('removed_at')
+            ->whereHas('scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId));
+
+        $outgoing = (clone $outgoingQuery)
+            ->with('relatedInstagramProfile')
+            ->latest('last_seen_at')
+            ->limit(20)
+            ->get()
+            ->map(fn (InstagramProfileRelationship $relationship): array => [
+                'direction' => 'outgoing',
+                'list_type' => $relationship->list_type,
+                'last_seen_at' => optional($relationship->last_seen_at)->toDateTimeString(),
+                'profile' => $this->compactInstagramProfileSummary($relationship->relatedInstagramProfile),
+            ])
+            ->values()
+            ->all();
+        $incoming = (clone $incomingQuery)
+            ->with('sourceInstagramProfile')
+            ->latest('last_seen_at')
+            ->limit(20)
+            ->get()
+            ->map(fn (InstagramProfileRelationship $relationship): array => [
+                'direction' => 'incoming',
+                'list_type' => $relationship->list_type,
+                'last_seen_at' => optional($relationship->last_seen_at)->toDateTimeString(),
+                'profile' => $this->compactInstagramProfileSummary($relationship->sourceInstagramProfile),
+            ])
+            ->values()
+            ->all();
+
+        return [
+            'profile' => [
+                ...$this->compactInstagramProfileSummary($profile),
+                'biography' => $profile->biography,
+                'profile_url' => $profile->profile_url ?: 'https://www.instagram.com/'.$profile->username.'/',
+                'last_status_level' => $profile->last_status_level,
+                'last_status_message' => $profile->last_status_message,
+                'last_scanned_at' => optional($profile->last_scanned_at)->toDateTimeString(),
+            ],
+            'network' => [
+                'active_outgoing_relationships' => (clone $outgoingQuery)->count(),
+                'active_incoming_relationships' => (clone $incomingQuery)->count(),
+                'recent_outgoing_profiles' => $outgoing,
+                'recent_incoming_profiles' => $incoming,
+            ],
+        ];
+    }
+
+    private function compactInstagramProfileSummary(?InstagramProfile $profile): ?array
+    {
+        if (! $profile) {
+            return null;
+        }
+
+        return [
+            'instagram_profile_id' => (int) $profile->id,
+            'username' => $profile->username,
+            'display_name' => $profile->display_name ?: $profile->full_name,
+            'visibility' => $profile->profile_visibility ?: ($profile->is_private === true ? 'private' : 'unknown'),
+            'followers_count' => $profile->followers_count,
+            'following_count' => $profile->following_count,
+            'posts_count' => $profile->posts_count,
+        ];
+    }
+
+    private function accessibleInstagramProfile($user, int $profileId = 0, ?string $username = null): ?InstagramProfile
+    {
+        if ($profileId <= 0 && ! $username) {
+            return null;
+        }
+
+        $userId = (int) $user->id;
+
+        return InstagramProfile::query()
+            ->when(
+                $profileId > 0,
+                fn ($query) => $query->whereKey($profileId),
+                fn ($query) => $query->where('username', $username),
+            )
+            ->where(function ($query) use ($userId): void {
+                $query
+                    ->whereHas('trackedPersonLinks', fn ($links) => $links->where('user_id', $userId))
+                    ->orWhereHas('publicProfileLinks', fn ($links) => $links->where('user_id', $userId))
+                    ->orWhereHas('listScans', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas('sourceRelationships.scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas('relatedRelationships.scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas(
+                        'candidateInferredConnections.trackedPerson',
+                        fn ($people) => $people->where('user_id', $userId),
+                    )
+                    ->orWhereHas(
+                        'sourceInferredConnections.trackedPerson',
+                        fn ($people) => $people->where('user_id', $userId),
+                    );
+            })
+            ->first();
+    }
+
     private function networkCandidateSummary(InstagramProfile $profile, ?TrackedPerson $focusPerson = null): array
     {
         $activeOutgoing = InstagramProfileRelationship::query()
@@ -827,6 +996,7 @@ class InvestigationAssistantToolService
 
     private function createTrackedPersonFromInstagramProfile($user, InstagramProfile $profile, ?string $displayName, ?string $notes): TrackedPerson
     {
+        app(TrackedPersonQuotaService::class)->assertCanCreate($user);
         $name = trim((string) ($displayName ?: $profile->display_name ?: $profile->full_name ?: $profile->username));
         $parts = preg_split('/\s+/', $name, 2) ?: [];
 

@@ -3,6 +3,7 @@
 namespace App\Livewire\User;
 
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
+use App\Services\TrackedPeople\TrackedPersonQuotaService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Livewire\Component;
@@ -10,25 +11,43 @@ use Livewire\Component;
 class TrackedPeopleManager extends Component
 {
     public $first_name = '';
+
     public $last_name = '';
+
     public $alias = '';
+
     public $date_of_birth = '';
+
     public $city = '';
+
     public $country = '';
+
     public $notes = '';
+
     public $instagram_username = '';
+
     public $tiktok_username = '';
+
     public $facebook_username = '';
+
     public $x_username = '';
+
     public $youtube_username = '';
+
     public $snapchat_username = '';
 
     public ?int $selectedTrackedPersonId = null;
+
     public bool $showDetailModal = false;
+
     public bool $showCreateForm = false;
+
     public ?int $trackedPersonIdPendingDeletion = null;
+
     public bool $showDeleteConfirmationModal = false;
+
     public $managerStatus = null;
+
     public $managerStatusLevel = 'neutral';
 
     protected $listeners = [
@@ -38,19 +57,19 @@ class TrackedPeopleManager extends Component
     protected function rules(): array
     {
         return [
-            'first_name'            => ['required', 'string', 'max:255'],
-            'last_name'             => ['required', 'string', 'max:255'],
-            'alias'                 => ['nullable', 'string', 'max:255'],
-            'date_of_birth'         => ['nullable', 'date'],
-            'city'                  => ['nullable', 'string', 'max:255'],
-            'country'               => ['nullable', 'string', 'max:255'],
-            'notes'                 => ['nullable', 'string'],
-            'instagram_username'    => ['nullable', 'string', 'max:255'],
-            'tiktok_username'       => ['nullable', 'string', 'max:255'],
-            'facebook_username'     => ['nullable', 'string', 'max:255'],
-            'x_username'            => ['nullable', 'string', 'max:255'],
-            'youtube_username'      => ['nullable', 'string', 'max:255'],
-            'snapchat_username'     => ['nullable', 'string', 'max:255'],
+            'first_name' => ['required', 'string', 'max:255'],
+            'last_name' => ['required', 'string', 'max:255'],
+            'alias' => ['nullable', 'string', 'max:255'],
+            'date_of_birth' => ['nullable', 'date'],
+            'city' => ['nullable', 'string', 'max:255'],
+            'country' => ['nullable', 'string', 'max:255'],
+            'notes' => ['nullable', 'string'],
+            'instagram_username' => ['nullable', 'string', 'max:255'],
+            'tiktok_username' => ['nullable', 'string', 'max:255'],
+            'facebook_username' => ['nullable', 'string', 'max:255'],
+            'x_username' => ['nullable', 'string', 'max:255'],
+            'youtube_username' => ['nullable', 'string', 'max:255'],
+            'snapchat_username' => ['nullable', 'string', 'max:255'],
         ];
     }
 
@@ -198,6 +217,15 @@ class TrackedPeopleManager extends Component
     {
         $validated = $this->validate();
         $user = Auth::user();
+
+        try {
+            app(TrackedPersonQuotaService::class)->assertCanCreate($user);
+        } catch (\Throwable $exception) {
+            $this->setManagerStatus($exception->getMessage(), 'error');
+
+            return;
+        }
+
         $validated = [
             'first_name' => trim($validated['first_name']),
             'last_name' => trim($validated['last_name']),
@@ -261,6 +289,7 @@ class TrackedPeopleManager extends Component
 
         return view('livewire.user.tracked-people-manager', [
             'trackedPeople' => $trackedPeople,
+            'trackingLimit' => $user ? app(TrackedPersonQuotaService::class)->maxProfiles($user) : null,
         ]);
     }
 

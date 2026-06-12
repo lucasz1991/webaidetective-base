@@ -7,8 +7,7 @@ use App\Models\InstagramProfile;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonPublicProfile;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
-use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
-use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
+use App\Services\TrackedPeople\InstagramProfileScanService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -40,11 +39,9 @@ class ScanInstagramProfileJob implements ShouldQueue
     }
 
     public function handle(
-        TrackedPersonInstagramProfileListScanService $scanService,
+        InstagramProfileScanService $scanService,
         InstagramProfileRelationshipStore $profileRelationshipStore,
-        TrackedPersonInstagramSuggestionScanService $suggestionScanService,
-    ): void
-    {
+    ): void {
         $trackedPerson = TrackedPerson::query()
             ->whereKey($this->trackedPersonId)
             ->where('user_id', $this->userId)
@@ -65,7 +62,7 @@ class ScanInstagramProfileJob implements ShouldQueue
             $profile = $publicProfile?->instagramProfile ?: ($publicProfile ? $profileRelationshipStore->syncPublicProfile($publicProfile) : null);
         }
 
-        if (! $trackedPerson || ! $profile) {
+        if (! $profile) {
             Log::warning('Network-map profile scan skipped because the target was not found.', [
                 'tracked_person_id' => $this->trackedPersonId,
                 'instagram_profile_id' => $instagramProfileId ?: null,
@@ -81,34 +78,13 @@ class ScanInstagramProfileJob implements ShouldQueue
             'last_status_message' => 'Profil-Vollanalyse laeuft im Hintergrund.',
         ])->save();
 
-        $trackedPerson->forceFill([
-            'last_instagram_status_level' => 'partial',
-            'last_instagram_status_message' => 'Profil-Vollanalyse aus der Network Map laeuft im Hintergrund.',
-        ])->save();
-
         try {
-            $scanService->scan($trackedPerson, $profile);
-            $profile = $profile->fresh() ?: $profile;
+            $scanService->scan($profile, $this->userId, true);
 
-            if ($profile->is_private === true || $profile->profile_visibility === 'private') {
-                $suggestionScanService->scan($trackedPerson, null, $profile->username);
-            }
-
-            $freshProfile = $profile->fresh();
-
-            if ($freshProfile) {
-                $freshProfile->forceFill([
-                    'last_status_level' => 'success',
-                    'last_status_message' => 'Profil-Vollanalyse aus der Network Map abgeschlossen.',
-                ])->save();
-            }
-
-            $trackedPerson->forceFill([
-                'last_instagram_status_level' => 'success',
-                'last_instagram_status_message' => 'Profil-Vollanalyse aus der Network Map abgeschlossen.',
-            ])->save();
             NetworkMap::forgetGraphCacheForUser($this->userId);
-            NetworkMap::forgetGraphCacheForUser($this->userId, $trackedPerson->id);
+            if ($trackedPerson) {
+                NetworkMap::forgetGraphCacheForUser($this->userId, $trackedPerson->id);
+            }
         } catch (\Throwable $exception) {
             Log::warning('Network-map profile scan failed.', [
                 'tracked_person_id' => $this->trackedPersonId,
@@ -122,12 +98,10 @@ class ScanInstagramProfileJob implements ShouldQueue
                 'last_status_level' => 'error',
                 'last_status_message' => 'Profil-Vollanalyse fehlgeschlagen: '.$exception->getMessage(),
             ])->save();
-            $trackedPerson->forceFill([
-                'last_instagram_status_level' => 'error',
-                'last_instagram_status_message' => 'Profil-Vollanalyse fehlgeschlagen: '.$exception->getMessage(),
-            ])->save();
             NetworkMap::forgetGraphCacheForUser($this->userId);
-            NetworkMap::forgetGraphCacheForUser($this->userId, $trackedPerson->id);
+            if ($trackedPerson) {
+                NetworkMap::forgetGraphCacheForUser($this->userId, $trackedPerson->id);
+            }
 
             throw $exception;
         }

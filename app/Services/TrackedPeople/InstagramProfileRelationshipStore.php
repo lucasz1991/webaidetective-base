@@ -230,6 +230,7 @@ class InstagramProfileRelationshipStore
         array $relationshipList,
         array $payload = [],
         string $scanMode = 'profile_list',
+        ?int $userId = null,
     ): ?InstagramProfileListScan {
         if (! $this->isReady() || ! in_array($listType, ['followers', 'following'], true)) {
             return null;
@@ -240,7 +241,7 @@ class InstagramProfileRelationshipStore
             'instagram_profile_id' => $sourceProfile->id,
             'tracked_person_id' => $trackedPerson?->id,
             'snapshot_id' => null,
-            'user_id' => $trackedPerson?->user_id,
+            'user_id' => $trackedPerson?->user_id ?: $userId,
             'list_type' => $listType,
             'scan_mode' => $scanMode,
             'status_level' => $this->directRelationshipListStatusLevel($relationshipList, $payload),

@@ -2,15 +2,16 @@
 
 namespace App\Livewire\User;
 
+use App\Jobs\ScanInstagramProfileJob;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileRelationship;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
-use App\Support\PublicAssetUrl;
 use App\Models\User;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
-use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
-use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
+use App\Services\TrackedPeople\InstagramProfileScanService;
+use App\Services\TrackedPeople\TrackedPersonQuotaService;
+use App\Support\PublicAssetUrl;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -142,7 +143,7 @@ class NetworkMap extends Component
 
         // Also include primary person flag
         $data['primary_person_id'] = $this->primaryTrackedPersonId;
-        
+
         return hash('sha256', json_encode($data));
     }
 
@@ -182,6 +183,7 @@ class NetworkMap extends Component
                 'status' => 'no-user',
                 'scope' => $this->contextTrackedPersonId ? 'person-'.$this->contextTrackedPersonId : 'global',
             ];
+
             return;
         }
 
@@ -237,6 +239,7 @@ class NetworkMap extends Component
                 chunkUrl: route('network.graph-chunk', ['token' => $cachedToken, 'chunk' => '__CHUNK__']),
                 stats: $this->graphStats,
             );
+
             return;
         }
 
@@ -258,7 +261,7 @@ class NetworkMap extends Component
             ],
             now()->addMinutes(30),
         );
-        
+
         // Cache the hash mapping for future validation
         Cache::put(
             $metaCacheKey,
@@ -270,7 +273,7 @@ class NetworkMap extends Component
             ],
             now()->addMinutes(30),
         );
-        
+
         // Keep the lightweight pointer key for quick manual inspection.
         Cache::put(
             $graphHashPointerKey,
@@ -1239,8 +1242,7 @@ class NetworkMap extends Component
         Collection $nodesByInstagram,
         Collection $peopleByInstagram,
         mixed $item,
-    ): ?array
-    {
+    ): ?array {
         if (! is_array($item) || ! filled($item['username'] ?? null)) {
             return null;
         }
@@ -1520,8 +1522,7 @@ class NetworkMap extends Component
         string $sourceLabel,
         string $detail,
         array $metadata = [],
-    ): void
-    {
+    ): void {
         $edgeId = 'tracked-list-'.$from.'-'.$to;
 
         if (! isset($edges[$edgeId])) {
@@ -1741,7 +1742,7 @@ class NetworkMap extends Component
         }
 
         // Separate nodes by type
-        $people = array_values(array_filter($nodes, fn (array $node): bool => $node['type'] === 'person' && !($node['isPrimary'] ?? false)));
+        $people = array_values(array_filter($nodes, fn (array $node): bool => $node['type'] === 'person' && ! ($node['isPrimary'] ?? false)));
         $profiles = array_values(array_filter($nodes, fn (array $node): bool => $node['type'] === 'profile'));
         $candidates = array_values(array_filter($nodes, fn (array $node): bool => $node['type'] === 'candidate'));
 
@@ -1933,7 +1934,7 @@ class NetworkMap extends Component
                 $targetId = $existingNode['id'];
 
                 // Avoid duplicate edges
-                $relationshipKey = min($sourceId, $targetId) . '|' . max($sourceId, $targetId);
+                $relationshipKey = min($sourceId, $targetId).'|'.max($sourceId, $targetId);
                 if (isset($processedRelationships[$relationshipKey])) {
                     continue;
                 }
@@ -1989,6 +1990,7 @@ class NetworkMap extends Component
 
         if (! $profile) {
             $this->dispatch('notification', type: 'error', message: 'Profil konnte nicht gefunden werden');
+
             return;
         }
 
@@ -1997,6 +1999,7 @@ class NetworkMap extends Component
 
             if (! $trackedPerson) {
                 $this->dispatch('notification', type: 'error', message: 'Keine Hauptperson ausgewaehlt');
+
                 return;
             }
 
@@ -2005,7 +2008,7 @@ class NetworkMap extends Component
                 'last_status_message' => 'Profil-Vollanalyse wurde als Hintergrund-Job eingereiht.',
             ])->save();
 
-            \App\Jobs\ScanInstagramProfileJob::dispatch($trackedPerson->id, $profile->id, (int) $user->id);
+            ScanInstagramProfileJob::dispatch($trackedPerson->id, $profile->id, (int) $user->id);
             $this->dispatch('notification', type: 'success', message: 'Profil-Vollanalyse wurde als Hintergrund-Job gestartet');
         } catch (\Throwable $e) {
             $this->dispatch('notification', type: 'error', message: 'Fehler beim Starten des Scans: '.$e->getMessage());
@@ -2030,6 +2033,7 @@ class NetworkMap extends Component
         }
         if (! $profile || ! filled($profile->username)) {
             $this->dispatch('notification', type: 'error', message: 'Profil konnte nicht hinzugefügt werden');
+
             return;
         }
 
@@ -2037,6 +2041,7 @@ class NetworkMap extends Component
             $trackedPerson = $this->getPrimaryTrackedPerson($user);
             if (! $trackedPerson) {
                 $this->dispatch('notification', type: 'error', message: 'Keine Hauptperson ausgewählt');
+
                 return;
             }
 
@@ -2048,6 +2053,7 @@ class NetworkMap extends Component
 
             if ($existingPublicProfile) {
                 $this->dispatch('notification', type: 'warning', message: 'Profil ist bereits als bekannt gespeichert');
+
                 return;
             }
 
@@ -2151,6 +2157,14 @@ class NetworkMap extends Component
         ];
 
         $this->showProfilePreviewModal = true;
+        $this->dispatch(
+            'assistant-context-profile-preview',
+            open: true,
+            instagramProfileId: (int) $profile->id,
+            username: $normalizedUsername,
+            name: $this->profilePreview['display_name'],
+            nodeId: $nodeId,
+        );
     }
 
     public function closeProfilePreview(): void
@@ -2158,6 +2172,7 @@ class NetworkMap extends Component
         $this->showProfilePreviewModal = false;
         $this->previewNodeId = null;
         $this->profilePreview = [];
+        $this->dispatch('assistant-context-profile-preview', open: false);
     }
 
     public function addPreviewProfileAsKnown(): void
@@ -2202,17 +2217,24 @@ class NetworkMap extends Component
             ->first();
 
         if (! $existing) {
-            $displayName = trim((string) ($profile->display_name ?: $profile->full_name ?: $normalizedUsername));
-            $nameParts = preg_split('/\s+/', $displayName, 2) ?: [];
-            $existing = $user->trackedPeople()->create([
-                'first_name' => $nameParts[0] ?? $normalizedUsername,
-                'last_name' => $nameParts[1] ?? '',
-                'alias' => $displayName,
-                'instagram_username' => $normalizedUsername,
-                'current_instagram_profile_id' => $profile->id,
-                'is_primary' => ! $user->trackedPeople()->where('is_primary', true)->exists(),
-            ]);
-            app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($existing);
+            try {
+                app(TrackedPersonQuotaService::class)->assertCanCreate($user);
+                $displayName = trim((string) ($profile->display_name ?: $profile->full_name ?: $normalizedUsername));
+                $nameParts = preg_split('/\s+/', $displayName, 2) ?: [];
+                $existing = $user->trackedPeople()->create([
+                    'first_name' => $nameParts[0] ?? $normalizedUsername,
+                    'last_name' => $nameParts[1] ?? '',
+                    'alias' => $displayName,
+                    'instagram_username' => $normalizedUsername,
+                    'current_instagram_profile_id' => $profile->id,
+                    'is_primary' => ! $user->trackedPeople()->where('is_primary', true)->exists(),
+                ]);
+                app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($existing);
+            } catch (\Throwable $exception) {
+                $this->dispatch('notification', type: 'error', message: $exception->getMessage());
+
+                return;
+            }
         }
 
         $this->forgetGraphCache((int) $user->id);
@@ -2264,14 +2286,6 @@ class NetworkMap extends Component
         }
 
         try {
-            $trackedPerson = $this->getPrimaryTrackedPerson($user);
-
-            if (! $trackedPerson) {
-                $this->dispatch('notification', type: 'error', message: 'Keine Hauptperson ausgewaehlt');
-
-                return;
-            }
-
             $progress = fn (array $state) => $this->streamNetworkMapScanProgress($state);
 
             $this->streamNetworkMapScanProgress([
@@ -2283,11 +2297,20 @@ class NetworkMap extends Component
                 'observedSuggestionCount' => 0,
             ]);
 
-            $this->runNetworkMapProfileFullAnalysis($trackedPerson, $profile, $progress);
+            $result = app(InstagramProfileScanService::class)->scan(
+                $profile,
+                (int) $user->id,
+                true,
+                $progress,
+            );
             $this->forgetGraphCache((int) $user->id);
             $this->graphToken = null;
             $this->prepareGraph();
-            $this->dispatch('notification', type: 'success', message: 'Profil-Vollanalyse wurde ausgefuehrt');
+            $this->dispatch(
+                'notification',
+                type: $result['statusLevel'] === 'success' ? 'success' : 'warning',
+                message: $result['statusMessage'],
+            );
         } catch (\Throwable $e) {
             $this->streamNetworkMapScanProgress([
                 'phase' => 'error',
@@ -2296,26 +2319,6 @@ class NetworkMap extends Component
             ]);
             $this->dispatch('notification', type: 'error', message: 'Profil-Vollanalyse fehlgeschlagen: '.$e->getMessage());
         }
-    }
-
-    private function runNetworkMapProfileFullAnalysis(
-        TrackedPerson $trackedPerson,
-        InstagramProfile $profile,
-        ?callable $progress = null,
-    ): void {
-        app(TrackedPersonInstagramProfileListScanService::class)->scan($trackedPerson, $profile, $progress);
-
-        $profile = $profile->fresh() ?: $profile;
-
-        if (! $this->instagramProfileIsPrivate($profile)) {
-            return;
-        }
-
-        app(TrackedPersonInstagramSuggestionScanService::class)->scan(
-            $trackedPerson,
-            $progress,
-            $profile->username,
-        );
     }
 
     private function streamNetworkMapScanProgress(array $state): void

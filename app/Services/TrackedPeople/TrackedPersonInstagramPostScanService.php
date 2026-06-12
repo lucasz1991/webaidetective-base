@@ -4,8 +4,8 @@ namespace App\Services\TrackedPeople;
 
 use App\Models\InstagramPost;
 use App\Models\InstagramPostMetric;
-use App\Models\InstagramProfile;
 use App\Models\InstagramPostScan;
+use App\Models\InstagramProfile;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Services\Billing\ScanCreditService;
@@ -24,8 +24,7 @@ class TrackedPersonInstagramPostScanService
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
         private readonly InstagramPostMediaStorage $postMediaStorage,
-    ) {
-    }
+    ) {}
 
     private ?array $activeScanControl = null;
 
@@ -40,23 +39,51 @@ class TrackedPersonInstagramPostScanService
             throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');
         }
 
-        $scanControl = $this->scanCoordinator->begin($trackedPerson->id, 'Instagram-Beitragsscan');
-        $lock = Cache::lock('tracked-person-instagram-post-scan:'.$trackedPerson->id, 3600);
+        $profile = $this->profileRelationshipStore->syncTrackedPersonProfile($trackedPerson);
 
-        if (! $lock->get()) {
-            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
-            throw new \RuntimeException('Fuer diese Person laeuft bereits ein Instagram-Beitragsscan.');
+        if (! $profile) {
+            throw new \RuntimeException('Das Instagram-Profil konnte fuer den Beitragsscan nicht gespeichert werden.');
         }
 
+        $scanControl = $this->scanCoordinator->begin($trackedPerson->id, 'Instagram-Beitragsscan');
         $this->activeScanControl = $scanControl;
 
         try {
-            $profile = $this->profileRelationshipStore->syncTrackedPersonProfile($trackedPerson);
+            return $this->scanProfileWithLock($profile, (int) $trackedPerson->user_id, $trackedPerson, $snapshot, $progress);
+        } finally {
+            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
+            $this->activeScanControl = null;
+        }
+    }
 
-            if (! $profile) {
-                throw new \RuntimeException('Das Instagram-Profil konnte fuer den Beitragsscan nicht gespeichert werden.');
-            }
+    public function scanProfile(
+        InstagramProfile $profile,
+        int $userId,
+        ?callable $progress = null,
+    ): InstagramPostScan {
+        return $this->scanProfileWithLock($profile, $userId, null, null, $progress);
+    }
 
+    private function scanProfileWithLock(
+        InstagramProfile $profile,
+        int $userId,
+        ?TrackedPerson $trackedPerson,
+        ?TrackedPersonInstagramSnapshot $snapshot,
+        ?callable $progress,
+    ): InstagramPostScan {
+        $username = $this->scraper->normalizeInstagramUsername($profile->username);
+
+        if ($username === null || $userId <= 0) {
+            throw new \RuntimeException('Fuer dieses Profil ist kein gueltiger Instagram-Name hinterlegt.');
+        }
+
+        $lock = Cache::lock('instagram-profile-post-scan:'.$profile->id, 3600);
+
+        if (! $lock->get()) {
+            throw new \RuntimeException('Fuer dieses Profil laeuft bereits ein Instagram-Beitragsscan.');
+        }
+
+        try {
             $payload = $this->scraper->scrape(
                 $username,
                 'posts',
@@ -67,19 +94,18 @@ class TrackedPersonInstagramPostScanService
                 ]),
             );
 
-            return $this->storeScan($trackedPerson, $profile, $snapshot, $payload);
+            return $this->storeScan($trackedPerson, $profile, $snapshot, $payload, $userId);
         } finally {
             $lock->release();
-            $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
-            $this->activeScanControl = null;
         }
     }
 
     private function storeScan(
-        TrackedPerson $trackedPerson,
+        ?TrackedPerson $trackedPerson,
         InstagramProfile $profile,
         ?TrackedPersonInstagramSnapshot $snapshot,
         array $payload,
+        int $userId,
     ): InstagramPostScan {
         $this->assertActiveScanCurrent();
 
@@ -95,12 +121,13 @@ class TrackedPersonInstagramPostScanService
             $postPayload,
             $posts,
             $scannedAt,
+            $userId,
         ): array {
             $scan = InstagramPostScan::create([
                 'instagram_profile_id' => $profile->id,
-                'tracked_person_id' => $trackedPerson->id,
+                'tracked_person_id' => $trackedPerson?->id,
                 'snapshot_id' => $snapshot?->id,
-                'user_id' => $trackedPerson->user_id,
+                'user_id' => $userId,
                 'status_level' => (string) ($payload['statusLevel'] ?? $postPayload['statusLevel'] ?? 'unknown'),
                 'status_message' => (string) ($payload['statusMessage'] ?? $postPayload['statusMessage'] ?? 'Instagram-Beitragsscan abgeschlossen.'),
                 'attempted' => (bool) ($postPayload['attempted'] ?? true),
@@ -211,11 +238,13 @@ class TrackedPersonInstagramPostScanService
             }
         }
 
-        $trackedPerson->forceFill([
-            'last_instagram_status_level' => $scan->status_level,
-            'last_instagram_status_message' => $scan->status_message,
-            'last_instagram_analyzed_at' => $scan->scanned_at,
-        ])->save();
+        if ($trackedPerson) {
+            $trackedPerson->forceFill([
+                'last_instagram_status_level' => $scan->status_level,
+                'last_instagram_status_message' => $scan->status_message,
+                'last_instagram_analyzed_at' => $scan->scanned_at,
+            ])->save();
+        }
         $profile->forceFill([
             'last_status_level' => $scan->status_level,
             'last_status_message' => $scan->status_message,
@@ -223,10 +252,10 @@ class TrackedPersonInstagramPostScanService
         ])->save();
 
         $this->scanCreditService->charge(
-            (int) $trackedPerson->user_id,
+            $userId,
             $scan,
             $payload,
-            'Instagram-Beitragsscan @'.$trackedPerson->instagram_username,
+            'Instagram-Beitragsscan @'.$profile->username,
         );
 
         return $scan->fresh();

@@ -3,6 +3,7 @@
     data-network-map-root
     data-network-map-id="{{ $mapId }}"
     data-network-filter-scope="{{ $contextTrackedPersonId ? 'person-'.$contextTrackedPersonId : 'global' }}"
+    data-network-focus-tracked-person-id="{{ $contextTrackedPersonId ?: $primaryTrackedPersonId }}"
     data-network-max-visible-profiles="100"
     data-network-layout-mode="clusters"
     data-network-lazy="true"
@@ -13,6 +14,16 @@
         filterMenu: null,
         networkNode: { id: null, type: null, isKnownProfile: false },
         nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, detailUrl: null, name: '', handle: '', x: 0, y: 0 },
+        notifyAssistantContext() {
+            window.dispatchEvent(new CustomEvent('assistant-network-context', {
+                detail: {
+                    mapId: '{{ $mapId }}',
+                    open: true,
+                    fullscreen: this.mapFullscreen,
+                    focusTrackedPersonId: @js($contextTrackedPersonId ?: $primaryTrackedPersonId),
+                },
+            }));
+        },
         openMap() {
             if (this.mapFullscreen) {
                 return;
@@ -20,6 +31,7 @@
 
             this.mapFullscreen = true;
             document.documentElement.classList.add('overflow-hidden');
+            this.notifyAssistantContext();
             this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } })));
         },
         closeMap() {
@@ -31,6 +43,7 @@
             this.filterMenu = null;
             this.closeNodeMenu();
             document.documentElement.classList.remove('overflow-hidden');
+            this.notifyAssistantContext();
             this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } })));
         },
         setNetworkNode(event) {
@@ -80,6 +93,7 @@
     x-on:network-map-open-node.window="openNode($event)"
     x-on:pointerdown.window="if (nodeMenu.open && !$event.target.closest('[data-network-node-menu]')) closeNodeMenu()"
     x-on:keydown.escape.window="if (mapFullscreen) closeMap()"
+    x-init="notifyAssistantContext()"
 >
     <div
         wire:loading.flex
@@ -511,14 +525,16 @@
                 <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
                     <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Profilaktionen</div>
                     <div class="mt-3 grid gap-2 sm:grid-cols-2">
-                        <button
-                            type="button"
-                            wire:click="addPreviewProfileAsTrackedPerson"
-                            wire:loading.attr="disabled"
-                            class="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-50"
-                        >
-                            Als beobachtetes Profil anlegen
-                        </button>
+                        @if(! ($profilePreview['tracked_person_id'] ?? null))
+                            <button
+                                type="button"
+                                wire:click="addPreviewProfileAsTrackedPerson"
+                                wire:loading.attr="disabled"
+                                class="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-50"
+                            >
+                                Als beobachtetes Profil anlegen
+                            </button>
+                        @endif
                         @if(! ($profilePreview['is_known_profile'] ?? false))
                             <button
                                 type="button"
@@ -549,7 +565,7 @@
                         </button>
                     </div>
                     <p class="mt-2 text-xs text-slate-500">
-                        Nach dem Anlegen als beobachtetes Profil stehen Mini-Scan, Vollanalyse und profilspezifische Listenaktionen direkt in diesem Modal bereit.
+                        Scans aktualisieren das Profil ohne Tracking-Platz zu verbrauchen. Nur „Als beobachtetes Profil anlegen“ aktiviert dauerhaftes Tracking und zaehlt gegen dein Profil-Limit.
                     </p>
                 </div>
             </x-slot:actions>

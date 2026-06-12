@@ -18,21 +18,35 @@ class Chatbot extends Component
     use WithFileUploads;
 
     private const DISPLAY_HISTORY_KEY = 'investigation_assistant_display_history';
+
     private const TRANSCRIPT_KEY = 'investigation_assistant_transcript';
+
     private const TOOL_EVENTS_KEY = 'investigation_assistant_tool_events';
 
     public string $message = '';
+
     public array $chatHistory = [];
+
     public array $toolEvents = [];
+
     public array $uploads = [];
+
+    public array $pageContext = [];
+
     public bool $isLoading = false;
 
     public $status;
+
     public $assistantName;
+
     public $apiUrl;
+
     public $aiModel;
+
     public $modelTitle;
+
     public $refererUrl;
+
     public $trainContent;
 
     protected $listeners = [
@@ -51,6 +65,15 @@ class Chatbot extends Component
         $this->modelTitle = Setting::getValue('ai_assistant', 'model_title') ?: config('app.name');
         $this->refererUrl = Setting::getValue('ai_assistant', 'referer_url') ?: config('app.url');
         $this->trainContent = Setting::getValue('ai_assistant', 'train_content');
+        $this->pageContext = $this->initialPageContext();
+    }
+
+    public function updatePageContext(array $context): void
+    {
+        $this->pageContext = $this->normalizePageContext([
+            ...$this->pageContext,
+            ...$context,
+        ]);
     }
 
     public function quickAction(string $prompt): void
@@ -113,16 +136,7 @@ class Chatbot extends Component
 
     public function render()
     {
-        return view('livewire.tools.chatbot', [
-            'trackedPeople' => Auth::check()
-                ? Auth::user()
-                    ->trackedPeople()
-                    ->orderByRaw('instagram_username IS NULL')
-                    ->orderByDesc('last_instagram_analyzed_at')
-                    ->limit(8)
-                    ->get()
-                : collect(),
-        ]);
+        return view('livewire.tools.chatbot');
     }
 
     private function runAssistantConversation(string $userMessage): string
@@ -134,9 +148,15 @@ class Chatbot extends Component
         /** @var InvestigationAssistantToolService $toolService */
         $toolService = app(InvestigationAssistantToolService::class);
         $transcript = $this->baseTranscript($toolService);
+        $currentContext = $toolService->contextualPageContext(Auth::user(), $this->pageContext);
         $transcript[] = [
             'role' => 'user',
-            'content' => $userMessage,
+            'content' => trim(implode("\n\n", [
+                'Aktueller Seiten- und Arbeitskontext (automatisch ermittelt):',
+                json_encode($currentContext, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                'Aktuelle Nutzernachricht:',
+                $userMessage,
+            ])),
         ];
 
         $finalMessage = '';
@@ -254,10 +274,7 @@ class Chatbot extends Component
                     'content' => trim(implode("\n\n", array_filter([
                         $toolService->systemPrompt(),
                         is_string($this->trainContent) ? trim($this->trainContent) : '',
-                        'Aktueller App-Kontext: '.json_encode(
-                            $toolService->conversationContext(Auth::user()),
-                            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES,
-                        ),
+                        'Beziehe dich bei Woertern wie "hier", "dieses Profil" oder "die Networkmap" immer auf den automatisch mitgesendeten aktuellen Seiten- und Arbeitskontext.',
                     ]))),
                 ],
             ];
@@ -373,6 +390,64 @@ class Chatbot extends Component
         $text = preg_replace('/[\p{Han}\p{Hiragana}\p{Katakana}\p{Thai}]/u', '', $text) ?? $text;
 
         return trim($text);
+    }
+
+    private function initialPageContext(): array
+    {
+        $route = request()->route();
+        $parameters = is_object($route) && method_exists($route, 'parameters')
+            ? $route->parameters()
+            : [];
+
+        return $this->normalizePageContext([
+            'route_name' => is_object($route) && method_exists($route, 'getName') ? $route->getName() : null,
+            'path' => request()->path(),
+            'tracked_person_id' => $parameters['trackedPersonId'] ?? null,
+            'instagram_profile_id' => $parameters['instagramProfileId'] ?? null,
+            'network_map_open' => request()->routeIs('network'),
+            'network_map_fullscreen' => false,
+        ]);
+    }
+
+    private function normalizePageContext(array $context): array
+    {
+        $stringValue = static function (mixed $value, int $limit = 255): ?string {
+            if (! is_scalar($value)) {
+                return null;
+            }
+
+            $value = trim((string) $value);
+
+            return $value !== '' ? mb_substr($value, 0, $limit) : null;
+        };
+        $positiveInteger = static function (mixed $value): ?int {
+            $value = filter_var($value, FILTER_VALIDATE_INT);
+
+            return is_int($value) && $value > 0 ? $value : null;
+        };
+
+        $normalized = [
+            'route_name' => $stringValue($context['route_name'] ?? null, 120),
+            'path' => $stringValue($context['path'] ?? null, 500),
+            'page_title' => $stringValue($context['page_title'] ?? null, 200),
+            'tracked_person_id' => $positiveInteger($context['tracked_person_id'] ?? null),
+            'instagram_profile_id' => $positiveInteger($context['instagram_profile_id'] ?? null),
+            'network_map_open' => (bool) ($context['network_map_open'] ?? false),
+            'network_map_fullscreen' => (bool) ($context['network_map_fullscreen'] ?? false),
+            'network_map_id' => $stringValue($context['network_map_id'] ?? null, 120),
+            'network_focus_tracked_person_id' => $positiveInteger($context['network_focus_tracked_person_id'] ?? null),
+            'selected_node_id' => $stringValue($context['selected_node_id'] ?? null, 255),
+            'selected_node_type' => $stringValue($context['selected_node_type'] ?? null, 80),
+            'selected_profile_username' => $stringValue($context['selected_profile_username'] ?? null, 255),
+            'selected_profile_name' => $stringValue($context['selected_profile_name'] ?? null, 255),
+            'selected_profile_open' => (bool) ($context['selected_profile_open'] ?? false),
+        ];
+
+        if ($normalized['tracked_person_id'] === null && preg_match('/^person-(\d+)$/', (string) $normalized['selected_node_id'], $matches)) {
+            $normalized['tracked_person_id'] = (int) $matches[1];
+        }
+
+        return array_filter($normalized, static fn (mixed $value): bool => $value !== null && $value !== '');
     }
 
     private function assistantIsConfigured(): bool

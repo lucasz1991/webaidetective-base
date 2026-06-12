@@ -34,7 +34,7 @@
         <div class="w-full max-w-md rounded-lg bg-white p-6 text-center shadow-2xl">
             <div class="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-pink-200 border-t-pink-600"></div>
             <h3 class="mt-4 text-lg font-bold text-slate-950">Instagram-Scan laeuft</h3>
-            <p class="mt-2 text-sm text-slate-600">Das Profil wird mit denselben Scan-Services wie eine beobachtete Person verarbeitet.</p>
+            <p class="mt-2 text-sm text-slate-600">Der Scan aktualisiert dieses Instagram-Profil, ohne es automatisch als beobachtete Person anzulegen.</p>
         </div>
     </div>
 
@@ -167,6 +167,16 @@
                         >
                             Beobachtete Person
                         </a>
+                    @else
+                        <button
+                            type="button"
+                            @click="actionsOpen = false"
+                            wire:click="addAsTrackedPerson"
+                            wire:loading.attr="disabled"
+                            class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                        >
+                            Als beobachtetes Profil anlegen
+                        </button>
                     @endif
 
                     <a
@@ -297,7 +307,7 @@
             </div>
             @if(! $trackedPerson)
                 <span class="rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
-                    Beim ersten Scan wird das Profil automatisch als beobachtet angelegt.
+                    Scans legen keine beobachtete Person an. Das Tracking muss ueber Aktionen bewusst aktiviert werden.
                 </span>
             @endif
         </div>

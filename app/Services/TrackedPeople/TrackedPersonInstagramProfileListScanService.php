@@ -20,16 +20,16 @@ class TrackedPersonInstagramProfileListScanService
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
-    ) {
-    }
+    ) {}
 
     private ?array $activeScanControl = null;
 
     public function scan(
-        TrackedPerson $contextPerson,
+        ?TrackedPerson $contextPerson,
         InstagramProfile $profile,
         ?callable $progress = null,
         array $relationships = ['followers', 'following'],
+        ?int $userId = null,
     ): Collection {
         $username = $this->scraper->normalizeInstagramUsername($profile->username);
 
@@ -37,36 +37,52 @@ class TrackedPersonInstagramProfileListScanService
             throw new \RuntimeException('Fuer dieses Profil ist kein gueltiger Instagram-Username hinterlegt.');
         }
 
-        $scanControl = $this->scanCoordinator->begin(
-            $contextPerson->id,
-            'Instagram-Profil-Listen-Scan @'.$username,
-        );
+        $userId = $contextPerson?->user_id ?: $userId;
+
+        if (! $userId) {
+            throw new \RuntimeException('Fuer den Profil-Listen-Scan fehlt der Benutzerkontext.');
+        }
+
+        $scanControl = $contextPerson
+            ? $this->scanCoordinator->begin(
+                $contextPerson->id,
+                'Instagram-Profil-Listen-Scan @'.$username,
+            )
+            : null;
 
         Cache::lock($this->lockKey($profile), 3600)->forceRelease();
         $lock = Cache::lock($this->lockKey($profile), 3600);
 
         if (! $lock->get()) {
-            $this->scanCoordinator->finish($contextPerson->id, (int) $scanControl['generation']);
+            if ($contextPerson && $scanControl) {
+                $this->scanCoordinator->finish($contextPerson->id, (int) $scanControl['generation']);
+            }
+
             throw new \RuntimeException('Fuer dieses Profil laeuft bereits ein Listen-Scan.');
         }
 
         $this->activeScanControl = $scanControl;
 
         try {
-            return $this->scanWithLock($contextPerson, $profile, $username, $progress, $relationships);
+            return $this->scanWithLock($contextPerson, $profile, $username, $progress, $relationships, (int) $userId);
         } finally {
             $lock->release();
-            $this->scanCoordinator->finish($contextPerson->id, (int) $scanControl['generation']);
+
+            if ($contextPerson && $scanControl) {
+                $this->scanCoordinator->finish($contextPerson->id, (int) $scanControl['generation']);
+            }
+
             $this->activeScanControl = null;
         }
     }
 
     private function scanWithLock(
-        TrackedPerson $contextPerson,
+        ?TrackedPerson $contextPerson,
         InstagramProfile $profile,
         string $username,
         ?callable $progress,
         array $relationships,
+        int $userId,
     ): Collection {
         $progress = $this->createLiveProgressCallback($contextPerson, $profile, $progress);
         $relationships = collect($relationships)
@@ -168,11 +184,12 @@ class TrackedPersonInstagramProfileListScanService
                 $relationshipList,
                 $payload,
                 'network_map_profile_list',
+                $userId,
             );
 
             if ($scan instanceof InstagramProfileListScan) {
                 $this->scanCreditService->charge(
-                    (int) $contextPerson->user_id,
+                    $userId,
                     $scan,
                     $payload,
                     'Instagram-'.($relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' @'.$username,
@@ -221,7 +238,7 @@ class TrackedPersonInstagramProfileListScanService
     }
 
     private function createLiveProgressCallback(
-        TrackedPerson $contextPerson,
+        ?TrackedPerson $contextPerson,
         InstagramProfile $profile,
         ?callable $progress = null,
     ): callable {
@@ -239,7 +256,7 @@ class TrackedPersonInstagramProfileListScanService
     }
 
     private function persistRelationshipPreviewProgress(
-        TrackedPerson $contextPerson,
+        ?TrackedPerson $contextPerson,
         InstagramProfile $profile,
         array $state,
     ): void {
