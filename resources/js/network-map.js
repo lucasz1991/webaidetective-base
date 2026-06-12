@@ -1725,8 +1725,8 @@ function placeGroupedLayout(root, cy, visibleNodes, mode) {
     const focus = primaryLayoutNode(nodes);
     const { centerX, centerY } = layoutCenter(
         visibleNodes,
-        Math.max(1300 * spacingScale, visibleNodes.length * 38 * spacingScale),
-        Math.max(900 * spacingScale, visibleNodes.length * 28 * spacingScale),
+        Math.max(1300, visibleNodes.length * 38),
+        Math.max(900, visibleNodes.length * 28),
     );
     const groups = connectedLayoutGroups(cy, visibleNodes, focus);
     const updates = [{ node: focus, position: { x: centerX, y: centerY } }];
@@ -1759,7 +1759,80 @@ function placeGroupedLayout(root, cy, visibleNodes, mode) {
         placeClusterGroups(preparedGroups, updates, centerX, centerY, spacingScale);
     }
 
-    return preventLayoutOverlaps(updates, focus, spacingScale);
+    return useAvailableLayoutSpace(
+        cy,
+        preventLayoutOverlaps(updates, focus, spacingScale),
+        focus,
+    );
+}
+
+function scaledLayoutUpdates(updates, focus, scaleX, scaleY = scaleX) {
+    const origin = updates.find((update) => update.node.id() === focus.id())?.position
+        || updatesBounds(updates);
+    const centerX = Number(origin.x ?? ((origin.left + origin.right) / 2)) || 0;
+    const centerY = Number(origin.y ?? ((origin.top + origin.bottom) / 2)) || 0;
+
+    return updates.map((update) => ({
+        node: update.node,
+        position: {
+            x: centerX + ((update.position.x - centerX) * scaleX),
+            y: centerY + ((update.position.y - centerY) * scaleY),
+        },
+    }));
+}
+
+function layoutHasOverlaps(updates) {
+    for (let leftIndex = 0; leftIndex < updates.length; leftIndex += 1) {
+        const left = updates[leftIndex];
+        const leftBox = estimatedNodeBox(left.node, left.position);
+
+        for (let rightIndex = leftIndex + 1; rightIndex < updates.length; rightIndex += 1) {
+            const right = updates[rightIndex];
+
+            if (boxesOverlap(leftBox, estimatedNodeBox(right.node, right.position))) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+function compactLayoutUpdates(updates, focus) {
+    if (updates.length < 2 || updates.length > 900) {
+        return updates;
+    }
+
+    let lower = 0.2;
+    let upper = 1;
+
+    for (let pass = 0; pass < 12; pass += 1) {
+        const scale = (lower + upper) / 2;
+        const candidate = scaledLayoutUpdates(updates, focus, scale);
+
+        if (layoutHasOverlaps(candidate)) {
+            lower = scale;
+        } else {
+            upper = scale;
+        }
+    }
+
+    return scaledLayoutUpdates(updates, focus, Math.min(1, upper * 1.025));
+}
+
+function useAvailableLayoutSpace(cy, updates, focus) {
+    const compacted = compactLayoutUpdates(updates, focus);
+    const bounds = updatesBounds(compacted);
+    const viewportWidth = Math.max(1, cy.width());
+    const viewportHeight = Math.max(1, cy.height());
+    const viewportRatio = viewportWidth / viewportHeight;
+    const layoutRatio = Math.max(0.01, bounds.width / Math.max(1, bounds.height));
+
+    if (layoutRatio > viewportRatio) {
+        return scaledLayoutUpdates(compacted, focus, 1, Math.min(2.5, layoutRatio / viewportRatio));
+    }
+
+    return scaledLayoutUpdates(compacted, focus, Math.min(2.5, viewportRatio / layoutRatio), 1);
 }
 
 function preventLayoutOverlaps(updates, focus, spacingScale = 1) {
@@ -2147,7 +2220,7 @@ function layoutUpdatesForMode(root, cy, visibleNodes, mode) {
     return placeGroupedLayout(root, cy, visibleNodes, normalizeLayoutMode(mode));
 }
 
-function arrangeVisibleGraph(root, cy, animate = true, mode = null) {
+function arrangeVisibleGraph(root, cy, animate = true, mode = null, options = {}) {
     const state = instances.get(root);
     const visibleNodes = cy.nodes().not('.network-filtered');
 
@@ -2185,7 +2258,11 @@ function arrangeVisibleGraph(root, cy, animate = true, mode = null) {
             state.layoutRestored = true;
         }
 
-        fitGraph(cy, { tight: true });
+        if (options.fit !== false) {
+            fitGraph(cy, { tight: true });
+        } else {
+            schedulePublicBadgeUpdate(root, cy);
+        }
         scheduleStoredLayoutSave(root, cy, 120);
     }, shouldAnimate ? 360 : 30);
 }
@@ -2448,22 +2525,92 @@ function fitGraph(cy, options = {}) {
     scheduleStoredLayoutSaveFromCy(cy, 220);
 }
 
-function scheduleLayoutSettingsRefresh(root, cy) {
+function resolveVisualOverlaps(root, cy, animate = true) {
+    const visibleNodes = cy.nodes().not('.network-filtered');
+
+    if (!visibleNodes.length) {
+        return;
+    }
+
+    const nodes = visibleNodes.toArray();
+    const focus = primaryLayoutNode(nodes);
+    const updates = preventLayoutOverlaps(
+        nodes.map((node) => ({ node, position: { ...node.position() } })),
+        focus,
+        normalizedScale(instances.get(root)?.layoutSpacingScale, 1, 0.5, 5),
+    );
+    const shouldAnimate = animate && updates.length <= 650;
+
+    if (shouldAnimate) {
+        updates.forEach(({ node, position }) => {
+            node.animate({ position }, { duration: 220 });
+        });
+    } else {
+        cy.batch(() => {
+            updates.forEach(({ node, position }) => node.position(position));
+        });
+    }
+
+    window.setTimeout(() => {
+        schedulePublicBadgeUpdate(root, cy);
+        scheduleStoredLayoutSave(root, cy, 120);
+    }, shouldAnimate ? 250 : 30);
+}
+
+function persistLayoutSettings(root, state) {
+    clearStoredLayout(root, state.cy);
+    writeStoredFilters(root, state);
+    writeStoredLayoutSettings(root, state);
+    updateLayoutControls(root, state);
+}
+
+function applySpacingScale(root, cy, previousScale) {
     const state = instances.get(root);
 
     if (!state) {
         return;
     }
 
-    clearStoredLayout(root, cy);
-    writeStoredFilters(root, state);
-    writeStoredLayoutSettings(root, state);
-    updateLayoutControls(root, state);
+    persistLayoutSettings(root, state);
+    const visibleNodes = cy.nodes().not('.network-filtered');
+
+    if (!visibleNodes.length) {
+        return;
+    }
+
+    const nodes = visibleNodes.toArray();
+    const focus = primaryLayoutNode(nodes);
+    const ratio = normalizedScale(state.layoutSpacingScale, 1, 0.5, 5)
+        / normalizedScale(previousScale, 1, 0.5, 5);
+    const scaled = scaledLayoutUpdates(
+        nodes.map((node) => ({ node, position: { ...node.position() } })),
+        focus,
+        ratio,
+    );
+    const updates = ratio < 1
+        ? preventLayoutOverlaps(scaled, focus, state.layoutSpacingScale)
+        : scaled;
+
+    cy.batch(() => {
+        updates.forEach(({ node, position }) => node.position(position));
+    });
+    schedulePublicBadgeUpdate(root, cy);
+    scheduleStoredLayoutSave(root, cy, 120);
+}
+
+function scheduleVisualSettingsRefresh(root, cy) {
+    const state = instances.get(root);
+
+    if (!state) {
+        return;
+    }
+
+    persistLayoutSettings(root, state);
     applyVisualSettings(root, cy);
     window.clearTimeout(state.layoutSettingsTimer);
     state.layoutSettingsTimer = window.setTimeout(() => {
-        arrangeVisibleGraph(root, cy, true, state.layoutMode);
-    }, 260);
+        resolveVisualOverlaps(root, cy, true);
+    }, 120);
 }
 
 function bindControls(root, cy) {
@@ -2517,22 +2664,23 @@ function bindControls(root, cy) {
 
     root.querySelectorAll('[data-network-layout-spacing]').forEach((control) => {
         control.addEventListener('input', () => {
+            const previousScale = state.layoutSpacingScale;
             state.layoutSpacingScale = controlScaleValue(control, 1, 0.5, 5);
-            scheduleLayoutSettingsRefresh(root, cy);
+            applySpacingScale(root, cy, previousScale);
         });
     });
 
     root.querySelectorAll('[data-network-icon-scale]').forEach((control) => {
         control.addEventListener('input', () => {
             state.nodeSizeScale = controlScaleValue(control, 1, 0.5, 5);
-            scheduleLayoutSettingsRefresh(root, cy);
+            scheduleVisualSettingsRefresh(root, cy);
         });
     });
 
     root.querySelectorAll('[data-network-size-variance]').forEach((control) => {
         control.addEventListener('input', () => {
             state.nodeSizeVariance = controlScaleValue(control, 1, 0, 4);
-            scheduleLayoutSettingsRefresh(root, cy);
+            scheduleVisualSettingsRefresh(root, cy);
         });
     });
 
