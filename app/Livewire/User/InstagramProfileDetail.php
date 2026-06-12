@@ -159,6 +159,11 @@ class InstagramProfileDetail extends Component
 
     public function scanInstagramSuggestions(): void
     {
+        $this->scanInstagramSuggestionConnections();
+    }
+
+    public function scanInstagramSuggestionConnections(): void
+    {
         @set_time_limit(0);
 
         $profile = $this->resolveProfile();
@@ -166,7 +171,7 @@ class InstagramProfileDetail extends Component
 
         if (! $trackedPerson) {
             $this->setStatus(
-                'Vorschlagsscans sind zielpersonenbezogen. Lege das Profil zuerst ausdruecklich als beobachtetes Profil an.',
+                'Vorschlags-Verbindungsscans sind zielpersonenbezogen. Lege das Profil zuerst ausdruecklich als beobachtetes Profil an.',
                 'partial',
             );
 
@@ -177,14 +182,14 @@ class InstagramProfileDetail extends Component
             $scan = app(TrackedPersonInstagramWorkflowService::class)
                 ->runSuggestionScan($trackedPerson);
             $this->setStatus(
-                'Vorschlagsscan abgeschlossen: '
+                'Vorschlags-Verbindungsscan abgeschlossen: '
                     .number_format($scan->suggestions_checked_count).' von '
                     .number_format($scan->suggestions_observed_count).' Vorschlaegen geprueft, '
                     .number_format($scan->suggestion_matches_count).' Verbindungen gefunden.',
                 $scan->status_level === 'success' ? 'success' : 'partial',
             );
         } catch (\Throwable $exception) {
-            $this->setStatus('Vorschlagsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setStatus('Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
         }
     }
 

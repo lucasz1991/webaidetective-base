@@ -6,7 +6,7 @@
     </div>
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanPublicProfileConnections,scanInstagramSuggestions,scanInstagramPosts"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanPublicProfileConnections,scanInstagramSuggestionConnections,scanInstagramPosts"
         class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
@@ -128,13 +128,13 @@
                         <button
                             type="button"
                             @click="menuOpen = false"
-                            wire:click="scanInstagramSuggestions"
+                            wire:click="scanInstagramSuggestionConnections"
                             wire:loading.attr="disabled"
-                            wire:target="scanInstagramSuggestions"
-                            @disabled(! $trackedPerson->instagram_username || ! $latestProfileIsPrivate)
+                            wire:target="scanInstagramSuggestionConnections"
+                            @disabled(! $trackedPerson->instagram_username)
                             class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            Vorschläge prüfen
+                            Vorschlags-Verbindungen prüfen
                         </button>
                     </div>
                 </div>
@@ -1024,18 +1024,17 @@
                         </p>
                     </div>
                     <div class="flex flex-wrap gap-2">
-                        @if($latestProfileIsPrivate)
-                            <button
-                                type="button"
-                                wire:click="scanInstagramSuggestions"
-                                wire:loading.attr="disabled"
-                                wire:target="scanInstagramSuggestions"
-                                @disabled(! $trackedPerson->instagram_username)
-                                class="rounded-xl border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-100 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                Profilvorschlaege pruefen
-                            </button>
-                        @endif
+                        <button
+                            type="button"
+                            wire:click="scanInstagramSuggestionConnections"
+                            wire:loading.attr="disabled"
+                            wire:target="scanInstagramSuggestionConnections"
+                            @disabled(! $trackedPerson->instagram_username)
+                            title="Prueft Vorschlaege der Vorschlaege und bei oeffentlichen Kandidaten deren Follower- und Gefolgt-Listen."
+                            class="rounded-xl border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Vorschlags-Verbindungsscan
+                        </button>
                         <button
                             type="button"
                             wire:click="scanPublicProfileConnections"

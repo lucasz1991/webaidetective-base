@@ -15,7 +15,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 
-class RunTrackedPersonInstagramToolScan implements ShouldQueue, ShouldBeUnique
+class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -27,8 +27,7 @@ class RunTrackedPersonInstagramToolScan implements ShouldQueue, ShouldBeUnique
         public readonly int $trackedPersonId,
         public readonly string $scanType,
         public readonly bool $sendNotifications = false,
-    ) {
-    }
+    ) {}
 
     public function handle(): void
     {
@@ -93,7 +92,7 @@ class RunTrackedPersonInstagramToolScan implements ShouldQueue, ShouldBeUnique
             'full' => 'Instagram-Vollanalyse',
             'followers' => 'Instagram-Followerlisten-Scan',
             'following' => 'Instagram-Gefolgt-Listen-Scan',
-            'suggestions' => 'Instagram-Vorschlag-Scan',
+            'suggestions' => 'Instagram-Vorschlags-Verbindungsscan',
             'posts' => 'Instagram-Beitragsscan',
             'public_connections' => 'Public-Profile-Verbindungsscan',
             default => 'Instagram-Scan',

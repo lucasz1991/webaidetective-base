@@ -28,7 +28,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagramMini,analyzeInstagram,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions,scanInstagramPosts"
+        wire:target="analyzeInstagramMini,analyzeInstagram,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestionConnections,scanInstagramPosts"
         class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="w-full max-w-md rounded-lg bg-white p-6 text-center shadow-2xl">
@@ -123,20 +123,19 @@
                         >
                             Beitraege scannen
                         </button>
-                    @elseif($visibility === 'private')
-                        <div class="my-1 border-t border-slate-100"></div>
-                        <button
-                            type="button"
-                            @click="scansOpen = false"
-                            wire:click="scanInstagramSuggestions"
-                            wire:loading.attr="disabled"
-                            wire:target="scanInstagramSuggestions"
-                            class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:opacity-50"
-                        >
-                            Vorschlaege scannen
-                            <span class="mt-0.5 block text-xs font-normal text-fuchsia-500">Verbindungen bei privaten Profilen ermitteln</span>
-                        </button>
                     @endif
+                    <div class="my-1 border-t border-slate-100"></div>
+                    <button
+                        type="button"
+                        @click="scansOpen = false"
+                        wire:click="scanInstagramSuggestionConnections"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramSuggestionConnections"
+                        class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:opacity-50"
+                    >
+                        Vorschlags-Verbindungsscan
+                        <span class="mt-0.5 block text-xs font-normal text-fuchsia-500">Vorschlaege der Vorschlaege und oeffentliche Listen pruefen</span>
+                    </button>
                 </div>
             </div>
             </div>

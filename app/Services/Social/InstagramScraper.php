@@ -6,10 +6,10 @@ use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\Setting;
 use App\Services\Scraper\ScraperProfileDatabaseStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process as SymfonyProcess;
 
@@ -22,8 +22,7 @@ class InstagramScraper
         array $runtimeConfigOverrides = [],
         int $progressStart = 0,
         int $progressEnd = 100,
-    ): array
-    {
+    ): array {
         $username = $this->normalizeInstagramUsername($username);
         $operationMode = $this->normalizeOperationMode($operationMode);
 
@@ -962,7 +961,7 @@ class InstagramScraper
                 'suggestions-candidate-checked' => 'Vorschlags-Kandidaten geprueft: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
                 'suggestions-candidate-error' => 'Ein Vorschlags-Kandidat konnte nicht geprueft werden: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
                 'suggestions-rate-limited' => 'Instagram hat die Profilvorschlaege per Rate-Limit blockiert.',
-                'suggestions-complete' => 'Profilvorschlag-Verbindungsscan abgeschlossen.',
+                'suggestions-complete' => 'Vorschlags-Verbindungsscan abgeschlossen.',
                 default => $expected > 0
                     ? 'Profilvorschlaege werden geprueft: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.')
                     : 'Profilvorschlaege werden geprueft.',
@@ -993,7 +992,7 @@ class InstagramScraper
     {
         $operationMode = Str::lower(trim($operationMode));
 
-        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'suggestions', 'posts', 'login-session'], true)
+        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'suggestions', 'suggestion-connections', 'posts', 'login-session'], true)
             ? $operationMode
             : 'analyze';
     }
@@ -1004,7 +1003,7 @@ class InstagramScraper
             'mini' => 'scrape-instagram-mini.cjs',
             'analyze', 'profile' => 'scrape-instagram-full.cjs',
             'followers', 'following' => 'scrape-instagram-list.cjs',
-            'suggestions' => 'scrape-instagram-suggestions.cjs',
+            'suggestions', 'suggestion-connections' => 'scrape-instagram-suggestions.cjs',
             'posts' => 'scrape-instagram-posts.cjs',
             default => 'scrape-instagram.cjs',
         };

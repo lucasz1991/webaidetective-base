@@ -15,8 +15,7 @@ class TrackedPersonInstagramWorkflowService
         private readonly TrackedPersonInstagramSuggestionScanService $suggestionScanService,
         private readonly TrackedPersonInstagramAnalysisService $analysisService,
         private readonly TrackedPersonInstagramPostScanService $postScanService,
-    ) {
-    }
+    ) {}
 
     /**
      * @return array{
@@ -64,14 +63,14 @@ class TrackedPersonInstagramWorkflowService
                 : null;
 
             if ($recentSuggestionScan) {
-                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlag-Scan uebersprungen, weil der letzte Vorschlag-Scan erst vor weniger als 60 Minuten lief.';
+                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlags-Verbindungsscan uebersprungen, weil der letzte Lauf erst vor weniger als 60 Minuten stattfand.';
                 $followUpMessages[] = trim($privateSuggestionScanMessage);
             } else {
                 if ($progress) {
                     $progress([
                         'phase' => 'suggestions',
                         'percent' => 1,
-                        'message' => 'Privates Profil erkannt; Profilvorschlag-Verbindungsscan wird gestartet.',
+                        'message' => 'Privates Profil erkannt; Vorschlags-Verbindungsscan wird gestartet.',
                         'foundSuggestions' => 0,
                         'suggestionConnections' => [],
                     ]);
@@ -82,7 +81,7 @@ class TrackedPersonInstagramWorkflowService
                         $trackedPerson->fresh() ?: $trackedPerson,
                         $progress,
                     );
-                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlag-Scan abgeschlossen mit '
+                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlags-Verbindungsscan abgeschlossen mit '
                         .number_format((int) $privateSuggestionScan->suggestion_matches_count, 0, ',', '.')
                         .' gefundenen Vorschlag-Verbindungen.';
                     $followUpMessages[] = trim($privateSuggestionScanMessage);
@@ -90,12 +89,12 @@ class TrackedPersonInstagramWorkflowService
                     throw $exception;
                 } catch (\Throwable $exception) {
                     $privateSuggestionScanFailed = true;
-                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlag-Scan fehlgeschlagen: '.$exception->getMessage();
+                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage();
                     $followUpFailures[] = trim($privateSuggestionScanMessage);
 
                     ($trackedPerson->fresh() ?: $trackedPerson)->forceFill([
                         'last_instagram_status_level' => 'partial',
-                        'last_instagram_status_message' => 'Instagram-Analyse abgeschlossen; Vorschlag-Scan fehlgeschlagen: '.$exception->getMessage(),
+                        'last_instagram_status_message' => 'Instagram-Analyse abgeschlossen; Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(),
                     ])->save();
                 }
             }

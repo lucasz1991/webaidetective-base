@@ -26,6 +26,12 @@ class NetworkMap extends Component
 
     private const GRAPH_EDGE_CHUNK_SIZE = 500;
 
+    private const MAX_GRAPH_NODES = 250;
+
+    private const MAX_CONTACT_IMAGES = 50;
+
+    private const MAX_SYSTEM_RELATIONSHIPS = 1500;
+
     public ?int $primaryTrackedPersonId = null;
 
     public ?int $contextTrackedPersonId = null;
@@ -133,7 +139,9 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 7;
+        $data['graph_version'] = 8;
+        $data['graph_node_limit'] = self::MAX_GRAPH_NODES;
+        $data['contact_image_limit'] = self::MAX_CONTACT_IMAGES;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
         $data['system_relationships'] = [
             'count' => (int) ($systemRelationshipState?->relationship_count ?? 0),
@@ -550,9 +558,158 @@ class NetworkMap extends Component
         $this->addTrackedRelationshipListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addObservedTrackedPersonConnectionsToPrimary($trackedPeople, $primaryPerson, $nodesByInstagram, $nodes, $edges);
         $this->addTrackedPersonProfileRelationships($trackedPeople, $nodesByInstagram, $nodes, $edges);
+        [$nodes, $edges] = $this->limitGraphProfiles($nodes, $edges);
+        $nodesByInstagram = $this->indexGraphNodesByInstagramUsername($nodes);
         $this->addSystemWideDirectProfileConnections($peopleByInstagram, $nodesByInstagram, $nodes, $edges);
+        [$nodes, $edges] = $this->limitGraphProfiles($nodes, $edges);
+        $nodes = $this->limitGraphImages($nodes, $edges);
 
         return $this->applyLayout(array_values($nodes), array_values($edges));
+    }
+
+    private function limitGraphProfiles(array $nodes, array $edges): array
+    {
+        if (count($nodes) <= self::MAX_GRAPH_NODES) {
+            return [$nodes, $this->edgesForNodes($edges, array_keys($nodes))];
+        }
+
+        $ranking = $this->graphNodeRanking($nodes, $edges);
+        $focusId = $ranking['focus_id'];
+        $retainedIds = collect($nodes)
+            ->reject(fn (array $node): bool => ($node['id'] ?? null) === $focusId)
+            ->sort(function (array $left, array $right) use ($ranking): int {
+                return $this->compareGraphNodes($left, $right, $ranking);
+            })
+            ->take(self::MAX_GRAPH_NODES - ($focusId ? 1 : 0))
+            ->pluck('id')
+            ->when($focusId, fn (Collection $ids) => $ids->prepend($focusId))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+        $retainedLookup = array_fill_keys($retainedIds, true);
+
+        return [
+            array_filter(
+                $nodes,
+                fn (array $node): bool => isset($retainedLookup[$node['id'] ?? '']),
+            ),
+            $this->edgesForNodes($edges, $retainedIds),
+        ];
+    }
+
+    private function limitGraphImages(array $nodes, array $edges): array
+    {
+        $ranking = $this->graphNodeRanking($nodes, $edges);
+        $focusId = $ranking['focus_id'];
+        $imageNodeIds = collect($nodes)
+            ->filter(fn (array $node): bool => ($node['id'] ?? null) !== $focusId && filled($node['imageUrl'] ?? null))
+            ->sort(function (array $left, array $right) use ($ranking): int {
+                return $this->compareGraphNodes($left, $right, $ranking);
+            })
+            ->take(self::MAX_CONTACT_IMAGES)
+            ->pluck('id')
+            ->when($focusId, fn (Collection $ids) => $ids->push($focusId))
+            ->filter()
+            ->unique()
+            ->flip();
+
+        foreach ($nodes as $id => $node) {
+            if ($imageNodeIds->has($node['id'] ?? null) && filled($node['imageUrl'] ?? null)) {
+                continue;
+            }
+
+            $nodes[$id]['imageUrl'] = null;
+            $nodes[$id]['hasImage'] = false;
+        }
+
+        return $nodes;
+    }
+
+    private function graphNodeRanking(array $nodes, array $edges): array
+    {
+        $focusNode = collect($nodes)->first(fn (array $node): bool => (bool) ($node['isFocus'] ?? false))
+            ?: collect($nodes)->first(fn (array $node): bool => (bool) ($node['isPrimary'] ?? false))
+            ?: collect($nodes)->first(fn (array $node): bool => ($node['type'] ?? null) === 'person');
+        $focusId = $focusNode['id'] ?? null;
+        $adjacency = [];
+
+        foreach ($nodes as $node) {
+            if (filled($node['id'] ?? null)) {
+                $adjacency[$node['id']] = [];
+            }
+        }
+
+        foreach ($edges as $edge) {
+            $from = $edge['from'] ?? null;
+            $to = $edge['to'] ?? null;
+
+            if (! isset($adjacency[$from], $adjacency[$to]) || $from === $to) {
+                continue;
+            }
+
+            $adjacency[$from][$to] = true;
+            $adjacency[$to][$from] = true;
+        }
+
+        $distances = [];
+
+        if ($focusId && isset($adjacency[$focusId])) {
+            $distances[$focusId] = 0;
+            $queue = new \SplQueue;
+            $queue->enqueue($focusId);
+
+            while (! $queue->isEmpty()) {
+                $currentId = $queue->dequeue();
+                $nextDistance = $distances[$currentId] + 1;
+
+                foreach (array_keys($adjacency[$currentId]) as $neighborId) {
+                    if (isset($distances[$neighborId])) {
+                        continue;
+                    }
+
+                    $distances[$neighborId] = $nextDistance;
+                    $queue->enqueue($neighborId);
+                }
+            }
+        }
+
+        return [
+            'focus_id' => $focusId,
+            'distances' => $distances,
+            'degrees' => array_map('count', $adjacency),
+        ];
+    }
+
+    private function compareGraphNodes(array $left, array $right, array $ranking): int
+    {
+        $leftId = (string) ($left['id'] ?? '');
+        $rightId = (string) ($right['id'] ?? '');
+        $distances = $ranking['distances'];
+        $degrees = $ranking['degrees'];
+        $leftRank = [
+            $distances[$leftId] ?? PHP_INT_MAX,
+            ($left['isKnownProfile'] ?? false) ? 0 : 1,
+            -($degrees[$leftId] ?? 0),
+            Str::lower((string) ($left['label'] ?? $leftId)),
+        ];
+        $rightRank = [
+            $distances[$rightId] ?? PHP_INT_MAX,
+            ($right['isKnownProfile'] ?? false) ? 0 : 1,
+            -($degrees[$rightId] ?? 0),
+            Str::lower((string) ($right['label'] ?? $rightId)),
+        ];
+
+        return $leftRank <=> $rightRank;
+    }
+
+    private function edgesForNodes(array $edges, array $nodeIds): array
+    {
+        $nodeLookup = array_fill_keys($nodeIds, true);
+
+        return array_filter($edges, static function (array $edge) use ($nodeLookup): bool {
+            return isset($nodeLookup[$edge['from'] ?? ''], $nodeLookup[$edge['to'] ?? '']);
+        });
     }
 
     private function ensureTrackedPersonNode(array &$nodes, TrackedPerson $person): string
@@ -777,6 +934,8 @@ class NetworkMap extends Component
                 'firstSeenScan:id,user_id',
                 'lastSeenScan:id,user_id',
             ])
+            ->latest('last_seen_at')
+            ->limit(self::MAX_SYSTEM_RELATIONSHIPS)
             ->get();
 
         if ($relationships->isEmpty()) {

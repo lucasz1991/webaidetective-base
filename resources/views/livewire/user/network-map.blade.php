@@ -4,7 +4,7 @@
     data-network-map-id="{{ $mapId }}"
     data-network-filter-scope="{{ $contextTrackedPersonId ? 'person-'.$contextTrackedPersonId : 'global' }}"
     data-network-focus-tracked-person-id="{{ $contextTrackedPersonId ?: $primaryTrackedPersonId }}"
-    data-network-max-visible-profiles="100"
+    data-network-max-visible-profiles="250"
     data-network-layout-mode="clusters"
     data-network-lazy="true"
     wire:init="prepareGraph"
@@ -299,13 +299,12 @@
                                 <select data-network-filter-max-profiles class="rounded-lg border-slate-200 bg-white text-sm font-bold text-slate-900 focus:border-slate-400 focus:ring-slate-400">
                                     <option value="25">25</option>
                                     <option value="50">50</option>
-                                    <option value="100" selected>100</option>
+                                    <option value="100">100</option>
                                     <option value="150">150</option>
-                                    <option value="250">250</option>
-                                    <option value="500">500</option>
-                                    <option value="0">Alle</option>
+                                    <option value="250" selected>250</option>
                                 </select>
                             </label>
+                            <p class="leading-5 text-slate-500">Die Map lädt grundsätzlich höchstens 250 Profile. Profilbilder werden nur für die 50 engsten Kontakte geladen.</p>
                             <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 leading-5">
                                 <div data-network-visible-profiles-count>0 sichtbar</div>
                                 <div>Effektives Minimum: <span data-network-effective-min-degree>0</span></div>

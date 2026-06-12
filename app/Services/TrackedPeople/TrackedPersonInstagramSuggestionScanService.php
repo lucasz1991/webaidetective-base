@@ -38,7 +38,7 @@ class TrackedPersonInstagramSuggestionScanService
 
         $scanControl = $this->scanCoordinator->begin(
             $trackedPerson->id,
-            'Profilvorschlag-Verbindungsscan',
+            'Vorschlags-Verbindungsscan',
         );
 
         Cache::lock('tracked-person-instagram-suggestion-scan:'.$trackedPerson->id, 3600)->forceRelease();
@@ -46,7 +46,7 @@ class TrackedPersonInstagramSuggestionScanService
 
         if (! $lock->get()) {
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
-            throw new \RuntimeException('Fuer diese Person laeuft bereits ein Profilvorschlag-Verbindungsscan.');
+            throw new \RuntimeException('Fuer diese Person laeuft bereits ein Vorschlags-Verbindungsscan.');
         }
 
         $this->activeScanControl = $scanControl;
@@ -78,7 +78,7 @@ class TrackedPersonInstagramSuggestionScanService
         $this->reportProgress($progress, [
             'phase' => 'suggestions',
             'percent' => 1,
-            'message' => 'Profilvorschlag-Verbindungsscan wird vorbereitet.',
+            'message' => 'Vorschlags-Verbindungsscan wird vorbereitet.',
             'foundSuggestions' => 0,
             'suggestionConnections' => [],
             'observedSuggestionCount' => 0,
@@ -88,7 +88,7 @@ class TrackedPersonInstagramSuggestionScanService
         try {
             $payload = $this->scraper->scrape(
                 $targetUsername,
-                'suggestions',
+                'suggestion-connections',
                 function (array $state) use ($trackedPerson, $targetUsername, $progress, &$liveConnections, &$liveObservedSuggestions, &$liveSuggestionDebug): void {
                     if (array_key_exists('suggestionConnections', $state)) {
                         $liveConnections = $this->mergeSuggestionConnections(
@@ -161,10 +161,10 @@ class TrackedPersonInstagramSuggestionScanService
                 ]),
             );
         } catch (\Throwable $exception) {
-            $message = 'Profilvorschlag-Verbindungsscan fehlgeschlagen: '.$exception->getMessage();
+            $message = 'Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage();
             $payload = [
                 'ok' => false,
-                'operationMode' => 'suggestions',
+                'operationMode' => 'suggestion-connections',
                 'statusLevel' => 'error',
                 'statusMessage' => $message,
                 'error' => $exception->getMessage(),
@@ -234,7 +234,7 @@ class TrackedPersonInstagramSuggestionScanService
                 'user_id' => $trackedPerson->user_id,
                 'target_username' => $targetUsername,
                 'status_level' => (string) ($payload['statusLevel'] ?? $scanPayload['statusLevel'] ?? 'unknown'),
-                'status_message' => (string) ($payload['statusMessage'] ?? $scanPayload['statusMessage'] ?? 'Profilvorschlag-Verbindungsscan abgeschlossen.'),
+                'status_message' => (string) ($payload['statusMessage'] ?? $scanPayload['statusMessage'] ?? 'Vorschlags-Verbindungsscan abgeschlossen.'),
                 'suggestions_observed_count' => (int) ($scanPayload['observedCount'] ?? count($scanPayload['suggestions'] ?? [])),
                 'suggestions_checked_count' => (int) ($scanPayload['checkedCount'] ?? 0),
                 'suggestion_matches_count' => count($connections),
@@ -267,7 +267,7 @@ class TrackedPersonInstagramSuggestionScanService
             (int) $trackedPerson->user_id,
             $scan,
             $payload,
-            'Instagram-Vorschlagsscan @'.$targetUsername,
+            'Instagram-Vorschlags-Verbindungsscan @'.$targetUsername,
         );
 
         return $scan;
@@ -835,7 +835,7 @@ class TrackedPersonInstagramSuggestionScanService
 
         $payload['phase'] = $payload['phase'] ?? 'suggestions';
         $payload['percent'] = max(0, min(100, (int) ($payload['percent'] ?? 0)));
-        $payload['message'] = (string) ($payload['message'] ?? 'Profilvorschlag-Verbindungsscan laeuft.');
+        $payload['message'] = (string) ($payload['message'] ?? 'Vorschlags-Verbindungsscan laeuft.');
 
         $progress($payload);
     }

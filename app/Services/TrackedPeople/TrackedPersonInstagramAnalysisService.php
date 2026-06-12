@@ -7,6 +7,7 @@ use App\Models\TrackedPersonInstagramSnapshot;
 use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -23,8 +24,7 @@ class TrackedPersonInstagramAnalysisService
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
-    ) {
-    }
+    ) {}
 
     private ?array $activeScanControl = null;
 
@@ -36,8 +36,7 @@ class TrackedPersonInstagramAnalysisService
         TrackedPerson $trackedPerson,
         ?callable $progress = null,
         bool $fullScan = false,
-    ): TrackedPersonInstagramSnapshot
-    {
+    ): TrackedPersonInstagramSnapshot {
         if (! $trackedPerson->instagram_username) {
             throw new \RuntimeException('Fuer diese Person ist kein Instagram-Name hinterlegt.');
         }
@@ -1056,8 +1055,7 @@ class TrackedPersonInstagramAnalysisService
         string $username,
         ?callable $progress = null,
         ?TrackedPersonInstagramSnapshot $previousSnapshot = null,
-    ): array
-    {
+    ): array {
         [$payload, $extracted, $attemptInfo] = $this->scrapeUntilVisibleCounts($username, $progress);
         $this->reportProgress($progress, [
             'phase' => 'profile',
@@ -1082,7 +1080,7 @@ class TrackedPersonInstagramAnalysisService
                 'message' => 'Privates Profil erkannt; Follower- und Gefolgt-Listen werden uebersprungen.',
             ]);
 
-            $phaseWarnings[] = 'Privates Profil erkannt; Follower- und Gefolgt-Listen wurden uebersprungen. Fuer die Netzwerkerweiterung wird der Vorschlag-Scan genutzt.';
+            $phaseWarnings[] = 'Privates Profil erkannt; Follower- und Gefolgt-Listen wurden uebersprungen. Fuer die Netzwerkerweiterung wird der Vorschlags-Verbindungsscan genutzt.';
             $payload['warnings'] = array_values(array_unique(array_filter(array_merge(
                 $payload['warnings'] ?? [],
                 $phaseWarnings,
@@ -1901,6 +1899,7 @@ class TrackedPersonInstagramAnalysisService
 
             if ($observedItems === [] && $activeItems === [] && $removedHistoryItems === []) {
                 $extracted[$extractedKey] = $relationshipList;
+
                 continue;
             }
 
@@ -2021,7 +2020,7 @@ class TrackedPersonInstagramAnalysisService
         }
 
         try {
-            return \Illuminate\Support\Carbon::parse($value)->toIso8601String();
+            return Carbon::parse($value)->toIso8601String();
         } catch (\Throwable) {
             return null;
         }

@@ -989,14 +989,14 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
   )).length;
   const statusLevel = gracefullyStopped || rateLimited || candidateErrorCount > 0 ? 'partial' : 'success';
   const statusMessage = gracefullyStopped
-    ? 'Profilvorschlag-Verbindungsscan wurde beendet; bisherige Treffer wurden gespeichert.'
+    ? 'Vorschlags-Verbindungsscan wurde beendet; bisherige Treffer wurden gespeichert.'
     : (rateLimited
-      ? 'Profilvorschlag-Verbindungsscan wurde wegen Instagram-Rate-Limit pausiert.'
+      ? 'Vorschlags-Verbindungsscan wurde wegen Instagram-Rate-Limit pausiert.'
       : (candidateErrorCount > 0
-        ? `Profilvorschlag-Verbindungsscan abgeschlossen; ${candidateErrorCount} Kandidaten wurden wegen Fehlern uebersprungen.`
+        ? `Vorschlags-Verbindungsscan abgeschlossen; ${candidateErrorCount} Kandidaten wurden wegen Fehlern uebersprungen.`
         : (matchedCandidates.length === 0 && observedSuggestions.length > 0 && checkedCandidates.length === 0 && knownOrSkippedObservedCount === observedSuggestions.length
-          ? `Profilvorschlag-Verbindungsscan abgeschlossen; keine neuen Verbindungen, weil alle ${observedSuggestions.length} gefundenen Vorschlaege bereits bekannt waren.`
-          : 'Profilvorschlag-Verbindungsscan abgeschlossen.')));
+          ? `Vorschlags-Verbindungsscan abgeschlossen; keine neuen Verbindungen, weil alle ${observedSuggestions.length} gefundenen Vorschlaege bereits bekannt waren.`
+          : 'Vorschlags-Verbindungsscan abgeschlossen.')));
 
   progressLog('suggestions-complete', {
     relationship: 'suggestions',
@@ -1018,7 +1018,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
   });
 
   notes.push(
-    `Profilvorschlag-Verbindungsscan: ${checkedCandidates.length} von ${candidatesToCheck.length} Kandidaten geprueft, ${matchedCandidates.length} Treffer.`,
+    `Vorschlags-Verbindungsscan: ${checkedCandidates.length} von ${candidatesToCheck.length} Kandidaten geprueft, ${matchedCandidates.length} Treffer.`,
   );
 
   if (observedSuggestions.length > 0) {

@@ -8,12 +8,12 @@ use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramMedia;
 use App\Models\TrackedPersonInstagramSnapshot;
-use App\Support\PublicAssetUrl;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
+use App\Support\PublicAssetUrl;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
@@ -26,45 +26,79 @@ use Livewire\Component;
 class TrackedPersonDetail extends Component
 {
     public int $trackedPersonId;
+
     public bool $compact = false;
 
     public $first_name = '';
+
     public $last_name = '';
+
     public $alias = '';
+
     public $date_of_birth = '';
+
     public $city = '';
+
     public $country = '';
+
     public $notes = '';
+
     public $instagram_username = '';
+
     public $tiktok_username = '';
+
     public $facebook_username = '';
+
     public $x_username = '';
+
     public $youtube_username = '';
+
     public $snapchat_username = '';
+
     public $notification_delivery_type = 'both';
+
     public $monitoring_enabled = false;
+
     public $monitoring_interval_minutes = 60;
+
     public $notify_social_changes = false;
+
     public $notify_instagram_changes = true;
+
     public $notify_tiktok_changes = true;
+
     public $notify_facebook_changes = true;
+
     public $notify_x_changes = true;
+
     public $notify_youtube_changes = true;
+
     public $notify_snapchat_changes = true;
+
     public bool $showFollowersModal = false;
+
     public bool $showFollowingModal = false;
+
     public bool $showSettingsModal = false;
+
     public bool $showDeleteConfirmationModal = false;
 
     public $knownFactLabel = '';
+
     public $knownFactValue = '';
+
     public $knownFactSource = '';
+
     public $knownFactNotes = '';
+
     public $publicProfileTrackedPersonId = '';
+
     public $publicProfileRelationshipType = 'public_connection';
+
     public $manualPublicProfileUsername = '';
 
     public $detailStatus = null;
+
     public $detailStatusLevel = 'neutral';
 
     protected $listeners = [
@@ -330,19 +364,18 @@ class TrackedPersonDetail extends Component
 
     public function scanInstagramSuggestions(): void
     {
+        $this->scanInstagramSuggestionConnections();
+    }
+
+    public function scanInstagramSuggestionConnections(): void
+    {
         @set_time_limit(0);
         @ignore_user_abort(false);
 
-        $trackedPerson = $this->resolveTrackedPerson()->loadMissing('latestInstagramSnapshot');
+        $trackedPerson = $this->resolveTrackedPerson();
 
         if (! $trackedPerson->instagram_username) {
             $this->setDetailStatus('Fuer diese Person ist kein Instagram-Name hinterlegt.', 'error');
-
-            return;
-        }
-
-        if (! $this->trackedPersonInstagramProfileIsPrivate($trackedPerson)) {
-            $this->setDetailStatus('Vorschlag-Scans sind nur fuer als privat erkannte Instagram-Profile verfuegbar.', 'partial');
 
             return;
         }
@@ -354,7 +387,7 @@ class TrackedPersonDetail extends Component
             $this->streamInstagramProgress([
                 'phase' => 'suggestions',
                 'percent' => 1,
-                'message' => 'Profilvorschlag-Verbindungsscan wird vorbereitet.',
+                'message' => 'Vorschlags-Verbindungsscan wird vorbereitet.',
                 'foundSuggestions' => 0,
                 'suggestionConnections' => [],
                 'observedSuggestionCount' => 0,
@@ -363,7 +396,7 @@ class TrackedPersonDetail extends Component
 
             $scan = app(TrackedPersonInstagramWorkflowService::class)->runSuggestionScan($trackedPerson, $progress);
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
-            $this->markInstagramScanCancelled($trackedPerson, 'Profilvorschlag-Verbindungsscan wurde abgebrochen.');
+            $this->markInstagramScanCancelled($trackedPerson, 'Vorschlags-Verbindungsscan wurde abgebrochen.');
             $this->streamInstagramProgress([
                 'phase' => 'done',
                 'percent' => 100,
@@ -375,14 +408,14 @@ class TrackedPersonDetail extends Component
         } catch (\Throwable $exception) {
             $trackedPerson->markInstagramScanTerminal(
                 'error',
-                'Profilvorschlag-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(),
+                'Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(),
             );
             $this->streamInstagramProgress([
                 'phase' => 'error',
                 'percent' => 100,
-                'message' => 'Profilvorschlag-Verbindungsscan fehlgeschlagen.',
+                'message' => 'Vorschlags-Verbindungsscan fehlgeschlagen.',
             ]);
-            $this->setDetailStatus('Profilvorschlag-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setDetailStatus('Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
 
             return;
         }
@@ -391,11 +424,14 @@ class TrackedPersonDetail extends Component
 
         if (
             $suggestionStatusMessage === ''
-            || $suggestionStatusMessage === 'Profilvorschlag-Verbindungsscan abgeschlossen.'
+            || in_array($suggestionStatusMessage, [
+                'Profilvorschlag-Verbindungsscan abgeschlossen.',
+                'Vorschlags-Verbindungsscan abgeschlossen.',
+            ], true)
         ) {
             $suggestionStatusMessage = ($scan->gracefully_stopped
-                ? 'Profilvorschlag-Verbindungsscan wurde beendet und gespeichert: '
-                : 'Profilvorschlag-Verbindungsscan abgeschlossen: ')
+                ? 'Vorschlags-Verbindungsscan wurde beendet und gespeichert: '
+                : 'Vorschlags-Verbindungsscan abgeschlossen: ')
                 .number_format((int) $scan->suggestions_checked_count, 0, ',', '.')
                 .' Kandidaten geprueft, '
                 .number_format((int) $scan->suggestion_matches_count, 0, ',', '.')

@@ -1093,7 +1093,7 @@ class InvestigationAssistantToolService
             'full' => 'Instagram-Vollanalyse',
             'followers' => 'Followerlisten-Scan',
             'following' => 'Gefolgt-Listen-Scan',
-            'suggestions' => 'Vorschlag-Scan',
+            'suggestions' => 'Vorschlags-Verbindungsscan',
             'posts' => 'Beitragsscan',
             'public_connections' => 'Public-Profile-Verbindungsscan',
             default => 'Instagram-Scan',
