@@ -12,7 +12,7 @@
         mapFullscreen: false,
         filterPanelOpen: false,
         networkNode: { id: null, type: null, isKnownProfile: false },
-        nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, detailUrl: null, x: 0, y: 0 },
+        nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, detailUrl: null, name: '', handle: '', x: 0, y: 0 },
         openMap() {
             if (this.mapFullscreen) {
                 return;
@@ -51,6 +51,8 @@
                 type: event.detail.type,
                 isKnownProfile: event.detail.isKnownProfile,
                 detailUrl: event.detail.detailUrl,
+                name: event.detail.name || event.detail.handle || event.detail.id,
+                handle: event.detail.handle || '',
                 x: event.detail.x,
                 y: event.detail.y,
             };
@@ -436,6 +438,14 @@
         data-network-node-menu
         class="fixed z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white text-sm shadow-xl"
     >
+        <div class="border-b border-slate-200 bg-slate-50 px-3 py-2">
+            <div class="truncate font-bold text-slate-900" x-text="nodeMenu.name"></div>
+            <div
+                class="mt-0.5 truncate text-xs font-semibold text-slate-500"
+                x-show="nodeMenu.handle && nodeMenu.handle !== nodeMenu.name"
+                x-text="nodeMenu.handle"
+            ></div>
+        </div>
         <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-show="nodeMenu.type === 'person' && nodeMenu.detailUrl" x-on:click="window.location.href = nodeMenu.detailUrl; closeNodeMenu()">
             Person öffnen
         </button>

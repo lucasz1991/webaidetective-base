@@ -375,17 +375,19 @@ function edgeRenderState(source, target, evidences) {
     const directionalEvidences = visibleEvidences.filter((evidence) => evidence.directional);
     const hasForwardDirection = directionalEvidences.some((evidence) => evidence.from === source && evidence.to === target);
     const hasReverseDirection = directionalEvidences.some((evidence) => evidence.from === target && evidence.to === source);
+    const mutualFollowing = strongest === 'actual' && hasForwardDirection && hasReverseDirection;
     const labels = [...new Set(visibleEvidences.map((evidence) => evidence.label).filter(Boolean))];
 
     return {
         connectionState: strongest,
+        mutualFollowing,
         lineColor,
         sourceArrowColor: lineColor,
         targetArrowColor: lineColor,
         sourceArrowShape: hasReverseDirection ? 'triangle' : 'none',
         targetArrowShape: hasForwardDirection ? 'triangle' : 'none',
         lineStyle: strongest === 'suggestion' ? 'dotted' : (strongest === 'reconstructed' ? 'dashed' : 'solid'),
-        edgeWidth: strongest === 'actual' ? 1.35 : 1.05,
+        edgeWidth: strongest === 'actual' ? (mutualFollowing ? 2.7 : 1.35) : 1.05,
         edgeOpacity: strongest === 'suggestion' ? 0.66 : 0.78,
         label: labels.join(' + ') || (strongest === 'suggestion' ? 'Vorschlag' : (strongest === 'actual' ? 'folgt' : 'rekonstruiert')),
     };
@@ -1065,6 +1067,8 @@ function nodeActionDetail(root, node, extra = {}) {
         type: node.data('type') || 'unknown',
         isKnownProfile: Boolean(node.data('isKnownProfile')),
         detailUrl: node.data('detailUrl') || null,
+        name: node.data('fullLabel') || node.data('handle') || node.id(),
+        handle: node.data('handle') || '',
         ...extra,
     };
 }
@@ -2712,6 +2716,12 @@ async function initNetworkMap(root) {
                 selector: 'edge[otherUserEvidence]',
                 style: {
                     width: 1.55,
+                },
+            },
+            {
+                selector: 'edge[mutualFollowing = true]',
+                style: {
+                    width: 'data(edgeWidth)',
                 },
             },
             {
