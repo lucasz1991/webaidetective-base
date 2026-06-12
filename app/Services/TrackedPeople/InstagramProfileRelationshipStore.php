@@ -20,8 +20,7 @@ class InstagramProfileRelationshipStore
 {
     public function __construct(
         private readonly InstagramProfileImageStorage $profileImageStorage,
-    ) {
-    }
+    ) {}
 
     private ?bool $ready = null;
 
@@ -295,6 +294,7 @@ class InstagramProfileRelationshipStore
         string $listType,
         array $items,
         mixed $observedAt = null,
+        array $evidence = [],
     ): int {
         if (! $this->isReady() || ! in_array($listType, ['followers', 'following'], true)) {
             return 0;
@@ -352,10 +352,11 @@ class InstagramProfileRelationshipStore
                 'removed_scan_id' => null,
                 'removed_at' => null,
                 'evidence' => [
-                    'source' => 'progress_preview',
+                    'source' => $evidence['source'] ?? 'progress_preview',
                     'tracked_person_id' => $trackedPerson?->id,
                     'last_item' => $item,
                     'observed_at' => optional($observedAt)->toIso8601String(),
+                    ...$evidence,
                 ],
             ])->save();
 

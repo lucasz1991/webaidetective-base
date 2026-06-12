@@ -357,9 +357,6 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     };
     const shouldDismissAsKnownMatch = Boolean(history.hasMatch);
     const shouldDismissAsFinalMiss = Boolean(history.permanentlyDismissed) || Number(history.noMatchChecks || 0) >= 2;
-    const shouldDismissBeforeRetry = !shouldDismissAsKnownMatch
-      && !shouldDismissAsFinalMiss
-      && Number(history.noMatchChecks || 0) >= 1;
 
     rememberObservedSuggestion(candidate, {
       checked: false,
@@ -369,7 +366,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
       previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
     });
 
-    if (shouldDismissAsKnownMatch || shouldDismissAsFinalMiss || shouldDismissBeforeRetry) {
+    if (shouldDismissAsKnownMatch || shouldDismissAsFinalMiss) {
       const dismissed = await dismissVisibleSuggestion(page, candidate.username);
 
       if (dismissed) {
@@ -381,7 +378,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
           dismissedBeforeCheck: true,
           dismissReason: shouldDismissAsKnownMatch
             ? 'already-saved-match'
-            : (shouldDismissAsFinalMiss ? 'already-dismissed-no-match' : 'retry-no-match-candidate'),
+            : 'already-dismissed-no-match',
           previousNoMatchChecks: Number(history.noMatchChecks || 0),
           previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
         });
@@ -419,7 +416,7 @@ async function runProfileSuggestionConnectionScan(deps, page, runtimeState, note
     candidatesToCheck.push({
       ...candidate,
       previousNoMatchChecks: Number(history.noMatchChecks || 0),
-      dismissedBeforeCheck: shouldDismissBeforeRetry && dismissedUsernames.has(candidateUsername),
+      dismissedBeforeCheck: false,
     });
   }
 

@@ -4820,7 +4820,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
       const headingRect = suggestionHeading?.getBoundingClientRect?.() || null;
       const ignoredTextPattern = /^(folgen|abonniert|entfernen|remove|follow|following|x|alle ansehen|alle anzeigen|see all|show all)$/i;
       const usernamePattern = /^[a-z0-9._]{3,30}$/;
-      const textElements = Array.from(container.querySelectorAll('span, div, a'))
+      const textElements = Array.from(container.querySelectorAll('span, div, a, button'))
         .filter(isVisible)
         .filter((element) => isAfterSuggestionHeading(element))
         .filter((element) => {
@@ -4836,17 +4836,18 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
 
       for (const element of textElements) {
         const rawText = normalizeElementText(element.innerText || element.textContent || '');
+        const compactText = rawText.replace(/^@/, '').trim();
 
         if (
           rawText === ''
           || rawText.length > 40
           || ignoredTextPattern.test(rawText)
-          || /[\s@]/.test(rawText)
+          || /\s/.test(compactText)
         ) {
           continue;
         }
 
-        const username = normalizeUsername(rawText);
+        const username = normalizeUsername(compactText);
 
         if (
           !username
@@ -4858,8 +4859,8 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
           continue;
         }
 
-        const rawLooksLikeUsername = rawText === rawText.toLowerCase()
-          || /[0-9._]/.test(rawText);
+        const rawLooksLikeUsername = compactText === compactText.toLowerCase()
+          || /[0-9._]/.test(compactText);
 
         if (!rawLooksLikeUsername) {
           continue;
@@ -4890,6 +4891,82 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
           displayName,
           profileUrl: `https://www.instagram.com/${username}/`,
           detectedFromVisibleText: true,
+        });
+
+        if (items.length >= limit) {
+          break;
+        }
+      }
+
+      return items;
+    };
+    const fallbackSuggestionCardItems = () => {
+      const headingRect = suggestionHeading?.getBoundingClientRect?.() || null;
+      const ignoredTokenPattern = /^(folgen|abonniert|entfernen|remove|follow|following|x|alle|ansehen|anzeigen|see|show|all|vorschlage|vorschlge|suggested|suggestions|fur|dich|for|you)$/i;
+      const followActionPattern = /(?:^|\s)(?:folgen|abonniert|follow|following)(?:\s|$)/i;
+      const usernamePattern = /^[a-z0-9._]{3,30}$/;
+      const cardSelectors = 'li, article, div[role="button"], button, section > div';
+      const cards = Array.from(container.querySelectorAll(cardSelectors))
+        .filter(isVisible)
+        .filter((element) => isAfterSuggestionHeading(element))
+        .filter((element) => {
+          const rect = element.getBoundingClientRect();
+
+          return rect.top >= (headingRect ? headingRect.bottom - 24 : 0)
+            && rect.top <= window.innerHeight + 220
+            && rect.right >= -180
+            && rect.left <= window.innerWidth + 180;
+        });
+      const items = [];
+      const seen = new Set();
+
+      for (const card of cards) {
+        if (isDiscoverMoreElement(card)) {
+          continue;
+        }
+
+        const rawText = normalizeElementText(card.innerText || card.textContent || '');
+        const hasAvatar = Boolean(card.querySelector('img'));
+        const hasProfileAnchor = profileAnchorsIn(card).length > 0;
+
+        if (
+          rawText === ''
+          || rawText.length > 320
+          || (!followActionPattern.test(rawText) && !hasAvatar && !hasProfileAnchor)
+        ) {
+          continue;
+        }
+
+        const tokens = rawText
+          .split(/\s+/)
+          .map((rawToken) => ({
+            rawToken,
+            username: rawToken.replace(/^@/, '').replace(/[^a-z0-9._]/gi, '').toLowerCase(),
+          }))
+          .filter(({ username }) => (
+            usernamePattern.test(username)
+            && username !== currentUsername
+            && !reservedPaths.has(username)
+            && !ignoredTokenPattern.test(username)
+          ));
+        const username = tokens.find(({ rawToken, username: tokenUsername }) => (
+          rawToken.startsWith('@')
+          || tokenUsername.includes('.')
+          || tokenUsername.includes('_')
+          || /\d/.test(tokenUsername)
+          || rawToken === rawToken.toLowerCase()
+        ))?.username || '';
+
+        if (!username || seen.has(username)) {
+          continue;
+        }
+
+        seen.add(username);
+        items.push({
+          username,
+          displayName: null,
+          profileUrl: `https://www.instagram.com/${username}/`,
+          detectedFromVisibleCardText: true,
         });
 
         if (items.length >= limit) {
@@ -4968,8 +5045,9 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
     }
 
     const textFallbackItems = fallbackVisibleSuggestionTextItems();
+    const cardFallbackItems = fallbackSuggestionCardItems();
 
-    for (const item of textFallbackItems) {
+    for (const item of [...textFallbackItems, ...cardFallbackItems]) {
       if (!itemsByUsername.has(item.username) && itemsByUsername.size < limit) {
         itemsByUsername.set(item.username, item);
       }
@@ -4991,6 +5069,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
         scopedAnchorsSeen: scopedAnchors.length,
         fallbackAnchorsSeen: fallbackAnchors.length,
         textFallbackItemsSeen: textFallbackItems.length,
+        cardFallbackItemsSeen: cardFallbackItems.length,
         anchorsUsed: anchors.length,
         itemsFound: itemsByUsername.size,
         usernames: Array.from(itemsByUsername.keys()).slice(0, 12),
@@ -7978,6 +8057,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
   let finalUrl = profileUrl;
   let suggestionScanResult = null;
   let postsScanResult = null;
+  let terminationSignalHandled = false;
   let loginDiagnostics = {
     attempted: false,
     success: false,
@@ -7994,6 +8074,45 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
     cookieFilePath,
     browserUserDataDir,
     isLoginSessionMode,
+  });
+  const handleTerminationSignal = async (signal) => {
+    if (terminationSignalHandled) {
+      return;
+    }
+
+    terminationSignalHandled = true;
+    recordRunDebug('termination-signal', { signal });
+
+    await Promise.race([
+      (async () => {
+        if (page && typeof page.isClosed === 'function' && !page.isClosed()) {
+          await captureLivePreviewScreenshot(page, runtimeConfig || {}, true).catch(() => ({}));
+          await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
+        }
+
+        scriptWatchdog.intentionalBrowserClose = true;
+
+        if (browser) {
+          await closeBrowserSoftly(browser);
+        }
+      })(),
+      sleep(5000),
+    ]);
+
+    stopScriptWatchdog();
+
+    if (cleanupBrowserProfileOnExit) {
+      cleanupDirectory(activeBrowserUserDataDir);
+    }
+
+    process.exit(signal === 'SIGINT' ? 130 : 143);
+  };
+
+  process.once('SIGINT', () => {
+    void handleTerminationSignal('SIGINT');
+  });
+  process.once('SIGTERM', () => {
+    void handleTerminationSignal('SIGTERM');
   });
 
   try {
@@ -8588,6 +8707,14 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
 
     process.exitCode = 1;
   } finally {
+    if (page && typeof page.isClosed === 'function' && !page.isClosed()) {
+      await captureLivePreviewScreenshot(page, runtimeConfig || {}, true).catch(() => ({}));
+
+      if (!debugScreenshotPath && artifacts?.screenshotPath) {
+        debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
+      }
+    }
+
     scriptWatchdog.intentionalBrowserClose = true;
 
     if (browser) {

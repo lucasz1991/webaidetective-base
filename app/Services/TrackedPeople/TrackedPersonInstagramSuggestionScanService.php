@@ -7,6 +7,7 @@ use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramScraper;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -18,8 +19,7 @@ class TrackedPersonInstagramSuggestionScanService
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
-    ) {
-    }
+    ) {}
 
     private ?array $activeScanControl = null;
 
@@ -27,8 +27,7 @@ class TrackedPersonInstagramSuggestionScanService
         TrackedPerson $trackedPerson,
         ?callable $progress = null,
         ?string $targetUsernameOverride = null,
-    ): TrackedPersonInstagramSuggestionScan
-    {
+    ): TrackedPersonInstagramSuggestionScan {
         $targetUsername = $this->scraper->normalizeInstagramUsername(
             $targetUsernameOverride ?: $trackedPerson->instagram_username,
         );
@@ -253,6 +252,13 @@ class TrackedPersonInstagramSuggestionScanService
                 $payload,
                 $analyzedAt,
             );
+            $this->storePublicListRelationships(
+                $trackedPerson,
+                $scan,
+                $targetUsername,
+                $connections,
+                $analyzedAt,
+            );
 
             return $scan;
         });
@@ -273,7 +279,7 @@ class TrackedPersonInstagramSuggestionScanService
         string $targetUsername,
         array $connections,
         array $payload,
-        \Illuminate\Support\Carbon $seenAt,
+        Carbon $seenAt,
     ): void {
         if ($connections === []) {
             return;
@@ -351,7 +357,7 @@ class TrackedPersonInstagramSuggestionScanService
     private function storeObservedSuggestionProfiles(
         TrackedPerson $trackedPerson,
         array $payload,
-        \Illuminate\Support\Carbon $seenAt,
+        Carbon $seenAt,
     ): void {
         $scanPayload = $this->suggestionPayload($payload);
         $candidates = $this->mergeObservedSuggestionItems(
@@ -386,6 +392,77 @@ class TrackedPersonInstagramSuggestionScanService
                     'skipped_reason' => $this->nullableTrim($candidate['skippedReason'] ?? null),
                 ],
             ]);
+        }
+    }
+
+    private function storePublicListRelationships(
+        TrackedPerson $trackedPerson,
+        ?TrackedPersonInstagramSuggestionScan $scan,
+        string $targetUsername,
+        array $connections,
+        Carbon $seenAt,
+    ): void {
+        $targetProfile = $this->profileRelationshipStore->ensureProfile($targetUsername);
+
+        if (! $targetProfile) {
+            return;
+        }
+
+        foreach ($connections as $connection) {
+            $candidateUsername = $this->scraper->normalizeInstagramUsername((string) ($connection['username'] ?? ''));
+
+            if ($candidateUsername === null) {
+                continue;
+            }
+
+            $candidateItem = [[
+                'username' => $candidateUsername,
+                'displayName' => $this->nullableTrim($connection['displayName'] ?? null),
+                'profileUrl' => $this->nullableTrim($connection['profileUrl'] ?? null)
+                    ?: 'https://www.instagram.com/'.$candidateUsername.'/',
+                'profileImageUrl' => $this->nullableTrim($connection['profileImageUrl'] ?? $connection['profile_image_url'] ?? null),
+                'profileVisibility' => $this->normalizeSuggestionProfileVisibility($connection),
+                'isPrivate' => $this->normalizeSuggestionProfileIsPrivate($connection),
+                'postsCount' => is_numeric($connection['postsCount'] ?? null) ? (int) $connection['postsCount'] : null,
+                'followersCount' => is_numeric($connection['followersCount'] ?? null) ? (int) $connection['followersCount'] : null,
+                'followingCount' => is_numeric($connection['followingCount'] ?? null) ? (int) $connection['followingCount'] : null,
+            ]];
+            $evidence = [
+                'source' => 'suggestion_public_list_inverse',
+                'suggestion_scan_id' => $scan?->id,
+                'candidate_username' => $candidateUsername,
+                'public_list_search' => is_array($connection['publicListSearch'] ?? null)
+                    ? $connection['publicListSearch']
+                    : [],
+            ];
+
+            if ((bool) ($connection['targetFoundInFollowing'] ?? false)) {
+                $this->profileRelationshipStore->syncObservedRelationshipPreview(
+                    $targetProfile,
+                    $trackedPerson,
+                    'followers',
+                    $candidateItem,
+                    $seenAt,
+                    [
+                        ...$evidence,
+                        'inferred_from' => 'candidate_following_contains_target',
+                    ],
+                );
+            }
+
+            if ((bool) ($connection['targetFoundInFollowers'] ?? false)) {
+                $this->profileRelationshipStore->syncObservedRelationshipPreview(
+                    $targetProfile,
+                    $trackedPerson,
+                    'following',
+                    $candidateItem,
+                    $seenAt,
+                    [
+                        ...$evidence,
+                        'inferred_from' => 'candidate_followers_contains_target',
+                    ],
+                );
+            }
         }
     }
 
