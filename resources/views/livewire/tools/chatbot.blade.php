@@ -5,6 +5,7 @@
         isLoading: @entangle('isLoading'),
         chatHistory: @entangle('chatHistory'),
         toolEvents: @entangle('toolEvents'),
+        scanActivities: @entangle('scanActivities'),
         attachedFiles: @entangle('uploads'),
         pageContext: @js($pageContext),
         voiceSupported: false,
@@ -16,11 +17,14 @@
         autoRead: $persist(false).as('investigation-copilot-auto-read'),
         speechRate: $persist(1).as('investigation-copilot-speech-rate'),
         lastAssistantMessageKey: null,
+        toolAlertTimers: {},
         init() {
             this.voiceSupported = ('SpeechRecognition' in window) || ('webkitSpeechRecognition' in window);
             this.speechSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
             this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
             this.$watch('chatHistory', (history) => this.handleNewAssistantMessage(history));
+            this.$watch('toolEvents', (events) => this.scheduleToolAlerts(events));
+            this.scheduleToolAlerts(this.toolEvents);
             this.syncContext();
         },
         normalizeEventDetail(event) {
@@ -173,6 +177,40 @@
             this.speaking = false;
             this.speakingIndex = null;
         },
+        scheduleToolAlerts(events) {
+            (Array.isArray(events) ? events : []).forEach((event) => {
+                const id = String(event?.id || '');
+                if (!id || this.toolAlertTimers[id]) return;
+
+                this.toolAlertTimers[id] = window.setTimeout(async () => {
+                    delete this.toolAlertTimers[id];
+                    await $wire.dismissToolEvent(id);
+                }, 6000);
+            });
+        },
+        dismissToolAlert(id) {
+            const key = String(id || '');
+            if (!key) return;
+
+            if (this.toolAlertTimers[key]) {
+                window.clearTimeout(this.toolAlertTimers[key]);
+                delete this.toolAlertTimers[key];
+            }
+
+            $wire.dismissToolEvent(key);
+        },
+        activeScans() {
+            return (Array.isArray(this.scanActivities) ? this.scanActivities : [])
+                .filter((scan) => ['queued', 'running'].includes(scan?.status));
+        },
+        scanPercent(scan) {
+            return Math.max(0, Math.min(100, Number(scan?.percent || 0)));
+        },
+        scanStatusLabel(scan) {
+            if (scan?.status === 'queued') return 'Warteschlange';
+            if (scan?.phase) return String(scan.phase).replaceAll('_', ' ');
+            return 'Scan laeuft';
+        },
         handleUiAction(event) {
             const detail = this.normalizeEventDetail(event);
             const action = detail.action || detail;
@@ -240,6 +278,10 @@
     })"
     class="investigation-copilot"
 >
+    @if(collect($scanActivities)->contains(fn (array $scan): bool => in_array($scan['status'] ?? null, ['queued', 'running'], true)))
+        <div wire:poll.2000ms="pollAssistantScans" class="hidden" aria-hidden="true"></div>
+    @endif
+
     @if($status)
         <button
             x-show="!showChat"
@@ -374,13 +416,54 @@
             </header>
 
             <div class="grid min-h-0 flex-1 grid-cols-1">
-                <section class="flex min-h-0 flex-col">
+                <section class="relative flex min-h-0 flex-col">
+                    <div class="pointer-events-none absolute inset-x-3 top-3 z-30 space-y-2">
+                        <template x-for="event in toolEvents" :key="event.id">
+                            <div
+                                x-transition:enter="transition ease-out duration-200"
+                                x-transition:enter-start="-translate-y-2 opacity-0"
+                                x-transition:enter-end="translate-y-0 opacity-100"
+                                x-transition:leave="transition ease-in duration-150"
+                                x-transition:leave-start="translate-y-0 opacity-100"
+                                x-transition:leave-end="-translate-y-2 opacity-0"
+                                class="pointer-events-auto rounded-xl border px-3 py-3 shadow-lg backdrop-blur"
+                                :class="event.ok
+                                    ? 'border-emerald-200 bg-emerald-50/95 text-emerald-950'
+                                    : 'border-rose-200 bg-rose-50/95 text-rose-950'"
+                                role="status"
+                            >
+                                <div class="flex items-start gap-3">
+                                    <span
+                                        class="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-black text-white"
+                                        :class="event.ok ? 'bg-emerald-600' : 'bg-rose-600'"
+                                        x-text="event.ok ? '✓' : '!'"
+                                    ></span>
+                                    <div class="min-w-0 flex-1">
+                                        <div class="flex items-start justify-between gap-3">
+                                            <strong class="truncate text-xs" x-text="event.tool"></strong>
+                                            <span class="shrink-0 text-[10px] opacity-60" x-text="event.time"></span>
+                                        </div>
+                                        <p class="mt-1 text-xs leading-5 opacity-80" x-text="event.message"></p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        x-on:click="dismissToolAlert(event.id)"
+                                        class="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-current opacity-50 transition hover:bg-black/5 hover:opacity-100"
+                                        aria-label="Meldung schliessen"
+                                    >
+                                        <span aria-hidden="true">&times;</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+
                     <div
                         class="scroll-container min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4"
                         x-ref="messages"
                         x-init="
                             $watch('chatHistory', () => $nextTick(() => $refs.messages.scrollTo({ top: $refs.messages.scrollHeight, behavior: 'smooth' })));
-                            $watch('toolEvents', () => $nextTick(() => $refs.messages.scrollTo({ top: $refs.messages.scrollHeight, behavior: 'smooth' })));
+                            $watch('scanActivities', () => $nextTick(() => $refs.messages.scrollTo({ top: $refs.messages.scrollHeight, behavior: 'smooth' })));
                         "
                     >
                         <template x-if="chatHistory.length === 0">
@@ -467,18 +550,38 @@
                             </div>
                         </template>
 
-                        <template x-if="toolEvents.length > 0">
-                            <div class="space-y-2 pt-2">
-                                <p class="text-xs font-black uppercase tracking-[.16em] text-slate-500">Ausgefuehrte Tools</p>
-                                <template x-for="(event, index) in toolEvents" :key="'tool-' + index">
-                                    <div class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                        <template x-for="scan in activeScans()" :key="'scan-' + scan.token">
+                            <div class="max-w-[92%] overflow-hidden rounded-xl border border-cyan-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
+                                <div class="flex items-start gap-3">
+                                    <span class="relative mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-cyan-50">
+                                        <span class="absolute inset-1 animate-ping rounded-full bg-cyan-300/30"></span>
+                                        <svg class="relative h-4 w-4 animate-spin text-cyan-700" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <circle class="opacity-20" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
+                                            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+                                        </svg>
+                                    </span>
+                                    <div class="min-w-0 flex-1">
                                         <div class="flex items-start justify-between gap-3">
-                                            <strong x-text="event.tool"></strong>
-                                            <span :class="event.ok ? 'text-emerald-700' : 'text-rose-700'" x-text="event.ok ? 'ok' : 'fehler'"></span>
+                                            <div class="min-w-0">
+                                                <p class="truncate font-black text-slate-900" x-text="scan.label || 'Instagram-Scan'"></p>
+                                                <p class="mt-0.5 text-[11px] font-bold uppercase tracking-wide text-cyan-700" x-text="scanStatusLabel(scan)"></p>
+                                            </div>
+                                            <span class="shrink-0 text-sm font-black text-cyan-800" x-text="scanPercent(scan) + '%'"></span>
                                         </div>
-                                        <p class="mt-1 text-slate-500" x-text="event.message"></p>
+                                        <p class="mt-2 text-xs leading-5 text-slate-500" x-text="scan.message || 'Scan wird vorbereitet.'"></p>
+                                        <div class="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                                            <div
+                                                class="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-500 transition-[width] duration-500 ease-out"
+                                                :style="`width: ${scanPercent(scan)}%`"
+                                            ></div>
+                                        </div>
+                                        <div
+                                            x-show="scan.loaded !== null && scan.loaded !== undefined"
+                                            class="mt-1.5 text-right text-[10px] font-semibold text-slate-400"
+                                            x-text="scan.expected ? `${scan.loaded} von ${scan.expected}` : `${scan.loaded} geladen`"
+                                        ></div>
                                     </div>
-                                </template>
+                                </div>
                             </div>
                         </template>
 

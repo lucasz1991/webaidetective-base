@@ -3,11 +3,13 @@
 namespace App\Livewire\Tools;
 
 use App\Models\Setting;
+use App\Services\Ai\InvestigationAssistantScanStatusStore;
 use App\Services\Ai\InvestigationAssistantToolService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Session;
+use Illuminate\Support\Str;
 use Livewire\Component;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Livewire\WithFileUploads;
@@ -22,11 +24,15 @@ class Chatbot extends Component
 
     private const TOOL_EVENTS_KEY = 'investigation_assistant_tool_events';
 
+    private const SCAN_ACTIVITIES_KEY = 'investigation_assistant_scan_activities';
+
     public string $message = '';
 
     public array $chatHistory = [];
 
     public array $toolEvents = [];
+
+    public array $scanActivities = [];
 
     public array $uploads = [];
 
@@ -56,7 +62,9 @@ class Chatbot extends Component
     public function mount(): void
     {
         $this->chatHistory = Session::get(self::DISPLAY_HISTORY_KEY, []);
-        $this->toolEvents = Session::get(self::TOOL_EVENTS_KEY, []);
+        $this->toolEvents = [];
+        $this->scanActivities = Session::get(self::SCAN_ACTIVITIES_KEY, []);
+        Session::forget(self::TOOL_EVENTS_KEY);
         $this->status = (bool) Setting::getValue('ai_assistant', 'status');
         $this->assistantName = Setting::getValue('ai_assistant', 'assistant_name') ?: 'Investigation Copilot';
         $this->apiUrl = Setting::getValue('ai_assistant', 'api_url');
@@ -136,6 +144,75 @@ class Chatbot extends Component
         $this->toolEvents = [];
         $this->uploads = [];
         $this->message = '';
+    }
+
+    public function dismissToolEvent(string $eventId): void
+    {
+        $this->toolEvents = collect($this->toolEvents)
+            ->reject(fn (array $event): bool => ($event['id'] ?? null) === $eventId)
+            ->values()
+            ->all();
+    }
+
+    public function pollAssistantScans(): void
+    {
+        $user = Auth::user();
+
+        if (! $user || $this->scanActivities === []) {
+            return;
+        }
+
+        $statusStore = app(InvestigationAssistantScanStatusStore::class);
+        $terminalScan = null;
+
+        foreach ($this->scanActivities as $index => $activity) {
+            $token = (string) ($activity['token'] ?? '');
+
+            if ($token === '') {
+                continue;
+            }
+
+            $status = $statusStore->get($token);
+
+            if (! $status || (int) ($status['user_id'] ?? 0) !== (int) $user->id) {
+                continue;
+            }
+
+            $this->scanActivities[$index] = [
+                ...$activity,
+                ...$status,
+            ];
+
+            if (
+                $terminalScan === null
+                && in_array($status['status'] ?? null, ['completed', 'error', 'cancelled'], true)
+                && ! (bool) ($activity['reacted'] ?? false)
+            ) {
+                $this->scanActivities[$index]['reacted'] = true;
+                $terminalScan = $this->scanActivities[$index];
+            }
+        }
+
+        $this->persistScanActivities();
+
+        if (! $terminalScan) {
+            return;
+        }
+
+        $successful = ($terminalScan['status'] ?? null) === 'completed';
+        $this->appendTransientToolAlert(
+            (string) ($terminalScan['label'] ?? 'Instagram-Scan'),
+            (string) ($terminalScan['message'] ?? ($successful ? 'Scan abgeschlossen.' : 'Scan beendet.')),
+            $successful,
+        );
+        $this->reactToCompletedScan($terminalScan);
+
+        $terminalToken = (string) ($terminalScan['token'] ?? '');
+        $this->scanActivities = collect($this->scanActivities)
+            ->reject(fn (array $activity): bool => ($activity['token'] ?? null) === $terminalToken)
+            ->values()
+            ->all();
+        $this->persistScanActivities();
     }
 
     public function render()
@@ -403,16 +480,90 @@ class Chatbot extends Component
 
     private function appendToolEvent(string $toolName, array $arguments, array $result): void
     {
+        $this->appendTransientToolAlert(
+            $toolName,
+            (string) ($result['message'] ?? data_get($result, 'error.message', 'Tool ausgefuehrt.')),
+            (bool) ($result['ok'] ?? false),
+            $arguments,
+        );
+
+        $tracking = $result['scan_tracking'] ?? null;
+
+        if (is_array($tracking) && filled($tracking['token'] ?? null)) {
+            $token = (string) $tracking['token'];
+            $this->scanActivities = collect($this->scanActivities)
+                ->reject(fn (array $activity): bool => ($activity['token'] ?? null) === $token)
+                ->push([
+                    ...$tracking,
+                    'reacted' => false,
+                ])
+                ->take(-4)
+                ->values()
+                ->all();
+            $this->persistScanActivities();
+        }
+    }
+
+    private function appendTransientToolAlert(
+        string $toolName,
+        string $message,
+        bool $successful,
+        array $arguments = [],
+    ): void {
         $this->toolEvents[] = [
+            'id' => (string) Str::uuid(),
             'tool' => $toolName,
             'arguments' => $arguments,
-            'ok' => (bool) ($result['ok'] ?? false),
-            'message' => (string) ($result['message'] ?? data_get($result, 'error.message', 'Tool ausgefuehrt.')),
+            'ok' => $successful,
+            'message' => $message,
             'time' => now()->format('H:i:s'),
         ];
 
-        $this->toolEvents = array_slice($this->toolEvents, -12);
-        Session::put(self::TOOL_EVENTS_KEY, $this->toolEvents);
+        $this->toolEvents = array_slice($this->toolEvents, -4);
+    }
+
+    private function reactToCompletedScan(array $scan): void
+    {
+        $this->isLoading = true;
+
+        try {
+            $assistantResponse = $this->runAssistantConversation(trim(implode("\n", [
+                'Ein von dir gestarteter Hintergrundscan wurde beendet.',
+                'Lies jetzt mit den verfuegbaren Analyse-Tools die neuesten gespeicherten Ergebnisse dieses Profils.',
+                'Starte dabei keinen weiteren Scan.',
+                'Erklaere dem Nutzer kurz die wichtigsten neuen Erkenntnisse, Veraenderungen und den sinnvollsten naechsten Schritt.',
+                'Scanstatus:',
+                json_encode($scan, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            ])));
+
+            $assistantMessage = $assistantResponse['message'] ?? '';
+            $this->appendDisplayMessage(
+                'assistant',
+                $assistantMessage ?: 'Der Scan ist abgeschlossen. Die neuen Ergebnisse konnten jedoch nicht automatisch zusammengefasst werden.',
+            );
+
+            if (is_array($assistantResponse['ui_action'] ?? null)) {
+                $this->dispatch('assistant-ui-action', action: $assistantResponse['ui_action']);
+            }
+        } catch (\Throwable $exception) {
+            Log::warning('Automatische AI-Auswertung nach Scanabschluss fehlgeschlagen.', [
+                'scan_token' => $scan['token'] ?? null,
+                'error' => $exception->getMessage(),
+            ]);
+
+            $this->appendDisplayMessage(
+                'assistant',
+                'Der Scan wurde beendet, aber die automatische Auswertung ist fehlgeschlagen: '.$exception->getMessage(),
+                'error',
+            );
+        } finally {
+            $this->isLoading = false;
+        }
+    }
+
+    private function persistScanActivities(): void
+    {
+        Session::put(self::SCAN_ACTIVITIES_KEY, array_slice($this->scanActivities, -4));
     }
 
     private function trimTranscript(array $transcript): array

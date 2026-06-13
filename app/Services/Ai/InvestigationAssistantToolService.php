@@ -501,9 +501,10 @@ class InvestigationAssistantToolService
                 ?: $this->createTrackedPersonFromInstagramProfile($user, $profile, $displayName, $notes);
 
             app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($trackedPerson);
+            $scanTracking = null;
 
             if ($scanNow) {
-                RunTrackedPersonInstagramToolScan::dispatch((int) $trackedPerson->id, 'full', false);
+                $scanTracking = $this->queueTrackedPersonScan($user, $trackedPerson, 'full');
             }
 
             NetworkMap::forgetGraphCacheForUser((int) $user->id);
@@ -515,6 +516,7 @@ class InvestigationAssistantToolService
                     ? 'Kontakt wurde als beobachtete Person gespeichert und eine Instagram-Vollanalyse wurde gestartet.'
                     : 'Kontakt wurde als beobachtete Person gespeichert.',
                 'profile' => $this->trackedPersonSummary($trackedPerson->fresh('latestInstagramSnapshot')),
+                'scan_tracking' => $scanTracking,
             ];
         }
 
@@ -540,9 +542,9 @@ class InvestigationAssistantToolService
 
         app(InstagramProfileRelationshipStore::class)->syncPublicProfile($publicProfile);
 
-        if ($scanNow) {
-            $this->queueNetworkProfileScan($user, $sourcePerson, $profile);
-        }
+        $scanTracking = $scanNow
+            ? $this->queueNetworkProfileScan($user, $sourcePerson, $profile)
+            : null;
 
         NetworkMap::forgetGraphCacheForUser((int) $user->id);
         NetworkMap::forgetGraphCacheForUser((int) $user->id, (int) $sourcePerson->id);
@@ -560,6 +562,7 @@ class InvestigationAssistantToolService
                 'display_name' => $publicProfile->display_name,
                 'relationship_type' => $publicProfile->relationship_type,
             ],
+            'scan_tracking' => $scanTracking,
         ];
     }
 
@@ -611,7 +614,7 @@ class InvestigationAssistantToolService
             return $this->error('INVALID_SCAN_TYPE', 'Unbekannter Scan-Typ: '.$scanType);
         }
 
-        RunTrackedPersonInstagramToolScan::dispatch((int) $person->id, $scanType, false);
+        $scanTracking = $this->queueTrackedPersonScan($user, $person, $scanType);
 
         $person->forceFill([
             'last_instagram_status_level' => 'partial',
@@ -623,6 +626,7 @@ class InvestigationAssistantToolService
             'message' => $this->scanTypeLabel($scanType).' wurde im Hintergrund gestartet.',
             'reason' => $arguments['reason'] ?? null,
             'profile' => $this->trackedPersonSummary($person->fresh('latestInstagramSnapshot')),
+            'scan_tracking' => $scanTracking,
         ];
     }
 
@@ -646,7 +650,7 @@ class InvestigationAssistantToolService
             return $this->error('PROFILE_STORE_UNAVAILABLE', 'Das Instagram-Profil konnte nicht im Graphen vorbereitet werden.');
         }
 
-        $this->queueNetworkProfileScan($user, $sourcePerson, $profile);
+        $scanTracking = $this->queueNetworkProfileScan($user, $sourcePerson, $profile);
 
         return [
             'ok' => true,
@@ -654,6 +658,7 @@ class InvestigationAssistantToolService
             'reason' => $arguments['reason'] ?? null,
             'source_profile' => $this->trackedPersonSummary($sourcePerson->fresh('latestInstagramSnapshot')),
             'candidate' => $this->networkCandidateSummary($profile->fresh() ?: $profile, $sourcePerson),
+            'scan_tracking' => $scanTracking,
         ];
     }
 
@@ -1150,16 +1155,53 @@ class InvestigationAssistantToolService
         ]);
     }
 
-    private function queueNetworkProfileScan($user, TrackedPerson $sourcePerson, InstagramProfile $profile): void
+    private function queueTrackedPersonScan($user, TrackedPerson $person, string $scanType): array
     {
+        $token = (string) Str::uuid();
+        $label = $this->scanTypeLabel($scanType);
+        $tracking = app(InvestigationAssistantScanStatusStore::class)->start($token, [
+            'user_id' => (int) $user->id,
+            'tracked_person_id' => (int) $person->id,
+            'instagram_username' => $person->instagram_username,
+            'scan_type' => $scanType,
+            'label' => $label,
+            'message' => $label.' wurde in die Warteschlange gestellt.',
+        ]);
+
+        RunTrackedPersonInstagramToolScan::dispatch((int) $person->id, $scanType, false, $token);
+
+        return $tracking;
+    }
+
+    private function queueNetworkProfileScan($user, TrackedPerson $sourcePerson, InstagramProfile $profile): array
+    {
+        $token = (string) Str::uuid();
+        $label = 'Profil-Vollanalyse @'.$profile->username;
+        $tracking = app(InvestigationAssistantScanStatusStore::class)->start($token, [
+            'user_id' => (int) $user->id,
+            'tracked_person_id' => (int) $sourcePerson->id,
+            'instagram_profile_id' => (int) $profile->id,
+            'instagram_username' => $profile->username,
+            'scan_type' => 'network_profile',
+            'label' => $label,
+            'message' => $label.' wurde in die Warteschlange gestellt.',
+        ]);
+
         $profile->forceFill([
             'last_status_level' => 'partial',
             'last_status_message' => 'AI-Assistent hat eine Profil-Vollanalyse in die Warteschlange gestellt.',
         ])->save();
 
-        ScanInstagramProfileJob::dispatch((int) $sourcePerson->id, (int) $profile->id, (int) $user->id);
+        ScanInstagramProfileJob::dispatch(
+            (int) $sourcePerson->id,
+            (int) $profile->id,
+            (int) $user->id,
+            $token,
+        );
         NetworkMap::forgetGraphCacheForUser((int) $user->id);
         NetworkMap::forgetGraphCacheForUser((int) $user->id, (int) $sourcePerson->id);
+
+        return $tracking;
     }
 
     private function validRelationshipType(string $relationshipType): string

@@ -260,7 +260,7 @@
                                     <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-emerald-600"></span> Gegenseitiges Folgen</div>
                                     <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-green-500"></span> Einseitiges Folgen</div>
                                     <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-sky-600"></span> Bekannte Profil-Verknuepfung</div>
-                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-indigo-600"></span> Profil-Relationship</div>
+                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-violet-600"></span> Verknuepfung ueber gespeicherte Person</div>
                                     <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-rose-600"></span> Rekonstruiert</div>
                                     <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-amber-500"></span> Vorschlag</div>
                                 </div>
@@ -473,7 +473,7 @@
                         <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-sky-600"></span> Bekannte Profil-Verknuepfung</div>
                         <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-pink-600"></span> Rekonstruierte Listenverbindung</div>
                         <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-emerald-600"></span> Gespeicherte Follower-/Gefolgt-Listen</div>
-                        <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-indigo-600"></span> Profil-Relationships</div>
+                        <div class="flex items-center gap-2"><span class="h-2 w-8 rounded-full bg-violet-600"></span> Verknuepfung ueber gespeicherte Person</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-amber-400 ring-2 ring-amber-500"></span> Hauptperson</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full bg-slate-950"></span> Beobachtete Person</div>
                         <div class="flex items-center gap-2"><span class="h-4 w-4 rounded-full border border-slate-300 bg-slate-50"></span> Rekonstruierter Kandidat</div>

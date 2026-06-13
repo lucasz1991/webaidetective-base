@@ -2,7 +2,7 @@ const instances = new WeakMap();
 const activeRoots = new Set();
 const DEFAULT_LAYOUT_MODE = 'clusters';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
-const LAYOUT_STORAGE_PREFIX = 'network-map-render:v7';
+const LAYOUT_STORAGE_PREFIX = 'network-map-render:v8';
 let cytoscapeLoader;
 
 function loadCytoscape() {
@@ -370,7 +370,7 @@ function actualConnectionState(evidences, mutualFollowing) {
     const types = new Set(evidences.map((evidence) => evidence.type));
 
     if (types.has('tracked-profile-rel')) {
-        return 'profile-relationship';
+        return 'known-person-link';
     }
 
     if (types.has('tracked-list')) {
@@ -386,9 +386,20 @@ function edgeRenderState(source, target, evidences) {
         .map((evidence) => evidence.kind)
         .sort((left, right) => edgeKindPriority(right) - edgeKindPriority(left))[0] || 'reconstructed';
     const directionalEvidences = visibleEvidences.filter((evidence) => evidence.directional);
+    const confirmedListEvidences = directionalEvidences.filter(
+        (evidence) => evidence.kind === 'actual' && evidence.type === 'tracked-list',
+    );
     const hasForwardDirection = directionalEvidences.some((evidence) => evidence.from === source && evidence.to === target);
     const hasReverseDirection = directionalEvidences.some((evidence) => evidence.from === target && evidence.to === source);
-    const mutualFollowing = strongest === 'actual' && hasForwardDirection && hasReverseDirection;
+    const hasConfirmedForwardDirection = confirmedListEvidences.some(
+        (evidence) => evidence.from === source && evidence.to === target,
+    );
+    const hasConfirmedReverseDirection = confirmedListEvidences.some(
+        (evidence) => evidence.from === target && evidence.to === source,
+    );
+    const mutualFollowing = strongest === 'actual'
+        && hasConfirmedForwardDirection
+        && hasConfirmedReverseDirection;
     const connectionState = strongest === 'actual'
         ? actualConnectionState(visibleEvidences.filter((evidence) => evidence.kind === 'actual'), mutualFollowing)
         : strongest;
@@ -396,7 +407,7 @@ function edgeRenderState(source, target, evidences) {
         mutual: '#059669',
         following: '#22c55e',
         'known-profile': '#0284c7',
-        'profile-relationship': '#4f46e5',
+        'known-person-link': '#7c3aed',
         reconstructed: '#e11d48',
         suggestion: '#f59e0b',
     }[connectionState] || '#64748b';

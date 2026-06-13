@@ -6,6 +6,7 @@ use App\Livewire\User\NetworkMap;
 use App\Models\InstagramProfile;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonPublicProfile;
+use App\Services\Ai\InvestigationAssistantScanStatusStore;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\InstagramProfileScanService;
 use Illuminate\Bus\Queueable;
@@ -31,11 +32,18 @@ class ScanInstagramProfileJob implements ShouldQueue
 
     public ?int $publicProfileId = null;
 
-    public function __construct(int $trackedPersonId, int $instagramProfileId, int $userId)
-    {
+    public ?string $assistantScanToken = null;
+
+    public function __construct(
+        int $trackedPersonId,
+        int $instagramProfileId,
+        int $userId,
+        ?string $assistantScanToken = null,
+    ) {
         $this->trackedPersonId = $trackedPersonId;
         $this->instagramProfileId = $instagramProfileId;
         $this->userId = $userId;
+        $this->assistantScanToken = $assistantScanToken;
     }
 
     public function handle(
@@ -69,8 +77,22 @@ class ScanInstagramProfileJob implements ShouldQueue
                 'legacy_public_profile_id' => isset($this->publicProfileId) ? (int) $this->publicProfileId : null,
                 'user_id' => $this->userId,
             ]);
+            $this->failAssistantScan('Das zu scannende Instagram-Profil wurde nicht gefunden.');
 
             return;
+        }
+
+        $statusStore = app(InvestigationAssistantScanStatusStore::class);
+        $progress = $this->assistantScanToken
+            ? fn (array $state) => $statusStore->progress($this->assistantScanToken, $state)
+            : null;
+
+        if ($this->assistantScanToken) {
+            $statusStore->progress($this->assistantScanToken, [
+                'percent' => 1,
+                'phase' => 'starting',
+                'message' => 'Profil-Vollanalyse fuer @'.$profile->username.' wurde gestartet.',
+            ]);
         }
 
         $profile->forceFill([
@@ -79,7 +101,23 @@ class ScanInstagramProfileJob implements ShouldQueue
         ])->save();
 
         try {
-            $scanService->scan($profile, $this->userId, true);
+            $scanService->scan($profile, $this->userId, true, $progress);
+
+            if ($this->assistantScanToken) {
+                $freshProfile = $profile->fresh() ?: $profile;
+                $statusStore->complete(
+                    $this->assistantScanToken,
+                    [
+                        'tracked_person_id' => $trackedPerson?->id,
+                        'instagram_profile_id' => (int) $freshProfile->id,
+                        'instagram_username' => $freshProfile->username,
+                        'status_level' => $freshProfile->last_status_level,
+                        'status_message' => $freshProfile->last_status_message,
+                        'scanned_at' => optional($freshProfile->last_scanned_at)?->toIso8601String(),
+                    ],
+                    'Profil-Vollanalyse fuer @'.$freshProfile->username.' wurde abgeschlossen.',
+                );
+            }
 
             NetworkMap::forgetGraphCacheForUser($this->userId);
             if ($trackedPerson) {
@@ -98,6 +136,7 @@ class ScanInstagramProfileJob implements ShouldQueue
                 'last_status_level' => 'error',
                 'last_status_message' => 'Profil-Vollanalyse fehlgeschlagen: '.$exception->getMessage(),
             ])->save();
+            $this->failAssistantScan('Profil-Vollanalyse fehlgeschlagen: '.$exception->getMessage());
             NetworkMap::forgetGraphCacheForUser($this->userId);
             if ($trackedPerson) {
                 NetworkMap::forgetGraphCacheForUser($this->userId, $trackedPerson->id);
@@ -105,5 +144,14 @@ class ScanInstagramProfileJob implements ShouldQueue
 
             throw $exception;
         }
+    }
+
+    private function failAssistantScan(string $message): void
+    {
+        if (! $this->assistantScanToken) {
+            return;
+        }
+
+        app(InvestigationAssistantScanStatusStore::class)->fail($this->assistantScanToken, $message);
     }
 }

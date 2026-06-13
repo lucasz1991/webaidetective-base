@@ -145,7 +145,7 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 10;
+        $data['graph_version'] = 11;
         $data['graph_node_limit'] = self::MAX_GRAPH_NODES;
         $data['contact_image_limit'] = self::MAX_CONTACT_IMAGES;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
