@@ -3,9 +3,9 @@
 namespace App\Livewire\Tools;
 
 use App\Models\Setting;
+use App\Services\Ai\AssistantApiKeyCipher;
 use App\Services\Ai\InvestigationAssistantToolService;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Session;
@@ -286,22 +286,42 @@ class Chatbot extends Component
     private function requestAssistant(array $messages, array $tools): array
     {
         $apiKey = $this->assistantApiKey();
+        $apiUrl = trim((string) $this->apiUrl);
 
-        $response = Http::withHeaders([
-            'Authorization' => 'Bearer '.$apiKey,
-            'HTTP-Referer' => $this->refererUrl,
-            'X-Title' => $this->modelTitle,
-            'Content-Type' => 'application/json',
-        ])
+        $response = Http::acceptJson()
+            ->asJson()
+            ->withToken($apiKey)
+            ->withHeaders(array_filter([
+                'HTTP-Referer' => trim((string) $this->refererUrl),
+                'X-Title' => trim((string) $this->modelTitle),
+            ]))
+            ->withoutRedirecting()
             ->timeout(90)
-            ->retry(2, 750)
-            ->post($this->apiUrl, [
+            ->retry(2, 750, throw: false)
+            ->post($apiUrl, [
                 'model' => $this->aiModel,
                 'messages' => $messages,
                 'tools' => $tools,
                 'tool_choice' => 'auto',
                 'temperature' => 0.2,
             ]);
+
+        if ($response->redirect()) {
+            $location = (string) $response->header('Location');
+
+            throw new \RuntimeException(
+                "Die AI-API-URL leitet weiter (HTTP {$response->status()})"
+                .($location !== '' ? " nach {$location}" : '')
+                .'. Bitte die finale Chat-Completions-URL direkt eintragen.',
+            );
+        }
+
+        if ($response->status() === 401) {
+            throw new \RuntimeException(
+                'AI-API antwortet mit HTTP 401. Der Authorization-Header wurde gesendet, '
+                .'aber vom konfigurierten Endpoint nicht akzeptiert. Bitte API-URL, Anbieter und API-Key im Adminbereich pruefen.',
+            );
+        }
 
         if (! $response->successful()) {
             throw new \RuntimeException('AI-API antwortet mit HTTP '.$response->status().': '.mb_substr($response->body(), 0, 500));
@@ -468,10 +488,6 @@ class Chatbot extends Component
             return '';
         }
 
-        try {
-            return Crypt::decryptString($value);
-        } catch (\Throwable) {
-            return trim($value);
-        }
+        return app(AssistantApiKeyCipher::class)->decrypt($value);
     }
 }

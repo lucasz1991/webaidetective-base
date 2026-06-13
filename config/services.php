@@ -39,4 +39,8 @@ return [
         'url' => env('SCRAPER_PROFILE_SYNC_URL'),
     ],
 
+    'ai_assistant' => [
+        'encryption_key' => env('AI_ASSISTANT_ENCRYPTION_KEY'),
+    ],
+
 ];
