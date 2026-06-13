@@ -104,7 +104,7 @@ class InvestigationAssistantToolService
                     'instagram_username' => ['type' => 'string'],
                     'scan_type' => [
                         'type' => 'string',
-                        'enum' => ['mini', 'full', 'followers', 'following', 'suggestions', 'posts', 'public_connections'],
+                        'enum' => ['mini', 'full', 'followers', 'following', 'suggestions', 'suggestion_deepsearch', 'posts', 'public_connections'],
                     ],
                     'reason' => ['type' => 'string'],
                 ],
@@ -535,7 +535,7 @@ class InvestigationAssistantToolService
 
         $scanType = strtolower(trim((string) ($arguments['scan_type'] ?? 'mini')));
 
-        if (! in_array($scanType, ['mini', 'full', 'followers', 'following', 'suggestions', 'posts', 'public_connections'], true)) {
+        if (! in_array($scanType, ['mini', 'full', 'followers', 'following', 'suggestions', 'suggestion_deepsearch', 'posts', 'public_connections'], true)) {
             return $this->error('INVALID_SCAN_TYPE', 'Unbekannter Scan-Typ: '.$scanType);
         }
 
@@ -1093,7 +1093,8 @@ class InvestigationAssistantToolService
             'full' => 'Instagram-Vollanalyse',
             'followers' => 'Followerlisten-Scan',
             'following' => 'Gefolgt-Listen-Scan',
-            'suggestions' => 'Vorschlags-Verbindungsscan',
+            'suggestions' => 'Vorschlaege-Scan',
+            'suggestion_deepsearch' => 'Vorschlaege DeepSearch',
             'posts' => 'Beitragsscan',
             'public_connections' => 'Public-Profile-Verbindungsscan',
             default => 'Instagram-Scan',

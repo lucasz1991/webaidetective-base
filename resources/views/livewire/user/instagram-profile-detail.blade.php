@@ -28,7 +28,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagramMini,analyzeInstagram,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestionConnections,scanInstagramPosts"
+        wire:target="analyzeInstagramMini,analyzeInstagram,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts"
         class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="w-full max-w-md rounded-lg bg-white p-6 text-center shadow-2xl">
@@ -128,12 +128,23 @@
                     <button
                         type="button"
                         @click="scansOpen = false"
-                        wire:click="scanInstagramSuggestionConnections"
+                        wire:click="scanInstagramSuggestions"
                         wire:loading.attr="disabled"
-                        wire:target="scanInstagramSuggestionConnections"
+                        wire:target="scanInstagramSuggestions"
                         class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:opacity-50"
                     >
-                        Vorschlags-Verbindungsscan
+                        Vorschlaege-Scan
+                        <span class="mt-0.5 block text-xs font-normal text-fuchsia-500">Direkte Profilvorschlaege erfassen</span>
+                    </button>
+                    <button
+                        type="button"
+                        @click="scansOpen = false"
+                        wire:click="scanInstagramSuggestionDeepSearch"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramSuggestionDeepSearch"
+                        class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:opacity-50"
+                    >
+                        Vorschlaege DeepSearch
                         <span class="mt-0.5 block text-xs font-normal text-fuchsia-500">Vorschlaege der Vorschlaege und oeffentliche Listen pruefen</span>
                     </button>
                 </div>

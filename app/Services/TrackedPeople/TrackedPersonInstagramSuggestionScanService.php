@@ -28,6 +28,23 @@ class TrackedPersonInstagramSuggestionScanService
         ?callable $progress = null,
         ?string $targetUsernameOverride = null,
     ): TrackedPersonInstagramSuggestionScan {
+        return $this->runScan($trackedPerson, $progress, $targetUsernameOverride, false);
+    }
+
+    public function scanDeepSearch(
+        TrackedPerson $trackedPerson,
+        ?callable $progress = null,
+        ?string $targetUsernameOverride = null,
+    ): TrackedPersonInstagramSuggestionScan {
+        return $this->runScan($trackedPerson, $progress, $targetUsernameOverride, true);
+    }
+
+    private function runScan(
+        TrackedPerson $trackedPerson,
+        ?callable $progress,
+        ?string $targetUsernameOverride,
+        bool $deepSearch,
+    ): TrackedPersonInstagramSuggestionScan {
         $targetUsername = $this->scraper->normalizeInstagramUsername(
             $targetUsernameOverride ?: $trackedPerson->instagram_username,
         );
@@ -38,7 +55,7 @@ class TrackedPersonInstagramSuggestionScanService
 
         $scanControl = $this->scanCoordinator->begin(
             $trackedPerson->id,
-            'Vorschlags-Verbindungsscan',
+            $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan',
         );
 
         Cache::lock('tracked-person-instagram-suggestion-scan:'.$trackedPerson->id, 3600)->forceRelease();
@@ -46,13 +63,13 @@ class TrackedPersonInstagramSuggestionScanService
 
         if (! $lock->get()) {
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
-            throw new \RuntimeException('Fuer diese Person laeuft bereits ein Vorschlags-Verbindungsscan.');
+            throw new \RuntimeException('Fuer diese Person laeuft bereits ein Vorschlaege-Scan.');
         }
 
         $this->activeScanControl = $scanControl;
 
         try {
-            return $this->scanWithLock($trackedPerson, $targetUsername, $progress);
+            return $this->scanWithLock($trackedPerson, $targetUsername, $progress, $deepSearch);
         } finally {
             $lock->release();
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
@@ -64,6 +81,7 @@ class TrackedPersonInstagramSuggestionScanService
         TrackedPerson $trackedPerson,
         string $targetUsername,
         ?callable $progress = null,
+        bool $deepSearch = false,
     ): TrackedPersonInstagramSuggestionScan {
         $this->profileRelationshipStore->syncTrackedPersonProfile($trackedPerson);
 
@@ -78,7 +96,7 @@ class TrackedPersonInstagramSuggestionScanService
         $this->reportProgress($progress, [
             'phase' => 'suggestions',
             'percent' => 1,
-            'message' => 'Vorschlags-Verbindungsscan wird vorbereitet.',
+            'message' => ($deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan').' wird vorbereitet.',
             'foundSuggestions' => 0,
             'suggestionConnections' => [],
             'observedSuggestionCount' => 0,
@@ -88,7 +106,7 @@ class TrackedPersonInstagramSuggestionScanService
         try {
             $payload = $this->scraper->scrape(
                 $targetUsername,
-                'suggestion-connections',
+                $deepSearch ? 'suggestion-connections' : 'suggestions',
                 function (array $state) use ($trackedPerson, $targetUsername, $progress, &$liveConnections, &$liveObservedSuggestions, &$liveSuggestionDebug): void {
                     if (array_key_exists('suggestionConnections', $state)) {
                         $liveConnections = $this->mergeSuggestionConnections(
@@ -157,14 +175,17 @@ class TrackedPersonInstagramSuggestionScanService
                     'suggestionCandidateInlineMaxRounds' => 40,
                     'suggestionCandidateDialogMaxRounds' => 70,
                     'suggestionDebug' => true,
-                    'suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson),
+                    'suggestionCandidateHistory' => $deepSearch
+                        ? $this->buildSuggestionCandidateHistory($trackedPerson)
+                        : [],
                 ]),
             );
         } catch (\Throwable $exception) {
-            $message = 'Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage();
+            $scanLabel = $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan';
+            $message = $scanLabel.' fehlgeschlagen: '.$exception->getMessage();
             $payload = [
                 'ok' => false,
-                'operationMode' => 'suggestion-connections',
+                'operationMode' => $deepSearch ? 'suggestion-connections' : 'suggestions',
                 'statusLevel' => 'error',
                 'statusMessage' => $message,
                 'error' => $exception->getMessage(),
@@ -201,7 +222,7 @@ class TrackedPersonInstagramSuggestionScanService
             ]);
         }
 
-        return $this->storeScan($trackedPerson, $targetUsername, $payload, $liveConnections);
+        return $this->storeScan($trackedPerson, $targetUsername, $payload, $liveConnections, $deepSearch);
     }
 
     private function storeScan(
@@ -209,6 +230,7 @@ class TrackedPersonInstagramSuggestionScanService
         string $targetUsername,
         array $payload,
         array $liveConnections,
+        bool $deepSearch,
     ): TrackedPersonInstagramSuggestionScan {
         $this->assertActiveScanCurrent();
 
@@ -228,13 +250,16 @@ class TrackedPersonInstagramSuggestionScanService
             $scanPayload,
             $connections,
             $analyzedAt,
+            $deepSearch,
         ): TrackedPersonInstagramSuggestionScan {
             $scan = TrackedPersonInstagramSuggestionScan::create([
                 'tracked_person_id' => $trackedPerson->id,
                 'user_id' => $trackedPerson->user_id,
                 'target_username' => $targetUsername,
                 'status_level' => (string) ($payload['statusLevel'] ?? $scanPayload['statusLevel'] ?? 'unknown'),
-                'status_message' => (string) ($payload['statusMessage'] ?? $scanPayload['statusMessage'] ?? 'Vorschlags-Verbindungsscan abgeschlossen.'),
+                'status_message' => (string) ($payload['statusMessage'] ?? $scanPayload['statusMessage'] ?? (
+                    $deepSearch ? 'Vorschlaege DeepSearch abgeschlossen.' : 'Vorschlaege-Scan abgeschlossen.'
+                )),
                 'suggestions_observed_count' => (int) ($scanPayload['observedCount'] ?? count($scanPayload['suggestions'] ?? [])),
                 'suggestions_checked_count' => (int) ($scanPayload['checkedCount'] ?? 0),
                 'suggestion_matches_count' => count($connections),
@@ -244,21 +269,23 @@ class TrackedPersonInstagramSuggestionScanService
             ]);
 
             $this->storeObservedSuggestionProfiles($trackedPerson, $payload, $analyzedAt);
-            $this->storeInferredSuggestionConnections(
-                $trackedPerson,
-                $scan,
-                $targetUsername,
-                $connections,
-                $payload,
-                $analyzedAt,
-            );
-            $this->storePublicListRelationships(
-                $trackedPerson,
-                $scan,
-                $targetUsername,
-                $connections,
-                $analyzedAt,
-            );
+            if ($deepSearch) {
+                $this->storeInferredSuggestionConnections(
+                    $trackedPerson,
+                    $scan,
+                    $targetUsername,
+                    $connections,
+                    $payload,
+                    $analyzedAt,
+                );
+                $this->storePublicListRelationships(
+                    $trackedPerson,
+                    $scan,
+                    $targetUsername,
+                    $connections,
+                    $analyzedAt,
+                );
+            }
 
             return $scan;
         });
@@ -267,7 +294,7 @@ class TrackedPersonInstagramSuggestionScanService
             (int) $trackedPerson->user_id,
             $scan,
             $payload,
-            'Instagram-Vorschlags-Verbindungsscan @'.$targetUsername,
+            'Instagram-'.($deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan').' @'.$targetUsername,
         );
 
         return $scan;
@@ -835,7 +862,7 @@ class TrackedPersonInstagramSuggestionScanService
 
         $payload['phase'] = $payload['phase'] ?? 'suggestions';
         $payload['percent'] = max(0, min(100, (int) ($payload['percent'] ?? 0)));
-        $payload['message'] = (string) ($payload['message'] ?? 'Vorschlags-Verbindungsscan laeuft.');
+        $payload['message'] = (string) ($payload['message'] ?? 'Vorschlaege-Scan laeuft.');
 
         $progress($payload);
     }

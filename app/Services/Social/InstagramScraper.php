@@ -963,7 +963,7 @@ class InstagramScraper
                 'suggestions-candidate-checked' => 'Vorschlags-Kandidaten geprueft: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
                 'suggestions-candidate-error' => 'Ein Vorschlags-Kandidat konnte nicht geprueft werden: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
                 'suggestions-rate-limited' => 'Instagram hat die Profilvorschlaege per Rate-Limit blockiert.',
-                'suggestions-complete' => 'Vorschlags-Verbindungsscan abgeschlossen.',
+                'suggestions-complete' => 'Vorschlaege-Scan abgeschlossen.',
                 default => $expected > 0
                     ? 'Profilvorschlaege werden geprueft: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.')
                     : 'Profilvorschlaege werden geprueft.',

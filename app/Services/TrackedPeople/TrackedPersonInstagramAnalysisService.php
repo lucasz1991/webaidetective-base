@@ -1080,7 +1080,7 @@ class TrackedPersonInstagramAnalysisService
                 'message' => 'Privates Profil erkannt; Follower- und Gefolgt-Listen werden uebersprungen.',
             ]);
 
-            $phaseWarnings[] = 'Privates Profil erkannt; Follower- und Gefolgt-Listen wurden uebersprungen. Fuer die Netzwerkerweiterung wird der Vorschlags-Verbindungsscan genutzt.';
+            $phaseWarnings[] = 'Privates Profil erkannt; Follower- und Gefolgt-Listen wurden uebersprungen. Die direkten Profilvorschlaege werden stattdessen mit dem Vorschlaege-Scan erfasst.';
             $payload['warnings'] = array_values(array_unique(array_filter(array_merge(
                 $payload['warnings'] ?? [],
                 $phaseWarnings,

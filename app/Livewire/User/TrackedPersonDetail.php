@@ -364,15 +364,26 @@ class TrackedPersonDetail extends Component
 
     public function scanInstagramSuggestions(): void
     {
-        $this->scanInstagramSuggestionConnections();
+        $this->runInstagramSuggestionScan(false);
     }
 
     public function scanInstagramSuggestionConnections(): void
+    {
+        $this->scanInstagramSuggestionDeepSearch();
+    }
+
+    public function scanInstagramSuggestionDeepSearch(): void
+    {
+        $this->runInstagramSuggestionScan(true);
+    }
+
+    private function runInstagramSuggestionScan(bool $deepSearch): void
     {
         @set_time_limit(0);
         @ignore_user_abort(false);
 
         $trackedPerson = $this->resolveTrackedPerson();
+        $scanLabel = $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan';
 
         if (! $trackedPerson->instagram_username) {
             $this->setDetailStatus('Fuer diese Person ist kein Instagram-Name hinterlegt.', 'error');
@@ -387,16 +398,19 @@ class TrackedPersonDetail extends Component
             $this->streamInstagramProgress([
                 'phase' => 'suggestions',
                 'percent' => 1,
-                'message' => 'Vorschlags-Verbindungsscan wird vorbereitet.',
+                'message' => $scanLabel.' wird vorbereitet.',
                 'foundSuggestions' => 0,
                 'suggestionConnections' => [],
                 'observedSuggestionCount' => 0,
                 'observedSuggestions' => [],
             ]);
 
-            $scan = app(TrackedPersonInstagramWorkflowService::class)->runSuggestionScan($trackedPerson, $progress);
+            $workflow = app(TrackedPersonInstagramWorkflowService::class);
+            $scan = $deepSearch
+                ? $workflow->runSuggestionDeepSearch($trackedPerson, $progress)
+                : $workflow->runSuggestionScan($trackedPerson, $progress);
         } catch (TrackedPersonInstagramScanCancelledException $exception) {
-            $this->markInstagramScanCancelled($trackedPerson, 'Vorschlags-Verbindungsscan wurde abgebrochen.');
+            $this->markInstagramScanCancelled($trackedPerson, $scanLabel.' wurde abgebrochen.');
             $this->streamInstagramProgress([
                 'phase' => 'done',
                 'percent' => 100,
@@ -408,34 +422,31 @@ class TrackedPersonDetail extends Component
         } catch (\Throwable $exception) {
             $trackedPerson->markInstagramScanTerminal(
                 'error',
-                'Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(),
+                $scanLabel.' fehlgeschlagen: '.$exception->getMessage(),
             );
             $this->streamInstagramProgress([
                 'phase' => 'error',
                 'percent' => 100,
-                'message' => 'Vorschlags-Verbindungsscan fehlgeschlagen.',
+                'message' => $scanLabel.' fehlgeschlagen.',
             ]);
-            $this->setDetailStatus('Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setDetailStatus($scanLabel.' fehlgeschlagen: '.$exception->getMessage(), 'error');
 
             return;
         }
 
         $suggestionStatusMessage = trim((string) $scan->status_message);
 
-        if (
-            $suggestionStatusMessage === ''
-            || in_array($suggestionStatusMessage, [
-                'Profilvorschlag-Verbindungsscan abgeschlossen.',
-                'Vorschlags-Verbindungsscan abgeschlossen.',
-            ], true)
-        ) {
+        if ($suggestionStatusMessage === '') {
             $suggestionStatusMessage = ($scan->gracefully_stopped
-                ? 'Vorschlags-Verbindungsscan wurde beendet und gespeichert: '
-                : 'Vorschlags-Verbindungsscan abgeschlossen: ')
-                .number_format((int) $scan->suggestions_checked_count, 0, ',', '.')
-                .' Kandidaten geprueft, '
-                .number_format((int) $scan->suggestion_matches_count, 0, ',', '.')
-                .' Vorschlag-Verbindungen gefunden.';
+                ? $scanLabel.' wurde beendet und gespeichert: '
+                : $scanLabel.' abgeschlossen: ')
+                .($deepSearch
+                    ? number_format((int) $scan->suggestions_checked_count, 0, ',', '.')
+                        .' Kandidaten geprueft, '
+                        .number_format((int) $scan->suggestion_matches_count, 0, ',', '.')
+                        .' Verbindungen gefunden.'
+                    : number_format((int) $scan->suggestions_observed_count, 0, ',', '.')
+                        .' Vorschlaege gefunden.');
         }
 
         $this->setDetailStatus(
@@ -1835,6 +1846,9 @@ class TrackedPersonDetail extends Component
 
                 return (object) [
                     'scan' => $suggestionScan,
+                    'scanTypeLabel' => data_get($rawPayload, 'operationMode') === 'suggestion-connections'
+                        ? 'Vorschlaege DeepSearch'
+                        : 'Vorschlaege-Scan',
                     'statusClass' => $this->connectionScanStatusClass($suggestionScan->status_level),
                     'payload' => $scanPayload,
                     'debug' => $debug,

@@ -22,7 +22,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestionConnections,scanInstagramPosts"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts"
         class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-white/20 bg-white p-5 text-center shadow-2xl">
@@ -153,15 +153,27 @@
             @endif
             <button
                 type="button"
-                wire:click="scanInstagramSuggestionConnections"
+                wire:click="scanInstagramSuggestions"
                 wire:loading.attr="disabled"
-                wire:target="scanInstagramSuggestionConnections"
+                wire:target="scanInstagramSuggestions"
+                @disabled(! $trackedPerson->instagram_username)
+                title="Erfasst nur die direkten Vorschlaege des gesuchten Profils."
+                class="inline-flex justify-center rounded-lg border border-fuchsia-200 bg-white px-3 py-2 text-sm font-semibold text-fuchsia-700 shadow-sm hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+                <span wire:loading.remove wire:target="scanInstagramSuggestions">Vorschlaege-Scan</span>
+                <span wire:loading wire:target="scanInstagramSuggestions">Vorschlaege werden erfasst...</span>
+            </button>
+            <button
+                type="button"
+                wire:click="scanInstagramSuggestionDeepSearch"
+                wire:loading.attr="disabled"
+                wire:target="scanInstagramSuggestionDeepSearch"
                 @disabled(! $trackedPerson->instagram_username)
                 title="Prueft Vorschlaege der Vorschlaege und bei oeffentlichen Kandidaten deren Follower- und Gefolgt-Listen."
                 class="inline-flex justify-center rounded-lg border border-fuchsia-200 bg-fuchsia-50 px-3 py-2 text-sm font-semibold text-fuchsia-700 shadow-sm hover:bg-fuchsia-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
-                <span wire:loading.remove wire:target="scanInstagramSuggestionConnections">Vorschlags-Verbindungen</span>
-                <span wire:loading wire:target="scanInstagramSuggestionConnections">Verbindungsscan laeuft...</span>
+                <span wire:loading.remove wire:target="scanInstagramSuggestionDeepSearch">Vorschlaege DeepSearch</span>
+                <span wire:loading wire:target="scanInstagramSuggestionDeepSearch">DeepSearch laeuft...</span>
             </button>
         </div>
     </div>

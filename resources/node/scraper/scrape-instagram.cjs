@@ -4068,7 +4068,9 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
     scrollToProfileSuggestions,
     switchScraperAccountAfterRateLimit,
     sleep,
-  }, page, runtimeState, notes, targetUsername, profileUrl);
+  }, page, runtimeState, notes, targetUsername, profileUrl, {
+    deepSearch: operationMode === 'suggestion-connections',
+  });
 }
 
 function summarizeSuggestionPublicListResult(result = {}) {
@@ -8694,7 +8696,11 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       ? {
         ok: suggestionScanResult.statusLevel !== 'error',
         statusLevel: suggestionScanResult.statusLevel || 'unknown',
-        statusMessage: suggestionScanResult.statusMessage || 'Profilvorschlag-Verbindungsscan abgeschlossen.',
+        statusMessage: suggestionScanResult.statusMessage || (
+          operationMode === 'suggestion-connections'
+            ? 'Vorschlaege DeepSearch abgeschlossen.'
+            : 'Vorschlaege-Scan abgeschlossen.'
+        ),
       }
       : gracefullyStopped
       ? {

@@ -49,6 +49,7 @@ class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
                 'followers' => app(TrackedPersonInstagramAnalysisService::class)->scanRelationshipList($trackedPerson, 'followers'),
                 'following' => app(TrackedPersonInstagramAnalysisService::class)->scanRelationshipList($trackedPerson, 'following'),
                 'suggestions' => app(TrackedPersonInstagramWorkflowService::class)->runSuggestionScan($trackedPerson),
+                'suggestion_deepsearch' => app(TrackedPersonInstagramWorkflowService::class)->runSuggestionDeepSearch($trackedPerson),
                 'posts' => app(TrackedPersonInstagramWorkflowService::class)->runPostScan(
                     $trackedPerson,
                     $trackedPerson->latestInstagramSnapshot()->first(),
@@ -92,7 +93,8 @@ class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
             'full' => 'Instagram-Vollanalyse',
             'followers' => 'Instagram-Followerlisten-Scan',
             'following' => 'Instagram-Gefolgt-Listen-Scan',
-            'suggestions' => 'Instagram-Vorschlags-Verbindungsscan',
+            'suggestions' => 'Instagram-Vorschlaege-Scan',
+            'suggestion_deepsearch' => 'Instagram-Vorschlaege DeepSearch',
             'posts' => 'Instagram-Beitragsscan',
             'public_connections' => 'Public-Profile-Verbindungsscan',
             default => 'Instagram-Scan',

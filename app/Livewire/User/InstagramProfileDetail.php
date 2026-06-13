@@ -159,19 +159,30 @@ class InstagramProfileDetail extends Component
 
     public function scanInstagramSuggestions(): void
     {
-        $this->scanInstagramSuggestionConnections();
+        $this->runSuggestionScan(false);
     }
 
     public function scanInstagramSuggestionConnections(): void
+    {
+        $this->scanInstagramSuggestionDeepSearch();
+    }
+
+    public function scanInstagramSuggestionDeepSearch(): void
+    {
+        $this->runSuggestionScan(true);
+    }
+
+    private function runSuggestionScan(bool $deepSearch): void
     {
         @set_time_limit(0);
 
         $profile = $this->resolveProfile();
         $trackedPerson = $this->findTrackedPerson($profile);
+        $scanLabel = $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan';
 
         if (! $trackedPerson) {
             $this->setStatus(
-                'Vorschlags-Verbindungsscans sind zielpersonenbezogen. Lege das Profil zuerst ausdruecklich als beobachtetes Profil an.',
+                $scanLabel.' ist zielpersonenbezogen. Lege das Profil zuerst ausdruecklich als beobachtetes Profil an.',
                 'partial',
             );
 
@@ -179,17 +190,22 @@ class InstagramProfileDetail extends Component
         }
 
         try {
-            $scan = app(TrackedPersonInstagramWorkflowService::class)
-                ->runSuggestionScan($trackedPerson);
+            $workflow = app(TrackedPersonInstagramWorkflowService::class);
+            $scan = $deepSearch
+                ? $workflow->runSuggestionDeepSearch($trackedPerson)
+                : $workflow->runSuggestionScan($trackedPerson);
             $this->setStatus(
-                'Vorschlags-Verbindungsscan abgeschlossen: '
-                    .number_format($scan->suggestions_checked_count).' von '
-                    .number_format($scan->suggestions_observed_count).' Vorschlaegen geprueft, '
-                    .number_format($scan->suggestion_matches_count).' Verbindungen gefunden.',
+                $deepSearch
+                    ? 'Vorschlaege DeepSearch abgeschlossen: '
+                        .number_format($scan->suggestions_checked_count).' von '
+                        .number_format($scan->suggestions_observed_count).' Vorschlaegen geprueft, '
+                        .number_format($scan->suggestion_matches_count).' Verbindungen gefunden.'
+                    : 'Vorschlaege-Scan abgeschlossen: '
+                        .number_format($scan->suggestions_observed_count).' Vorschlaege gefunden.',
                 $scan->status_level === 'success' ? 'success' : 'partial',
             );
         } catch (\Throwable $exception) {
-            $this->setStatus('Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setStatus($scanLabel.' fehlgeschlagen: '.$exception->getMessage(), 'error');
         }
     }
 

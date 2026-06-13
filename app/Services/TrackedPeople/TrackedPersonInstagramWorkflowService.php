@@ -63,14 +63,14 @@ class TrackedPersonInstagramWorkflowService
                 : null;
 
             if ($recentSuggestionScan) {
-                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlags-Verbindungsscan uebersprungen, weil der letzte Lauf erst vor weniger als 60 Minuten stattfand.';
+                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlaege-Scan uebersprungen, weil der letzte Lauf erst vor weniger als 60 Minuten stattfand.';
                 $followUpMessages[] = trim($privateSuggestionScanMessage);
             } else {
                 if ($progress) {
                     $progress([
                         'phase' => 'suggestions',
                         'percent' => 1,
-                        'message' => 'Privates Profil erkannt; Vorschlags-Verbindungsscan wird gestartet.',
+                        'message' => 'Privates Profil erkannt; Vorschlaege-Scan wird gestartet.',
                         'foundSuggestions' => 0,
                         'suggestionConnections' => [],
                     ]);
@@ -81,20 +81,20 @@ class TrackedPersonInstagramWorkflowService
                         $trackedPerson->fresh() ?: $trackedPerson,
                         $progress,
                     );
-                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlags-Verbindungsscan abgeschlossen mit '
-                        .number_format((int) $privateSuggestionScan->suggestion_matches_count, 0, ',', '.')
-                        .' gefundenen Vorschlag-Verbindungen.';
+                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlaege-Scan abgeschlossen mit '
+                        .number_format((int) $privateSuggestionScan->suggestions_observed_count, 0, ',', '.')
+                        .' gefundenen Vorschlaegen.';
                     $followUpMessages[] = trim($privateSuggestionScanMessage);
                 } catch (TrackedPersonInstagramScanCancelledException $exception) {
                     throw $exception;
                 } catch (\Throwable $exception) {
                     $privateSuggestionScanFailed = true;
-                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage();
+                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlaege-Scan fehlgeschlagen: '.$exception->getMessage();
                     $followUpFailures[] = trim($privateSuggestionScanMessage);
 
                     ($trackedPerson->fresh() ?: $trackedPerson)->forceFill([
                         'last_instagram_status_level' => 'partial',
-                        'last_instagram_status_message' => 'Instagram-Analyse abgeschlossen; Vorschlags-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(),
+                        'last_instagram_status_message' => 'Instagram-Analyse abgeschlossen; Vorschlaege-Scan fehlgeschlagen: '.$exception->getMessage(),
                     ])->save();
                 }
             }
@@ -199,6 +199,13 @@ class TrackedPersonInstagramWorkflowService
         return $this->suggestionScanService->scan($trackedPerson, $progress);
     }
 
+    public function runSuggestionDeepSearch(
+        TrackedPerson $trackedPerson,
+        ?callable $progress = null,
+    ): TrackedPersonInstagramSuggestionScan {
+        return $this->suggestionScanService->scanDeepSearch($trackedPerson, $progress);
+    }
+
     public function runPostScan(
         TrackedPerson $trackedPerson,
         ?TrackedPersonInstagramSnapshot $snapshot = null,
@@ -222,7 +229,10 @@ class TrackedPersonInstagramWorkflowService
         return $trackedPerson->instagramSuggestionScans()
             ->where('analyzed_at', '>=', Carbon::now('UTC')->subHour())
             ->latest('analyzed_at')
-            ->first();
+            ->get()
+            ->first(fn (TrackedPersonInstagramSuggestionScan $scan): bool => (
+                data_get($scan->raw_payload, 'operationMode') !== 'suggestion-connections'
+            ));
     }
 
     private function snapshotProfileVisibility(?TrackedPersonInstagramSnapshot $snapshot): string

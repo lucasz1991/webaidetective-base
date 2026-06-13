@@ -6,7 +6,7 @@
     </div>
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanPublicProfileConnections,scanInstagramSuggestionConnections,scanInstagramPosts"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanPublicProfileConnections,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts"
         class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
@@ -128,13 +128,24 @@
                         <button
                             type="button"
                             @click="menuOpen = false"
-                            wire:click="scanInstagramSuggestionConnections"
+                            wire:click="scanInstagramSuggestions"
                             wire:loading.attr="disabled"
-                            wire:target="scanInstagramSuggestionConnections"
+                            wire:target="scanInstagramSuggestions"
                             @disabled(! $trackedPerson->instagram_username)
                             class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            Vorschlags-Verbindungen prüfen
+                            Vorschlaege scannen
+                        </button>
+                        <button
+                            type="button"
+                            @click="menuOpen = false"
+                            wire:click="scanInstagramSuggestionDeepSearch"
+                            wire:loading.attr="disabled"
+                            wire:target="scanInstagramSuggestionDeepSearch"
+                            @disabled(! $trackedPerson->instagram_username)
+                            class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Vorschlaege DeepSearch
                         </button>
                     </div>
                 </div>
@@ -1026,14 +1037,25 @@
                     <div class="flex flex-wrap gap-2">
                         <button
                             type="button"
-                            wire:click="scanInstagramSuggestionConnections"
+                            wire:click="scanInstagramSuggestions"
                             wire:loading.attr="disabled"
-                            wire:target="scanInstagramSuggestionConnections"
+                            wire:target="scanInstagramSuggestions"
+                            @disabled(! $trackedPerson->instagram_username)
+                            title="Erfasst nur die direkten Vorschlaege des gesuchten Profils."
+                            class="rounded-xl border border-pink-200 bg-white px-4 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            Vorschlaege-Scan
+                        </button>
+                        <button
+                            type="button"
+                            wire:click="scanInstagramSuggestionDeepSearch"
+                            wire:loading.attr="disabled"
+                            wire:target="scanInstagramSuggestionDeepSearch"
                             @disabled(! $trackedPerson->instagram_username)
                             title="Prueft Vorschlaege der Vorschlaege und bei oeffentlichen Kandidaten deren Follower- und Gefolgt-Listen."
                             class="rounded-xl border border-pink-200 bg-pink-50 px-4 py-2 text-sm font-semibold text-pink-700 shadow-sm hover:bg-pink-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                            Vorschlags-Verbindungsscan
+                            Vorschlaege DeepSearch
                         </button>
                         <button
                             type="button"
@@ -1376,7 +1398,7 @@
                                 <div class="flex flex-wrap items-start justify-between gap-3">
                                     <div>
                                         <div class="font-semibold text-slate-950">
-                                            {{ '@'.$suggestionScanRow->scan->target_username }}
+                                            {{ $suggestionScanRow->scanTypeLabel }} · {{ '@'.$suggestionScanRow->scan->target_username }}
                                         </div>
                                         @if($suggestionScanRow->scan->status_message)
                                             <div class="mt-1 text-slate-500">{{ $suggestionScanRow->scan->status_message }}</div>
