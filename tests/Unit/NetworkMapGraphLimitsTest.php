@@ -56,6 +56,48 @@ class NetworkMapGraphLimitsTest extends TestCase
         $this->assertNull($limitedNodes['profile-080']['imageUrl']);
     }
 
+    public function test_it_prioritizes_direct_focus_connections_when_the_graph_is_limited(): void
+    {
+        [$nodes, $edges] = $this->graphWithProfiles(300);
+
+        foreach (range(101, 300) as $index) {
+            $id = sprintf('profile-%03d', $index);
+            $edges['edge-'.$id] = [
+                'id' => 'edge-'.$id,
+                'from' => 'person-1',
+                'to' => $id,
+            ];
+        }
+
+        $nodes['incoming-profile'] = [
+            'id' => 'incoming-profile',
+            'type' => 'profile',
+            'label' => 'ZZZ incoming profile',
+            'isKnownProfile' => false,
+            'isDirectFocusConnection' => true,
+            'imageUrl' => null,
+            'hasImage' => false,
+        ];
+        $edges['edge-incoming-profile'] = [
+            'id' => 'edge-incoming-profile',
+            'from' => 'incoming-profile',
+            'to' => 'person-1',
+        ];
+
+        [$limitedNodes, $limitedEdges] = $this->invokePrivate(
+            new NetworkMap,
+            'limitGraphProfiles',
+            [$nodes, $edges],
+        );
+
+        $nodeIds = array_column($limitedNodes, 'id');
+
+        $this->assertContains('incoming-profile', $nodeIds);
+        $this->assertTrue(collect($limitedEdges)->contains(
+            fn (array $edge): bool => $edge['id'] === 'edge-incoming-profile',
+        ));
+    }
+
     private function graphWithProfiles(int $profileCount): array
     {
         $nodes = [

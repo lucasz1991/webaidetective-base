@@ -6,6 +6,7 @@ use App\Jobs\ScanInstagramProfileJob;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileRelationship;
 use App\Models\TrackedPerson;
+use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\User;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
@@ -114,6 +115,11 @@ class NetworkMap extends Component
             ->whereNull('removed_at')
             ->selectRaw('COUNT(*) as relationship_count, MAX(updated_at) as latest_updated_at')
             ->first();
+        $systemSuggestionState = TrackedPersonInstagramInferredConnection::query()
+            ->where('status', 'active')
+            ->where('relationship_type', 'suggestion_connection')
+            ->selectRaw('COUNT(*) as relationship_count, MAX(updated_at) as latest_updated_at')
+            ->first();
         $data = $trackedPeople->map(function (TrackedPerson $person) {
             $currentRelationships = $person->currentInstagramProfile?->sourceRelationships ?? collect();
             $publicProfiles = $person->publicProfiles ?? collect();
@@ -139,13 +145,15 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 8;
+        $data['graph_version'] = 9;
         $data['graph_node_limit'] = self::MAX_GRAPH_NODES;
         $data['contact_image_limit'] = self::MAX_CONTACT_IMAGES;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
         $data['system_relationships'] = [
             'count' => (int) ($systemRelationshipState?->relationship_count ?? 0),
             'updated_at' => $systemRelationshipState?->latest_updated_at,
+            'suggestion_count' => (int) ($systemSuggestionState?->relationship_count ?? 0),
+            'suggestion_updated_at' => $systemSuggestionState?->latest_updated_at,
             'profiles_updated_at' => InstagramProfile::query()->max('updated_at'),
         ];
 
@@ -557,6 +565,7 @@ class NetworkMap extends Component
         $this->addStoredInstagramProfileListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addTrackedRelationshipListEdges($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addObservedTrackedPersonConnectionsToPrimary($trackedPeople, $primaryPerson, $nodesByInstagram, $nodes, $edges);
+        $this->addDatabaseConnectionsToPrimary($primaryPerson, $peopleByInstagram, $nodesByInstagram, $nodes, $edges);
         $this->addTrackedPersonProfileRelationships($trackedPeople, $nodesByInstagram, $nodes, $edges);
         [$nodes, $edges] = $this->limitGraphProfiles($nodes, $edges);
         $nodesByInstagram = $this->indexGraphNodesByInstagramUsername($nodes);
@@ -689,12 +698,14 @@ class NetworkMap extends Component
         $degrees = $ranking['degrees'];
         $leftRank = [
             $distances[$leftId] ?? PHP_INT_MAX,
+            ($left['isDirectFocusConnection'] ?? false) ? 0 : 1,
             ($left['isKnownProfile'] ?? false) ? 0 : 1,
             -($degrees[$leftId] ?? 0),
             Str::lower((string) ($left['label'] ?? $leftId)),
         ];
         $rightRank = [
             $distances[$rightId] ?? PHP_INT_MAX,
+            ($right['isDirectFocusConnection'] ?? false) ? 0 : 1,
             ($right['isKnownProfile'] ?? false) ? 0 : 1,
             -($degrees[$rightId] ?? 0),
             Str::lower((string) ($right['label'] ?? $rightId)),
@@ -914,6 +925,17 @@ class NetworkMap extends Component
             ->whereIn('username', $usernames->all())
             ->get();
         $seedProfileIds = $seedProfiles->pluck('id')->filter()->values();
+        $focusUsernames = collect($nodes)
+            ->filter(fn (array $node): bool => (bool) ($node['isFocus'] ?? false) || (bool) ($node['isPrimary'] ?? false))
+            ->map(fn (array $node): string => $this->normalizeUsername($node['username'] ?? $node['handle'] ?? ''))
+            ->filter()
+            ->unique()
+            ->values();
+        $focusProfileIds = $seedProfiles
+            ->whereIn('username', $focusUsernames->all())
+            ->pluck('id')
+            ->filter()
+            ->values();
 
         if ($seedProfileIds->isEmpty()) {
             return;
@@ -927,6 +949,11 @@ class NetworkMap extends Component
                 $query
                     ->whereIn('source_instagram_profile_id', $seedProfileIds->all())
                     ->orWhereIn('related_instagram_profile_id', $seedProfileIds->all());
+            })
+            ->when($focusProfileIds->isNotEmpty(), function ($query) use ($focusProfileIds): void {
+                $query
+                    ->whereNotIn('source_instagram_profile_id', $focusProfileIds->all())
+                    ->whereNotIn('related_instagram_profile_id', $focusProfileIds->all());
             })
             ->with([
                 'sourceInstagramProfile',
@@ -1270,6 +1297,218 @@ class NetworkMap extends Component
                     ),
                 );
             }
+        }
+    }
+
+    private function addDatabaseConnectionsToPrimary(
+        ?TrackedPerson $primaryPerson,
+        Collection $peopleByInstagram,
+        Collection $nodesByInstagram,
+        array &$nodes,
+        array &$edges,
+    ): void {
+        if (! $primaryPerson) {
+            return;
+        }
+
+        $targetUsernames = $this->focusedObservedTargetUsernames($primaryPerson);
+
+        if ($targetUsernames->isEmpty()) {
+            return;
+        }
+
+        $targetProfiles = InstagramProfile::query()
+            ->whereIn('username', $targetUsernames->all())
+            ->get()
+            ->when(
+                $primaryPerson->currentInstagramProfile,
+                fn (Collection $profiles): Collection => $profiles
+                    ->push($primaryPerson->currentInstagramProfile)
+                    ->unique('id')
+                    ->values(),
+            );
+        $targetProfileIds = $targetProfiles->pluck('id')->filter()->values();
+
+        if ($targetProfileIds->isEmpty()) {
+            return;
+        }
+
+        $primaryId = 'person-'.$primaryPerson->id;
+        $relationships = InstagramProfileRelationship::query()
+            ->where('status', 'active')
+            ->whereIn('list_type', ['followers', 'following'])
+            ->whereNull('removed_at')
+            ->where(function ($query) use ($targetProfileIds): void {
+                $query
+                    ->whereIn('source_instagram_profile_id', $targetProfileIds->all())
+                    ->orWhereIn('related_instagram_profile_id', $targetProfileIds->all());
+            })
+            ->with([
+                'sourceInstagramProfile',
+                'relatedInstagramProfile',
+                'firstSeenScan:id,user_id',
+                'lastSeenScan:id,user_id',
+            ])
+            ->latest('last_seen_at')
+            ->limit(self::MAX_SYSTEM_RELATIONSHIPS)
+            ->get();
+        $evidenceByRelationship = $this->systemRelationshipEvidence($relationships);
+
+        foreach ($relationships as $relationship) {
+            $sourceProfile = $relationship->sourceInstagramProfile;
+            $relatedProfile = $relationship->relatedInstagramProfile;
+
+            if (! $sourceProfile || ! $relatedProfile) {
+                continue;
+            }
+
+            $sourceId = $targetProfileIds->contains((int) $sourceProfile->id)
+                ? $primaryId
+                : $this->ensureInstagramProfileNode(
+                    $nodes,
+                    $nodesByInstagram,
+                    $peopleByInstagram,
+                    $sourceProfile,
+                    'Direkte Netzwerkverbindung',
+                );
+            $relatedId = $targetProfileIds->contains((int) $relatedProfile->id)
+                ? $primaryId
+                : $this->ensureInstagramProfileNode(
+                    $nodes,
+                    $nodesByInstagram,
+                    $peopleByInstagram,
+                    $relatedProfile,
+                    'Direkte Netzwerkverbindung',
+                );
+
+            if (! $sourceId || ! $relatedId || $sourceId === $relatedId) {
+                continue;
+            }
+
+            foreach ([$sourceId, $relatedId] as $connectedNodeId) {
+                if ($connectedNodeId !== $primaryId && isset($nodes[$connectedNodeId])) {
+                    $nodes[$connectedNodeId]['isDirectFocusConnection'] = true;
+                }
+            }
+
+            $evidence = $evidenceByRelationship->get($relationship->id, []);
+            $metadata = [
+                'systemWideEvidence' => true,
+                'ownUserEvidence' => (bool) ($evidence['own'] ?? false),
+                'otherUserEvidence' => (bool) ($evidence['other'] ?? false),
+                'systemEvidenceScanCount' => (int) ($evidence['scan_count'] ?? 0),
+                'systemEvidenceUserCount' => (int) ($evidence['user_count'] ?? 0),
+            ];
+            $evidenceSuffix = $this->systemRelationshipEvidenceDescription($evidence);
+
+            if ($relationship->list_type === 'followers') {
+                $this->mergeTrackedRelationshipEdge(
+                    $edges,
+                    $relatedId,
+                    $sourceId,
+                    'Followerliste',
+                    sprintf(
+                        '%s folgt %s laut gespeicherter Followerliste. %s',
+                        $this->displayUsernameForInstagramProfile($relatedProfile),
+                        $this->displayUsernameForInstagramProfile($sourceProfile),
+                        $evidenceSuffix,
+                    ),
+                    $metadata,
+                );
+
+                continue;
+            }
+
+            $this->mergeTrackedRelationshipEdge(
+                $edges,
+                $sourceId,
+                $relatedId,
+                'Gefolgt-Liste',
+                sprintf(
+                    '%s folgt %s laut gespeicherter Gefolgt-Liste. %s',
+                    $this->displayUsernameForInstagramProfile($sourceProfile),
+                    $this->displayUsernameForInstagramProfile($relatedProfile),
+                    $evidenceSuffix,
+                ),
+                $metadata,
+            );
+        }
+
+        $suggestionConnections = TrackedPersonInstagramInferredConnection::query()
+            ->where('status', 'active')
+            ->where('relationship_type', 'suggestion_connection')
+            ->where(function ($query) use ($targetProfileIds, $targetUsernames): void {
+                $query
+                    ->whereIn('candidate_instagram_profile_id', $targetProfileIds->all())
+                    ->orWhereIn('candidate_username', $targetUsernames->all());
+            })
+            ->with(['trackedPerson.currentInstagramProfile'])
+            ->latest('last_seen_at')
+            ->limit(self::MAX_SYSTEM_RELATIONSHIPS)
+            ->get();
+        $fallbackSourceProfiles = InstagramProfile::query()
+            ->whereIn(
+                'username',
+                $suggestionConnections
+                    ->flatMap(fn (TrackedPersonInstagramInferredConnection $connection): array => [
+                        $this->normalizeUsername($connection->source_public_username),
+                        $this->normalizeUsername($connection->trackedPerson?->instagram_username),
+                    ])
+                    ->filter()
+                    ->unique()
+                    ->values()
+                    ->all(),
+            )
+            ->get()
+            ->keyBy('username');
+
+        foreach ($suggestionConnections as $connection) {
+            $sourceUsername = $this->normalizeUsername($connection->source_public_username);
+            $sourceProfile = $targetUsernames->contains($sourceUsername)
+                ? null
+                : $fallbackSourceProfiles->get($sourceUsername);
+            $sourceProfile ??= $connection->trackedPerson?->currentInstagramProfile
+                ?: $fallbackSourceProfiles->get($this->normalizeUsername($connection->trackedPerson?->instagram_username));
+
+            if (! $sourceProfile || $targetProfileIds->contains((int) $sourceProfile->id)) {
+                continue;
+            }
+
+            $sourceId = $this->ensureInstagramProfileNode(
+                $nodes,
+                $nodesByInstagram,
+                $peopleByInstagram,
+                $sourceProfile,
+                'Vorschlagsquelle',
+            );
+
+            if (! $sourceId || $sourceId === $primaryId) {
+                continue;
+            }
+
+            if (isset($nodes[$sourceId])) {
+                $nodes[$sourceId]['isDirectFocusConnection'] = true;
+            }
+
+            $ownEvidence = (int) $connection->user_id === (int) Auth::id();
+            $this->mergeTrackedRelationshipEdge(
+                $edges,
+                $sourceId,
+                $primaryId,
+                'Vorschlag-Verbindung',
+                sprintf(
+                    '%s hat %s in gespeicherten Instagram-Vorschlaegen enthalten.',
+                    $this->displayUsernameForInstagramProfile($sourceProfile),
+                    $this->displayUsernameForPerson($primaryPerson),
+                ),
+                [
+                    'systemWideEvidence' => true,
+                    'ownUserEvidence' => $ownEvidence,
+                    'otherUserEvidence' => ! $ownEvidence,
+                    'systemEvidenceScanCount' => 1,
+                    'systemEvidenceUserCount' => 1,
+                ],
+            );
         }
     }
 
