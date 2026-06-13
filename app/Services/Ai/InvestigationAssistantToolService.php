@@ -31,6 +31,8 @@ class InvestigationAssistantToolService
             'Nutze Netzwerkdaten, Knotenanzahl, oeffentliche Kennzahlen und Scan-Alter, bevor du naechste Profile priorisierst.',
             'Speichere neue Kontaktkandidaten nur, wenn der Nutzer das beauftragt oder eine Datei/Nachricht eindeutig Kontakte zur Speicherung enthaelt.',
             'Wenn ein Tool ausgefuehrt wurde, fasse das Ergebnis und den naechsten sinnvollen Schritt zusammen.',
+            'Nutze fuer Profilreferenzen immer den Instagram-Handle im Format @username, damit die Oberflaeche ein Profil-Badge anzeigen kann.',
+            'Navigiere nur, wenn der Nutzer dich ausdruecklich darum bittet. Nutze dafuer navigate_app_page oder open_profile.',
         ]));
     }
 
@@ -126,6 +128,24 @@ class InvestigationAssistantToolService
                     'reason' => ['type' => 'string'],
                 ],
             ]),
+            $this->tool('navigate_app_page', 'Navigiere auf ausdruecklichen Wunsch des Nutzers zu einer bekannten Seite der Anwendung.', [
+                'type' => 'object',
+                'properties' => [
+                    'page' => [
+                        'type' => 'string',
+                        'enum' => ['dashboard', 'network', 'messages', 'howto', 'faqs', 'packages'],
+                    ],
+                ],
+                'required' => ['page'],
+            ]),
+            $this->tool('open_profile', 'Oeffne auf ausdruecklichen Wunsch ein fuer den Nutzer zugaengliches Profil in der Anwendung.', [
+                'type' => 'object',
+                'properties' => [
+                    'tracked_person_id' => ['type' => 'integer'],
+                    'instagram_profile_id' => ['type' => 'integer'],
+                    'instagram_username' => ['type' => 'string'],
+                ],
+            ]),
         ];
     }
 
@@ -145,8 +165,60 @@ class InvestigationAssistantToolService
             'dispatch_instagram_scan' => $this->dispatchInstagramScan($user, $arguments),
             'dispatch_network_profile_scan' => $this->dispatchNetworkProfileScan($user, $arguments),
             'stop_active_scan' => $this->stopActiveScan($user, $arguments),
+            'navigate_app_page' => $this->navigateAppPage($arguments),
+            'open_profile' => $this->openProfile($user, $arguments),
             default => $this->error('UNKNOWN_TOOL', 'Unbekanntes Tool: '.$name),
         };
+    }
+
+    public function profileReferences($user, string $text): array
+    {
+        if (! $user || ! preg_match_all('/(?<![\w.])@([a-zA-Z0-9._]{1,30})/', $text, $matches)) {
+            return [];
+        }
+
+        return collect($matches[1] ?? [])
+            ->map(fn (string $username): ?string => $this->normalizeUsername($username))
+            ->filter()
+            ->unique()
+            ->take(8)
+            ->map(function (string $username) use ($user): ?array {
+                $trackedPerson = $this->resolveTrackedPerson($user, ['instagram_username' => $username]);
+
+                if ($trackedPerson) {
+                    $trackedPerson->loadMissing(['currentInstagramProfile', 'latestInstagramSnapshot']);
+                    $instagramProfile = $trackedPerson->currentInstagramProfile;
+
+                    return [
+                        'type' => 'tracked_person',
+                        'id' => (int) $trackedPerson->id,
+                        'username' => $username,
+                        'display_name' => $trackedPerson->display_name,
+                        'image_url' => $trackedPerson->profile_image_url
+                            ?: $instagramProfile?->profile_image_storage_url
+                            ?: $trackedPerson->latestInstagramSnapshot?->profile_image_storage_url,
+                        'url' => route('tracked-people.show', $trackedPerson->id),
+                    ];
+                }
+
+                $instagramProfile = $this->accessibleInstagramProfile($user, username: $username);
+
+                if (! $instagramProfile) {
+                    return null;
+                }
+
+                return [
+                    'type' => 'instagram_profile',
+                    'id' => (int) $instagramProfile->id,
+                    'username' => $username,
+                    'display_name' => $instagramProfile->display_name ?: $instagramProfile->full_name ?: '@'.$username,
+                    'image_url' => $instagramProfile->profile_image_storage_url,
+                    'url' => route('instagram-profiles.show', $instagramProfile->id),
+                ];
+            })
+            ->filter()
+            ->values()
+            ->all();
     }
 
     public function conversationContext($user): array
@@ -605,6 +677,67 @@ class InvestigationAssistantToolService
                 ? 'Stop wurde angefordert. Der aktuelle Zwischestand wird gespeichert.'
                 : 'Fuer diese Person laeuft aktuell kein registrierter Instagram-Scan.',
             'profile' => $this->trackedPersonSummary($person->fresh('latestInstagramSnapshot')),
+        ];
+    }
+
+    private function navigateAppPage(array $arguments): array
+    {
+        $page = (string) ($arguments['page'] ?? '');
+        $routes = [
+            'dashboard' => 'dashboard',
+            'network' => 'network',
+            'messages' => 'messages',
+            'howto' => 'howto',
+            'faqs' => 'faqs',
+            'packages' => 'packages',
+        ];
+
+        if (! isset($routes[$page])) {
+            return $this->error('INVALID_PAGE', 'Diese Seite kann ich nicht oeffnen.');
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'Navigation wird ausgefuehrt.',
+            'ui_action' => [
+                'type' => 'navigate',
+                'url' => route($routes[$page]),
+            ],
+        ];
+    }
+
+    private function openProfile($user, array $arguments): array
+    {
+        $trackedPerson = $this->resolveTrackedPerson($user, $arguments);
+
+        if ($trackedPerson) {
+            return [
+                'ok' => true,
+                'message' => 'Profil @'.($trackedPerson->instagram_username ?: $trackedPerson->display_name).' wird geoeffnet.',
+                'ui_action' => [
+                    'type' => 'navigate',
+                    'url' => route('tracked-people.show', $trackedPerson->id),
+                ],
+            ];
+        }
+
+        $instagramProfile = $this->accessibleInstagramProfile(
+            $user,
+            (int) ($arguments['instagram_profile_id'] ?? 0),
+            $this->normalizeUsername($arguments['instagram_username'] ?? null),
+        );
+
+        if (! $instagramProfile) {
+            return $this->error('PROFILE_NOT_FOUND', 'Ich finde kein zugaengliches Profil mit diesen Angaben.');
+        }
+
+        return [
+            'ok' => true,
+            'message' => 'Profil @'.$instagramProfile->username.' wird geoeffnet.',
+            'ui_action' => [
+                'type' => 'navigate',
+                'url' => route('instagram-profiles.show', $instagramProfile->id),
+            ],
         ];
     }
 

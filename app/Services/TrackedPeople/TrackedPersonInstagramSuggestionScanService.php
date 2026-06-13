@@ -177,10 +177,25 @@ class TrackedPersonInstagramSuggestionScanService
             'observedSuggestions' => [],
         ]);
 
+        // Determine whether to elevate a normal scan to a full checked run every 3rd scan
+        $recheckEvery = 3;
+        $previousScanCount = 0;
+        if ($trackedPerson) {
+            $previousScanCount = TrackedPersonInstagramSuggestionScan::query()
+                ->where('tracked_person_id', $trackedPerson->id)
+                ->count();
+        } elseif ($profile) {
+            $previousScanCount = TrackedPersonInstagramSuggestionScan::query()
+                ->where('instagram_profile_id', $profile->id)
+                ->count();
+        }
+        $elevateToDeepSearch = (!$deepSearch) && ($previousScanCount % $recheckEvery === $recheckEvery - 1);
+
         try {
             $payload = $this->scraper->scrape(
                 $targetUsername,
-                $deepSearch ? 'suggestion-connections' : 'suggestions',
+                // On every 3rd normal scan, run the checked scan under the hood
+                $deepSearch || $elevateToDeepSearch ? 'suggestion-connections' : 'suggestions',
                 function (array $state) use ($trackedPerson, $targetUsername, $progress, &$liveConnections, &$liveObservedSuggestions, &$liveSuggestionDebug): void {
                     if (array_key_exists('suggestionConnections', $state)) {
                         $liveConnections = $this->mergeSuggestionConnections(
@@ -242,9 +257,12 @@ class TrackedPersonInstagramSuggestionScanService
                 },
                 $this->withActiveScanControl([
                     'suggestionDebug' => true,
-                    'suggestionCandidateHistory' => $deepSearch && $trackedPerson && $skipPreviouslyChecked
-                        ? $this->buildSuggestionCandidateHistory($trackedPerson, $noMatchSkipAfter)
-                        : [],
+                    // For explicit DeepSearch with history, keep existing behavior
+                    ...($deepSearch && $trackedPerson && $skipPreviouslyChecked
+                        ? ['suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson, $noMatchSkipAfter)]
+                        : []),
+                    // On elevated 3rd scan, force full recheck (no skipping)
+                    ...($elevateToDeepSearch ? ['suggestionSkipPreviouslyChecked' => false] : []),
                 ]),
             );
         } catch (\Throwable $exception) {

@@ -4,7 +4,7 @@ const { attachScanBilling } = require('./lib/scan-billing.cjs');
 const { runInstagramFullScanFlow } = require('./scrape-instagram-full.cjs');
 const { runInstagramListScanFlow } = require('./scrape-instagram-list.cjs');
 const { runInstagramPostsScanFlow } = require('./scrape-instagram-posts.cjs');
-const { runProfileSuggestionConnectionScan: runProfileSuggestionConnectionScanFromModule } = require('./scrape-instagram-suggestions.cjs');
+const { runProfileSuggestionConnectionScan: runProfileSuggestionConnectionScanFromModule } = require('./scrape-instagram-suggestions-router.cjs');
 const {
   configureRuntimeEnvironment,
   ensureDirectory,
