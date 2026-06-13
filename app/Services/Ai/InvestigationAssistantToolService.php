@@ -32,6 +32,8 @@ class InvestigationAssistantToolService
             'Speichere neue Kontaktkandidaten nur, wenn der Nutzer das beauftragt oder eine Datei/Nachricht eindeutig Kontakte zur Speicherung enthaelt.',
             'Wenn ein Tool ausgefuehrt wurde, fasse das Ergebnis und den naechsten sinnvollen Schritt zusammen.',
             'Nutze fuer Profilreferenzen immer den Instagram-Handle im Format @username, damit die Oberflaeche ein Profil-Badge anzeigen kann.',
+            'Eine Nutzernachricht mit [SCAN_TARGET_SELECTED] bedeutet: Der Nutzer hat ein Profil-Badge als moegliches Scan-Ziel angeklickt. Das ist noch keine Freigabe fuer einen bestimmten Scan.',
+            'Pruefe bei [SCAN_TARGET_SELECTED] zuerst Profiltyp, Sichtbarkeit, vorhandene Daten und Scan-Historie. Wenn der Nutzer keinen konkreten Scan-Typ bestaetigt hat, frage nach und nenne kurz die passenden Scan-Optionen. Starte bis zur eindeutigen Auswahl kein Scan-Tool.',
             'Navigiere nur, wenn der Nutzer dich ausdruecklich darum bittet. Nutze dafuer navigate_app_page oder open_profile.',
         ]));
     }
@@ -107,9 +109,11 @@ class InvestigationAssistantToolService
                     'scan_type' => [
                         'type' => 'string',
                         'enum' => ['mini', 'full', 'followers', 'following', 'suggestions', 'suggestion_deepsearch', 'posts', 'public_connections'],
+                        'description' => 'Muss vom Nutzer eindeutig ausgewaehlt oder bestaetigt worden sein. Ohne bestaetigten Typ zuerst nachfragen.',
                     ],
                     'reason' => ['type' => 'string'],
                 ],
+                'required' => ['scan_type'],
             ]),
             $this->tool('dispatch_network_profile_scan', 'Starte eine Profil-Vollanalyse fuer einen Kontakt/Kandidaten aus dem Instagram-Graphen.', [
                 'type' => 'object',
@@ -598,6 +602,19 @@ class InvestigationAssistantToolService
 
     private function dispatchInstagramScan($user, array $arguments): array
     {
+        $scanType = strtolower(trim((string) ($arguments['scan_type'] ?? '')));
+
+        if ($scanType === '') {
+            return $this->error(
+                'MISSING_SCAN_TYPE',
+                'Der Scan-Typ ist noch nicht festgelegt. Bitte frage den Nutzer, welchen Scan er starten moechte.',
+            );
+        }
+
+        if (! in_array($scanType, ['mini', 'full', 'followers', 'following', 'suggestions', 'suggestion_deepsearch', 'posts', 'public_connections'], true)) {
+            return $this->error('INVALID_SCAN_TYPE', 'Unbekannter Scan-Typ: '.$scanType);
+        }
+
         $person = $this->resolveTrackedPerson($user, $arguments);
 
         if (! $person) {
@@ -606,12 +623,6 @@ class InvestigationAssistantToolService
 
         if (! $person->instagram_username) {
             return $this->error('MISSING_HANDLE', 'Fuer diese Person ist kein Instagram-Name hinterlegt.');
-        }
-
-        $scanType = strtolower(trim((string) ($arguments['scan_type'] ?? 'mini')));
-
-        if (! in_array($scanType, ['mini', 'full', 'followers', 'following', 'suggestions', 'suggestion_deepsearch', 'posts', 'public_connections'], true)) {
-            return $this->error('INVALID_SCAN_TYPE', 'Unbekannter Scan-Typ: '.$scanType);
         }
 
         $scanTracking = $this->queueTrackedPersonScan($user, $person, $scanType);

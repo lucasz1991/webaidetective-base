@@ -8,6 +8,8 @@
         scanActivities: @entangle('scanActivities'),
         attachedFiles: @entangle('uploads'),
         pageContext: @js($pageContext),
+        submitting: false,
+        pendingLabel: '',
         voiceSupported: false,
         listening: false,
         recognition: null,
@@ -60,21 +62,97 @@
             this.showChat = true;
             await this.syncContext();
         },
+        busy() {
+            return this.submitting || this.isLoading;
+        },
+        scrollMessages() {
+            this.$nextTick(() => {
+                const messages = this.$refs.messages;
+                if (!messages) return;
+                messages.scrollTo({ top: messages.scrollHeight, behavior: 'smooth' });
+            });
+        },
         async send() {
-            if (this.isLoading) return;
+            if (this.busy()) return;
             if (!(this.draft || '').trim() && !this.hasUploads()) return;
-            await this.syncContext();
-            $wire.set('message', this.draft || '');
-            await $wire.sendMessage();
-            this.$nextTick(() => this.resizeComposer());
+
+            const outgoingMessage = this.draft || '';
+            this.submitting = true;
+            this.pendingLabel = outgoingMessage.trim() || 'Dateien werden analysiert.';
+            this.scrollMessages();
+
+            try {
+                await this.syncContext();
+                this.draft = '';
+                this.$nextTick(() => this.resizeComposer());
+                await $wire.sendMessage(outgoingMessage);
+            } finally {
+                this.submitting = false;
+                this.pendingLabel = '';
+                this.$nextTick(() => this.resizeComposer());
+                this.scrollMessages();
+            }
         },
         async quick(prompt) {
-            if (this.isLoading) return;
-            await this.syncContext();
-            this.draft = prompt;
-            $wire.set('message', prompt);
-            await $wire.sendMessage();
-            this.$nextTick(() => this.resizeComposer());
+            if (this.busy()) return;
+
+            this.submitting = true;
+            this.pendingLabel = prompt;
+            this.scrollMessages();
+
+            try {
+                await this.syncContext();
+                this.draft = '';
+                await $wire.sendMessage(prompt);
+            } finally {
+                this.submitting = false;
+                this.pendingLabel = '';
+                this.$nextTick(() => this.resizeComposer());
+                this.scrollMessages();
+            }
+        },
+        async requestProfileScan(profile) {
+            if (this.busy()) return;
+
+            const username = String(profile?.username || '').replace(/^@/, '').trim();
+            if (!username) return;
+
+            const profileType = String(profile?.type || 'instagram_profile');
+            const profileId = Number(profile?.id || 0) || null;
+            const displayName = String(profile?.display_name || `@${username}`);
+
+            this.stopSpeaking();
+            const prompt = [
+                '[SCAN_TARGET_SELECTED]',
+                `Ich habe den Profilvorschlag @${username} als Scan-Ziel ausgewählt.`,
+                `Profiltyp: ${profileType}.`,
+                'Prüfe bitte zuerst die vorhandenen Profildaten und die Scan-Historie.',
+                'Falls ich noch keinen eindeutigen Scan-Typ bestätigt habe, frage mich, welchen Scan ich starten möchte, und nenne kurz die passenden Optionen.',
+                'Starte noch keinen Scan ohne meine konkrete Auswahl.',
+            ].join('\n');
+
+            this.submitting = true;
+            this.pendingLabel = `Scan für @${username} auswählen.`;
+            this.scrollMessages();
+
+            try {
+                await this.syncContext({
+                    selected_node_id: profileId
+                        ? (profileType === 'tracked_person' ? `person-${profileId}` : `instagram-profile-${profileId}`)
+                        : null,
+                    selected_node_type: profileType,
+                    selected_profile_username: username,
+                    selected_profile_name: displayName,
+                    selected_profile_open: false,
+                });
+                this.draft = '';
+                await $wire.sendMessage(prompt);
+            } finally {
+                this.submitting = false;
+                this.pendingLabel = '';
+                this.$nextTick(() => this.resizeComposer());
+                this.scrollMessages();
+            }
         },
         selectNetworkNode(event) {
             const detail = this.normalizeEventDetail(event);
@@ -220,7 +298,7 @@
             window.location.assign(url);
         },
         toggleVoice() {
-            if (!this.voiceSupported || this.isLoading) return;
+            if (!this.voiceSupported || this.busy()) return;
 
             if (!this.recognition) {
                 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -277,7 +355,7 @@
             x-show="!showChat"
             x-cloak
             x-on:click="openChat()"
-            class="fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-full bg-slate-950 text-white shadow-2xl shadow-slate-900/30 transition hover:bg-emerald-700"
+            class="fixed bottom-5 right-5 z-50 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-600 via-cyan-600 to-emerald-600 text-white shadow-2xl shadow-cyan-900/25 ring-1 ring-white/40 transition hover:-translate-y-0.5 hover:shadow-cyan-700/30"
             aria-label="Investigation Copilot öffnen"
         >
             <svg class="h-7 w-7" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -309,13 +387,24 @@
             x-transition:leave="transition ease-in duration-150"
             x-transition:leave-start="translate-y-0 scale-100 opacity-100"
             x-transition:leave-end="translate-y-3 scale-95 opacity-0"
-            class="fixed bottom-4 right-4 z-[70] flex h-[min(680px,calc(100vh-2rem))] w-[min(430px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-950/25"
+            class="fixed bottom-4 right-4 z-[70] flex h-[min(700px,calc(100vh-2rem))] w-[min(440px,calc(100vw-2rem))] flex-col overflow-hidden rounded-[1.75rem] border border-white/80 bg-white shadow-[0_30px_80px_-20px_rgba(15,23,42,.45)] ring-1 ring-slate-900/5"
             role="dialog"
             aria-modal="true"
             aria-label="Investigation Copilot"
         >
-            <header class="border-b border-white/10 bg-slate-950 px-3 py-2 text-white">
-                <div class="flex items-center justify-end gap-1.5">
+            <header class="relative overflow-visible border-b border-cyan-300/40 bg-gradient-to-r from-sky-600 via-cyan-600 to-emerald-600 px-3 py-2.5 text-white">
+                <div class="pointer-events-none absolute inset-0 overflow-hidden">
+                    <span class="absolute -left-8 -top-12 h-28 w-28 rounded-full bg-white/15 blur-2xl"></span>
+                    <span class="absolute -bottom-16 right-12 h-28 w-28 rounded-full bg-emerald-200/25 blur-2xl"></span>
+                </div>
+                <div class="relative flex items-center justify-between gap-3">
+                    <span class="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/25 bg-white/15 shadow-sm backdrop-blur">
+                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M12 3 4 7v6c0 4.5 3.4 7.4 8 8 4.6-.6 8-3.5 8-8V7l-8-4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                            <path d="M9 12h6M12 9v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                    </span>
+                    <div class="flex items-center gap-1.5">
                         <x-ui.dropdown.anchor-dropdown
                             align="right"
                             width="auto"
@@ -327,7 +416,7 @@
                                 <button
                                     type="button"
                                     x-bind:aria-expanded="open"
-                                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
+                                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
                                     title="Sprach-Einstellungen"
                                 >
                                     <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -395,7 +484,7 @@
                             type="button"
                             wire:click="clearChat"
                             x-on:click="stopSpeaking()"
-                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
+                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
                             title="Chat leeren"
                         >
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -405,13 +494,17 @@
                         <button
                             type="button"
                             x-on:click="stopSpeaking(); showChat = false"
-                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
+                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
                             title="Schließen"
                         >
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                 <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                             </svg>
                         </button>
+                    </div>
+                </div>
+                <div x-show="busy()" x-cloak class="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden bg-white/20">
+                    <span class="block h-full w-1/2 animate-[pulse_1s_ease-in-out_infinite] rounded-full bg-white shadow-[0_0_12px_rgba(255,255,255,.9)]"></span>
                 </div>
             </header>
 
@@ -459,32 +552,91 @@
                     </div>
 
                     <div
-                        class="scroll-container min-h-0 flex-1 space-y-3 overflow-y-auto bg-slate-50 px-4 py-4"
+                        class="scroll-container min-h-0 flex-1 space-y-3 overflow-y-auto bg-[radial-gradient(circle_at_top_left,_rgba(207,250,254,.65),_transparent_38%),linear-gradient(to_bottom,_#f8fafc,_#f1f5f9)] px-4 py-4"
                         x-ref="messages"
                         x-init="
                             $watch('chatHistory', () => $nextTick(() => $refs.messages.scrollTo({ top: $refs.messages.scrollHeight, behavior: 'smooth' })));
                             $watch('scanActivities', () => $nextTick(() => $refs.messages.scrollTo({ top: $refs.messages.scrollHeight, behavior: 'smooth' })));
+                            $watch('submitting', () => $nextTick(() => $refs.messages.scrollTo({ top: $refs.messages.scrollHeight, behavior: 'smooth' })));
                         "
                     >
-                        <template x-if="chatHistory.length === 0">
-                            <div class="space-y-4">
-                                <div class="rounded-xl border border-slate-200 bg-white p-4">
-                                    <p class="text-sm font-black text-slate-950">Bereit fuer Analyse und Steuerung.</p>
-                                    <p class="mt-2 text-sm leading-6 text-slate-600">Die aktuelle Seite, eine offene Networkmap und das ausgewaehlte Profil werden automatisch als Kontext verwendet.</p>
+                        <template x-if="chatHistory.length === 0 && !busy()">
+                            <div class="space-y-3.5">
+                                <div class="relative overflow-hidden rounded-2xl border border-cyan-100 bg-white/90 p-4 shadow-sm backdrop-blur">
+                                    <span class="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-cyan-100/70 blur-2xl"></span>
+                                    <div class="relative flex items-start gap-3">
+                                        <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 to-emerald-500 text-white shadow-lg shadow-cyan-200/60">
+                                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                <path d="M12 3 4 7v6c0 4.5 3.4 7.4 8 8 4.6-.6 8-3.5 8-8V7l-8-4Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                                                <path d="M8.5 12h7M12 8.5v7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                            </svg>
+                                        </span>
+                                        <div>
+                                            <p class="text-sm font-black text-slate-950">Womit soll ich starten?</p>
+                                            <p class="mt-1 text-xs leading-5 text-slate-500">Ich berücksichtige die aktuelle Seite, Networkmap und ausgewählte Profile automatisch.</p>
+                                        </div>
+                                    </div>
                                 </div>
 
-                                <div class="grid gap-2">
-                                    <button type="button" @click="quick('Welche Profile sollte ich als naechstes scannen und warum?')" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-bold text-slate-800 transition hover:border-emerald-300 hover:bg-emerald-50">
-                                        Naechste Scans priorisieren
+                                <div class="grid grid-cols-2 gap-2.5">
+                                    <button
+                                        type="button"
+                                        @click="quick('Welche Profile sollte ich als naechstes scannen und warum?')"
+                                        class="group rounded-2xl border border-sky-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-sky-300 hover:bg-sky-50 hover:shadow-md"
+                                    >
+                                        <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-sky-100 text-sky-700 transition group-hover:bg-sky-600 group-hover:text-white">
+                                            <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                <path d="M4 17 9 12l3 3 7-8M15 7h4v4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                            </svg>
+                                        </span>
+                                        <span class="mt-3 block text-xs font-black text-slate-900">Scans priorisieren</span>
+                                        <span class="mt-1 block text-[10px] leading-4 text-slate-500">Die sinnvollsten nächsten Profile finden.</span>
                                     </button>
-                                    <button type="button" @click="quick('Zeige mir meine beobachteten Profile mit Status und schlage die beste Netzwerk-Strategie vor.')" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-bold text-slate-800 transition hover:border-emerald-300 hover:bg-emerald-50">
-                                        Netzwerk-Strategie erstellen
+
+                                    <button
+                                        type="button"
+                                        @click="quick('Zeige mir meine beobachteten Profile mit Status und schlage die beste Netzwerk-Strategie vor.')"
+                                        class="group rounded-2xl border border-violet-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-violet-300 hover:bg-violet-50 hover:shadow-md"
+                                    >
+                                        <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-100 text-violet-700 transition group-hover:bg-violet-600 group-hover:text-white">
+                                            <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                <circle cx="6" cy="7" r="2.5" stroke="currentColor" stroke-width="2"/>
+                                                <circle cx="18" cy="6" r="2.5" stroke="currentColor" stroke-width="2"/>
+                                                <circle cx="12" cy="18" r="2.5" stroke="currentColor" stroke-width="2"/>
+                                                <path d="m8.2 8.2 2.7 7.4M15.7 7.8l-2.6 7.8M8.5 7h7" stroke="currentColor" stroke-width="1.8"/>
+                                            </svg>
+                                        </span>
+                                        <span class="mt-3 block text-xs font-black text-slate-900">Netzwerk-Strategie</span>
+                                        <span class="mt-1 block text-[10px] leading-4 text-slate-500">Status und nächste Analyseschritte ordnen.</span>
                                     </button>
-                                    <button type="button" @click="quick('Welche Profile sollten ins Monitoring und welches Intervall ist sinnvoll?')" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-bold text-slate-800 transition hover:border-emerald-300 hover:bg-emerald-50">
-                                        Monitoring bewerten
+
+                                    <button
+                                        type="button"
+                                        @click="quick('Welche Profile sollten ins Monitoring und welches Intervall ist sinnvoll?')"
+                                        class="group rounded-2xl border border-emerald-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-300 hover:bg-emerald-50 hover:shadow-md"
+                                    >
+                                        <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 transition group-hover:bg-emerald-600 group-hover:text-white">
+                                            <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                <path d="M4 13h3l2-6 4 11 2-5h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                            </svg>
+                                        </span>
+                                        <span class="mt-3 block text-xs font-black text-slate-900">Monitoring bewerten</span>
+                                        <span class="mt-1 block text-[10px] leading-4 text-slate-500">Profile und passende Intervalle bestimmen.</span>
                                     </button>
-                                    <button type="button" @click="quick('Analysiere den gespeicherten Profilgraphen und liste die wichtigsten Kontaktkandidaten fuer den naechsten Scan.')" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-bold text-slate-800 transition hover:border-emerald-300 hover:bg-emerald-50">
-                                        Kontaktkandidaten finden
+
+                                    <button
+                                        type="button"
+                                        @click="quick('Analysiere den gespeicherten Profilgraphen und liste die wichtigsten Kontaktkandidaten fuer den naechsten Scan.')"
+                                        class="group rounded-2xl border border-amber-200/80 bg-white/90 p-3.5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-amber-300 hover:bg-amber-50 hover:shadow-md"
+                                    >
+                                        <span class="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700 transition group-hover:bg-amber-500 group-hover:text-white">
+                                            <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                <circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="2"/>
+                                                <path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 9h5M18.5 6.5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                            </svg>
+                                        </span>
+                                        <span class="mt-3 block text-xs font-black text-slate-900">Kontakte finden</span>
+                                        <span class="mt-1 block text-[10px] leading-4 text-slate-500">Relevante Kandidaten im Graphen erkennen.</span>
                                     </button>
                                 </div>
                             </div>
@@ -524,9 +676,10 @@
                                     <template x-for="profile in (item.profiles || [])" :key="profile.type + '-' + profile.id">
                                         <button
                                             type="button"
-                                            x-on:click="navigateTo(profile.url)"
-                                            class="group inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 py-1 pl-1 pr-3 text-left transition hover:border-emerald-300 hover:bg-emerald-50"
-                                            x-bind:title="'Profil öffnen: @' + profile.username"
+                                            x-on:click="requestProfileScan(profile)"
+                                            x-bind:disabled="busy()"
+                                            class="group inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 py-1 pl-1 pr-3 text-left transition hover:border-cyan-300 hover:bg-cyan-50 disabled:cursor-wait disabled:opacity-50"
+                                            x-bind:title="'Scan für @' + profile.username + ' auswählen'"
                                         >
                                             <span class="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-200 text-xs font-black uppercase text-slate-600 ring-1 ring-white">
                                                 <span x-text="(profile.display_name || profile.username || '?').charAt(0)"></span>
@@ -541,8 +694,14 @@
                                                 >
                                             </span>
                                             <span class="min-w-0">
-                                                <span class="block truncate text-xs font-black text-slate-800 group-hover:text-emerald-800" x-text="profile.display_name || '@' + profile.username"></span>
-                                                <span class="block truncate text-[10px] text-slate-500" x-text="'@' + profile.username"></span>
+                                                <span class="block truncate text-xs font-black text-slate-800 group-hover:text-cyan-800" x-text="profile.display_name || '@' + profile.username"></span>
+                                                <span class="flex items-center gap-1 truncate text-[10px] font-semibold text-cyan-700">
+                                                    <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                        <circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="2"/>
+                                                        <path d="m16 16 4 4M11 8v6M8 11h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                                    </svg>
+                                                    <span>Scan auswählen</span>
+                                                </span>
                                             </span>
                                         </button>
                                     </template>
@@ -585,29 +744,59 @@
                             </div>
                         </template>
 
-                        <div x-show="isLoading" x-collapse class="max-w-[92%] overflow-hidden rounded-xl border border-emerald-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
+                        <div
+                            x-show="busy() && pendingLabel"
+                            x-cloak
+                            x-transition:enter="transition ease-out duration-150"
+                            x-transition:enter-start="translate-y-2 opacity-0"
+                            x-transition:enter-end="translate-y-0 opacity-100"
+                            class="ml-auto max-w-[88%] rounded-2xl rounded-br-md bg-gradient-to-br from-sky-600 to-cyan-700 px-4 py-3 text-sm leading-6 text-white shadow-md shadow-cyan-200/60"
+                        >
+                            <div class="mb-1 flex items-center justify-between gap-3">
+                                <strong class="text-[10px] uppercase tracking-[.14em] text-cyan-100">Du</strong>
+                                <span class="inline-flex items-center gap-1.5 text-[10px] text-cyan-100">
+                                    Wird gesendet
+                                    <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-white"></span>
+                                </span>
+                            </div>
+                            <p class="whitespace-pre-line" x-text="pendingLabel"></p>
+                        </div>
+
+                        <div
+                            x-show="busy()"
+                            x-cloak
+                            x-transition:enter="transition ease-out duration-200"
+                            x-transition:enter-start="translate-y-2 opacity-0"
+                            x-transition:enter-end="translate-y-0 opacity-100"
+                            x-transition:leave="transition ease-in duration-150"
+                            x-transition:leave-start="translate-y-0 opacity-100"
+                            x-transition:leave-end="translate-y-2 opacity-0"
+                            class="max-w-[94%] overflow-hidden rounded-2xl border border-cyan-200/80 bg-white/95 px-4 py-3.5 text-sm text-slate-600 shadow-lg shadow-cyan-100/50 backdrop-blur"
+                            role="status"
+                            aria-live="polite"
+                        >
                             <div class="flex items-center gap-3">
-                                <span class="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-50">
-                                    <span class="absolute inset-1 animate-ping rounded-full bg-emerald-300/40"></span>
-                                    <svg class="relative h-4 w-4 animate-spin text-emerald-700" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                        <circle class="opacity-20" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
+                                <span class="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 to-emerald-500 text-white shadow-md shadow-cyan-200">
+                                    <span class="absolute -inset-1 animate-ping rounded-2xl bg-cyan-300/25"></span>
+                                    <svg class="relative h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <circle class="opacity-30" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
                                         <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
                                     </svg>
                                 </span>
-                                <div class="min-w-0">
-                                    <p class="font-bold text-slate-800">Copilot arbeitet</p>
-                                    <div class="mt-1 flex items-center gap-1 text-xs text-slate-500">
-                                        <span>Kontext und Tools werden geprüft</span>
-                                        <span class="flex gap-1" aria-hidden="true">
-                                            <span class="h-1 w-1 animate-bounce rounded-full bg-emerald-500 [animation-delay:-.3s]"></span>
-                                            <span class="h-1 w-1 animate-bounce rounded-full bg-emerald-500 [animation-delay:-.15s]"></span>
-                                            <span class="h-1 w-1 animate-bounce rounded-full bg-emerald-500"></span>
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <p class="font-black text-slate-900">Copilot analysiert deine Anfrage</p>
+                                        <span class="flex shrink-0 items-center gap-1" aria-hidden="true">
+                                            <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-500 [animation-delay:-.3s]"></span>
+                                            <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-500 [animation-delay:-.15s]"></span>
+                                            <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-500"></span>
                                         </span>
                                     </div>
+                                    <p class="mt-1 text-xs leading-5 text-slate-500">Kontext wird geprüft und passende Werkzeuge werden vorbereitet.</p>
                                 </div>
                             </div>
-                            <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-100">
-                                <div class="h-full w-2/3 animate-pulse rounded-full bg-gradient-to-r from-emerald-400 via-cyan-400 to-emerald-400"></div>
+                            <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                                <div class="h-full w-full origin-left animate-pulse rounded-full bg-gradient-to-r from-sky-500 via-cyan-400 to-emerald-500"></div>
                             </div>
                         </div>
                     </div>
@@ -623,7 +812,7 @@
                         >
 
                         <div
-                            class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-emerald-400 focus-within:ring-4 focus-within:ring-emerald-100"
+                            class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-cyan-400 focus-within:ring-4 focus-within:ring-cyan-100"
                             :class="listening ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'"
                         >
                             <div
@@ -656,8 +845,9 @@
                                 x-init="$nextTick(() => resizeComposer())"
                                 x-on:input="resizeComposer()"
                                 x-on:keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send(); }"
+                                x-bind:disabled="busy()"
                                 rows="1"
-                                class="block min-h-[58px] max-h-36 w-full resize-none border-0 bg-transparent px-4 pb-2 pt-3 text-sm leading-6 text-slate-950 placeholder:text-slate-400 focus:ring-0"
+                                class="block min-h-[58px] max-h-36 w-full resize-none border-0 bg-transparent px-4 pb-2 pt-3 text-sm leading-6 text-slate-950 placeholder:text-slate-400 focus:ring-0 disabled:bg-slate-50 disabled:text-slate-400"
                                 placeholder="Frage stellen, Profil öffnen oder Analyse starten..."
                             ></textarea>
 
@@ -666,8 +856,8 @@
                                     <button
                                         type="button"
                                         x-on:click="$refs.fileInput.click()"
-                                        :disabled="isLoading"
-                                        class="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-emerald-700 disabled:opacity-40"
+                                        :disabled="busy()"
+                                        class="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition hover:bg-cyan-50 hover:text-cyan-700 disabled:opacity-40"
                                         title="Dateien hinzufügen"
                                     >
                                         <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -677,9 +867,9 @@
                                     <button
                                         type="button"
                                         x-on:click="toggleVoice()"
-                                        :disabled="!voiceSupported || isLoading"
+                                        :disabled="!voiceSupported || busy()"
                                         class="inline-flex h-9 w-9 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-30"
-                                        :class="listening ? 'bg-rose-100 text-rose-700' : 'text-slate-500 hover:bg-slate-100 hover:text-emerald-700'"
+                                        :class="listening ? 'bg-rose-100 text-rose-700' : 'text-slate-500 hover:bg-cyan-50 hover:text-cyan-700'"
                                         :title="voiceSupported ? 'Spracheingabe' : 'Spracheingabe wird nicht unterstützt'"
                                     >
                                         <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -702,14 +892,14 @@
                                     <button
                                         type="button"
                                         @click="send()"
-                                        :disabled="isLoading || (!(draft || '').trim() && !hasUploads())"
-                                        class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                                        :disabled="busy() || (!(draft || '').trim() && !hasUploads())"
+                                        class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-sky-600 via-cyan-600 to-emerald-600 text-white shadow-md shadow-cyan-200 transition hover:-translate-y-0.5 hover:shadow-lg disabled:cursor-not-allowed disabled:from-slate-300 disabled:via-slate-300 disabled:to-slate-300 disabled:shadow-none"
                                         title="Senden"
                                     >
-                                        <svg x-show="!isLoading" class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <svg x-show="!busy()" class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                             <path d="m5 12 14-7-4 14-3-6-7-1Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
                                         </svg>
-                                        <svg x-show="isLoading" class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <svg x-show="busy()" class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                             <circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
                                             <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
                                         </svg>

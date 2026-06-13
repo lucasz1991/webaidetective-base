@@ -89,8 +89,12 @@ class Chatbot extends Component
         $this->sendMessage();
     }
 
-    public function sendMessage(): void
+    public function sendMessage(?string $clientMessage = null): void
     {
+        if ($clientMessage !== null) {
+            $this->message = $clientMessage;
+        }
+
         $userMessage = trim($this->message);
         $attachmentContext = $this->buildAttachmentContext();
 
@@ -100,7 +104,9 @@ class Chatbot extends Component
 
         $this->message = '';
         $this->isLoading = true;
-        $displayMessage = $userMessage !== '' ? $userMessage : 'Dateien zur Analyse hinzugefuegt.';
+        $displayMessage = $userMessage !== ''
+            ? $this->displayMessageForUserPrompt($userMessage)
+            : 'Dateien zur Analyse hinzugefuegt.';
 
         if ($attachmentContext !== '') {
             $displayMessage .= "\n\n".'Anhang-Kontext wurde der AI mitgegeben.';
@@ -583,6 +589,19 @@ class Chatbot extends Component
         $text = preg_replace('/[\p{Han}\p{Hiragana}\p{Katakana}\p{Thai}]/u', '', $text) ?? $text;
 
         return trim($text);
+    }
+
+    private function displayMessageForUserPrompt(string $prompt): string
+    {
+        if (! str_starts_with($prompt, '[SCAN_TARGET_SELECTED]')) {
+            return $prompt;
+        }
+
+        if (preg_match('/Profilvorschlag\s+@([a-zA-Z0-9._]{1,30})/u', $prompt, $matches)) {
+            return 'Scan für @'.$matches[1].' auswählen.';
+        }
+
+        return 'Profilvorschlag als Scan-Ziel auswählen.';
     }
 
     private function initialPageContext(): array
