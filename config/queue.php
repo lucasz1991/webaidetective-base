@@ -2,6 +2,8 @@
 
 return [
 
+    'worker_php_binary' => env('PHP_CLI_BINARY', 'php'),
+
     /*
     |--------------------------------------------------------------------------
     | Default Queue Connection Name

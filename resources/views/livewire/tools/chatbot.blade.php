@@ -1041,14 +1041,17 @@
                                 </span>
                                 <div class="min-w-0 flex-1">
                                     <div class="flex items-center justify-between gap-3">
-                                        <p class="font-black text-slate-900">Copilot analysiert deine Anfrage</p>
+                                        <p class="font-black text-slate-900">Copilot denkt nach</p>
                                         <span class="flex shrink-0 items-center gap-1" aria-hidden="true">
                                             <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-500 [animation-delay:-.3s]"></span>
                                             <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-cyan-500 [animation-delay:-.15s]"></span>
                                             <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-emerald-500"></span>
                                         </span>
                                     </div>
-                                    <p class="mt-1 text-xs leading-5 text-slate-500">Kontext wird geprüft und passende Werkzeuge werden vorbereitet.</p>
+                                    <p
+                                        wire:stream="assistant-status-stream"
+                                        class="mt-1 text-xs leading-5 text-slate-500"
+                                    >Kontext wird geprüft und passende Werkzeuge werden vorbereitet.</p>
                                 </div>
                             </div>
                             <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">

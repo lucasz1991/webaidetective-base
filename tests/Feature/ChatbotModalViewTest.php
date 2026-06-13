@@ -17,10 +17,12 @@ class ChatbotModalViewTest extends TestCase
         $this->assertStringContainsString('$wire.sendMessage(outgoingMessage)', $view);
         $this->assertStringContainsString('x-show="busy()"', $view);
         $this->assertStringContainsString('wire:stream="assistant-response-stream"', $view);
+        $this->assertStringContainsString('wire:stream="assistant-status-stream"', $view);
+        $this->assertStringContainsString('Copilot denkt nach', $view);
+        $this->assertStringContainsString('streamBufferedAssistantText', file_get_contents(app_path('Livewire/Tools/Chatbot.php')));
         $this->assertStringContainsString('Array.isArray(item.options)', $view);
         $this->assertStringContainsString('quick(option.prompt)', $view);
         $this->assertStringNotContainsString('Scan-Typ "${scanType}"', $view);
-        $this->assertStringContainsString('Copilot analysiert deine Anfrage', $view);
         $this->assertStringContainsString('from-sky-600 via-cyan-600 to-emerald-600', $view);
         $this->assertStringContainsString('Scans priorisieren', $view);
         $this->assertStringContainsString('Netzwerk-Strategie', $view);

@@ -60,4 +60,18 @@ class RunTrackedPersonInstagramToolScanTest extends TestCase
         $this->assertStringContainsString('await $wire.resumeAssistantScan(token)', $view);
         $this->assertStringContainsString('Wird gestartet...', $view);
     }
+
+    public function test_resume_scans_use_the_background_dispatcher(): void
+    {
+        $chatbot = file_get_contents(app_path('Livewire/Tools/Chatbot.php'));
+        $profile = file_get_contents(app_path('Livewire/User/TrackedPersonDetail.php'));
+        $dispatcher = file_get_contents(app_path('Services/TrackedPeople/TrackedPersonScanDispatcher.php'));
+
+        $this->assertStringContainsString('TrackedPersonScanDispatcher::class', $chatbot);
+        $this->assertStringContainsString('TrackedPersonScanDispatcher::class', $profile);
+        $this->assertStringNotContainsString('dispatchAfterResponse', $chatbot);
+        $this->assertStringNotContainsString('dispatchAfterResponse', $profile);
+        $this->assertStringContainsString("onConnection('database')", $dispatcher);
+        $this->assertStringContainsString("'--stop-when-empty'", $dispatcher);
+    }
 }

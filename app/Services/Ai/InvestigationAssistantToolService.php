@@ -2,7 +2,6 @@
 
 namespace App\Services\Ai;
 
-use App\Jobs\RunTrackedPersonInstagramToolScan;
 use App\Jobs\ScanInstagramProfileJob;
 use App\Livewire\User\NetworkMap;
 use App\Models\InstagramProfile;
@@ -13,6 +12,7 @@ use App\Models\TrackedPersonPublicProfile;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use App\Services\TrackedPeople\TrackedPersonQuotaService;
+use App\Services\TrackedPeople\TrackedPersonScanDispatcher;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -1246,7 +1246,12 @@ class InvestigationAssistantToolService
             'message' => $label.' wurde in die Warteschlange gestellt.',
         ]);
 
-        RunTrackedPersonInstagramToolScan::dispatch((int) $person->id, $scanType, false, $token);
+        app(TrackedPersonScanDispatcher::class)->dispatch(
+            (int) $person->id,
+            $scanType,
+            false,
+            $token,
+        );
 
         return $tracking;
     }

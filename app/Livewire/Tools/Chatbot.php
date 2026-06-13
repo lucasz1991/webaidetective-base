@@ -2,7 +2,6 @@
 
 namespace App\Livewire\Tools;
 
-use App\Jobs\RunTrackedPersonInstagramToolScan;
 use App\Models\InstagramProfileListScan;
 use App\Models\Setting;
 use App\Models\TrackedPerson;
@@ -11,6 +10,7 @@ use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Services\Ai\InvestigationAssistantScanStatusStore;
 use App\Services\Ai\InvestigationAssistantToolService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
+use App\Services\TrackedPeople\TrackedPersonScanDispatcher;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
@@ -356,9 +356,10 @@ class Chatbot extends Component
         ]);
 
         try {
-            $this->dispatchTrackedPersonScan(
+            app(TrackedPersonScanDispatcher::class)->dispatch(
                 (int) $trackedPerson->id,
                 $scanType,
+                false,
                 $newToken,
             );
         } catch (\Throwable $exception) {
@@ -458,8 +459,18 @@ class Chatbot extends Component
         $uiAction = null;
         $chatOptions = null;
 
+        $this->stream('assistant-response-stream', '', true);
+        $this->stream('assistant-status-stream', 'Kontext wird geprüft und die Anfrage vorbereitet.', true);
+
         for ($step = 0; $step < 5; $step++) {
-            $this->stream('assistant-response-stream', '', true);
+            if ($step > 0) {
+                $this->stream(
+                    'assistant-status-stream',
+                    'Werkzeugergebnisse werden ausgewertet und die Antwort wird vorbereitet.',
+                    true,
+                );
+            }
+
             $assistantResponse = $this->requestAssistant(
                 $transcript,
                 $toolService->tools(),
@@ -477,6 +488,7 @@ class Chatbot extends Component
             $content = trim((string) ($message['content'] ?? ''));
 
             if ($toolCalls === []) {
+                $this->stream('assistant-status-stream', 'Antwort wird fertiggestellt.', true);
                 $finalMessage = $content;
                 $transcript[] = [
                     'role' => 'assistant',
@@ -493,6 +505,11 @@ class Chatbot extends Component
 
             foreach ($toolCalls as $toolCall) {
                 $toolName = (string) data_get($toolCall, 'function.name');
+                $this->stream(
+                    'assistant-status-stream',
+                    $this->assistantToolStatus($toolName),
+                    true,
+                );
                 $arguments = $this->decodeToolArguments((string) data_get($toolCall, 'function.arguments', '{}'));
                 $result = $toolService->execute($toolName, $arguments, Auth::user());
                 $this->appendToolEvent($toolName, $arguments, $result);
@@ -676,10 +693,37 @@ class Chatbot extends Component
         $toolCalls = data_get($payload, 'choices.0.message.tool_calls', []);
 
         if (is_callable($onTextDelta) && is_string($content) && $content !== '' && $toolCalls === []) {
-            $onTextDelta($content);
+            $this->streamBufferedAssistantText($content, $onTextDelta);
         }
 
         return $payload;
+    }
+
+    private function streamBufferedAssistantText(string $content, callable $onTextDelta): void
+    {
+        $parts = preg_split(
+            '/(\s+)/u',
+            $content,
+            -1,
+            PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY,
+        ) ?: [$content];
+        $chunk = '';
+
+        foreach ($parts as $part) {
+            $chunk .= $part;
+
+            if (mb_strlen($chunk) < 36) {
+                continue;
+            }
+
+            $onTextDelta($chunk);
+            $chunk = '';
+            usleep(12000);
+        }
+
+        if ($chunk !== '') {
+            $onTextDelta($chunk);
+        }
     }
 
     protected function parseAssistantEventStream(StreamInterface $body, ?callable $onTextDelta = null): array
@@ -945,27 +989,6 @@ class Chatbot extends Component
         Session::put(self::SCAN_ACTIVITIES_KEY, array_slice($this->scanActivities, -4));
     }
 
-    private function dispatchTrackedPersonScan(int $trackedPersonId, string $scanType, string $token): void
-    {
-        if (config('queue.default') === 'sync') {
-            RunTrackedPersonInstagramToolScan::dispatchAfterResponse(
-                $trackedPersonId,
-                $scanType,
-                false,
-                $token,
-            );
-
-            return;
-        }
-
-        RunTrackedPersonInstagramToolScan::dispatch(
-            $trackedPersonId,
-            $scanType,
-            false,
-            $token,
-        );
-    }
-
     private function assistantScanLooksInterrupted(array $status, int $staleAfterSeconds = 30): bool
     {
         $trackedPersonId = (int) ($status['tracked_person_id'] ?? 0);
@@ -1126,6 +1149,20 @@ class Chatbot extends Component
     private function sanitizeAssistantChunk(string $text): string
     {
         return preg_replace('/[\p{Han}\p{Hiragana}\p{Katakana}\p{Thai}]/u', '', $text) ?? $text;
+    }
+
+    private function assistantToolStatus(string $toolName): string
+    {
+        return match ($toolName) {
+            'list_tracked_people' => 'Beobachtete Personen werden geladen.',
+            'get_profile_context' => 'Profildaten und bisherige Scans werden geprüft.',
+            'list_network_scan_candidates' => 'Das Netzwerk wird nach passenden Scan-Kandidaten durchsucht.',
+            'dispatch_instagram_scan', 'dispatch_network_profile_scan' => 'Der ausgewählte Scan wird vorbereitet.',
+            'create_or_update_tracked_person' => 'Die beobachtete Person wird gespeichert.',
+            'present_chat_options' => 'Passende Auswahlmöglichkeiten werden vorbereitet.',
+            'navigate_app_page', 'open_profile' => 'Die gewünschte Ansicht wird vorbereitet.',
+            default => 'Benötigte Daten werden verarbeitet.',
+        };
     }
 
     private function normalizeChatOptions(mixed $chatOptions): ?array

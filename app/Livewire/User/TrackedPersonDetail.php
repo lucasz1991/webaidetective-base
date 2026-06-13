@@ -3,7 +3,6 @@
 namespace App\Livewire\User;
 
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
-use App\Jobs\RunTrackedPersonInstagramToolScan;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScan;
 use App\Models\TrackedPerson;
@@ -17,6 +16,7 @@ use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
+use App\Services\TrackedPeople\TrackedPersonScanDispatcher;
 use App\Support\PublicAssetUrl;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
@@ -306,17 +306,10 @@ class TrackedPersonDetail extends Component
 
         $trackedPerson = $this->resolveTrackedPerson();
 
-        if (config('queue.default') === 'sync') {
-            RunTrackedPersonInstagramToolScan::dispatchAfterResponse(
-                (int) $trackedPerson->id,
-                $scanType,
-            );
-        } else {
-            RunTrackedPersonInstagramToolScan::dispatch(
-                (int) $trackedPerson->id,
-                $scanType,
-            );
-        }
+        app(TrackedPersonScanDispatcher::class)->dispatch(
+            (int) $trackedPerson->id,
+            $scanType,
+        );
 
         $this->setDetailStatus('Scan wird ab dem gespeicherten Datenstand fortgesetzt.', 'partial');
     }
