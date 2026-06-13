@@ -2,55 +2,52 @@
 
 namespace App\Notifications;
 
-use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Messages\MailMessage;
-use Illuminate\Support\Facades\URL;
+use Illuminate\Notifications\Notification;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\URL;
 
 class SetPasswordNotification extends Notification
 {
-    protected $user;
-    protected $token;
+    public function __construct(
+        protected object $user,
+        protected string $token,
+    ) {}
 
-    public function __construct($user, $token)
-    {
-        $this->user = $user;
-        $this->token = $token;
-    }
-
-    public function via($notifiable)
+    public function via(object $notifiable): array
     {
         return ['mail'];
     }
 
-    public function toMail($notifiable)
+    public function toMail(object $notifiable): MailMessage
     {
+        $minutes = (int) config('auth.passwords.users.expire', 60);
+
         return (new MailMessage)
-            ->subject('Herzlich willkommen bei CBW Schulnetz! Setze dein Passwort')
-            ->greeting('Hallo ' . $this->user->name . '!')
-            ->line('Um dein Konto zu vervollständigen, setze bitte ein Passwort.')
-            ->action('Passwort setzen', $this->resetUrl($notifiable))
-            ->line('Der Link ist 60 Minuten gültig.')
-            ->line('Falls der Link abgelaufen ist oder nicht funktioniert, kannst du jederzeit einen neuen Passwort-Setzen-Link anfordern.')
-            ->salutation('Mit freundlichen Grüßen,')
-            ->salutation('dein CBW Schulnetz Team');
+            ->subject('Dein SocialScope-Konto einrichten')
+            ->greeting('Willkommen bei SocialScope, '.$this->user->name.'!')
+            ->line('Lege jetzt ein Passwort fest, um dein Konto zu vervollständigen.')
+            ->action('Passwort festlegen', $this->resetUrl($notifiable, $minutes))
+            ->line("Der Link ist {$minutes} Minuten gültig.")
+            ->line('Ist der Link bereits abgelaufen, kannst du auf der Login-Seite jederzeit einen neuen anfordern.')
+            ->salutation('Viele Grüße, dein SocialScope Team');
     }
 
-    protected function resetUrl($notifiable)
+    protected function resetUrl(object $notifiable, int $minutes): string
     {
         return URL::temporarySignedRoute(
             'password.reset',
-            Carbon::now()->addMinutes(60),
-            ['token' => $this->token, 'email' => $notifiable->email]
+            Carbon::now()->addMinutes($minutes),
+            ['token' => $this->token, 'email' => $notifiable->email],
         );
     }
 
-    protected function newRequestUrl($notifiable)
+    protected function newRequestUrl(): string
     {
-        return URL::route('password.request'); // Standard-Route für Passwort-Reset-Anfrage
+        return URL::route('password.request');
     }
 
-    public function toArray($notifiable)
+    public function toArray(object $notifiable): array
     {
         return [
             'user_id' => $notifiable->getKey(),

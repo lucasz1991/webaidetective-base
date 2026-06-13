@@ -2,48 +2,39 @@
 
 namespace App\Notifications;
 
-use Illuminate\Notifications\Notification;
 use Illuminate\Notifications\Messages\MailMessage;
+use Illuminate\Notifications\Notification;
 
 class ContactFormSubmitted extends Notification
 {
-    public $name;
-    public $email;
-    public $subject;
-    public $message;
+    public function __construct(
+        public string $name,
+        public string $email,
+        public string $subject,
+        public string $message,
+    ) {}
 
-    // Konstruktor zum Initialisieren der Formulardaten
-    public function __construct($name, $email, $subject, $message)
-    {
-        $this->name = $name;
-        $this->email = $email;
-        $this->subject = $subject;
-        $this->message = $message;
-    }
-
-    // Der Notification-Kanal, den wir verwenden (in diesem Fall nur E-Mail)
-    public function via($notifiable)
+    public function via(object $notifiable): array
     {
         return ['mail'];
     }
 
-    // E-Mail-Nachricht für die Notification
-    public function toMail($notifiable)
+    public function toMail(object $notifiable): MailMessage
     {
         return (new MailMessage)
-            ->subject('Neue Kontaktanfrage')
-            ->greeting('Hallo, es gibt eine neue Nachricht!')
-            ->line('Ein Kunde hat das Kontaktformular ausgefüllt.')
-            ->line('Name: ' . $this->name)
-            ->line('E-Mail: ' . $this->email)
-            ->line('Betreff: ' . $this->subject)
-            ->line('Nachricht: ' . $this->message)
-            ->line('Antworten Sie bitte auf diese Nachricht, um mit dem Kunden in Kontakt zu treten.')
-            ->salutation('Mit freundlichen Grüßen, CBW Schulnetz Team');
+            ->subject('Neue Kontaktanfrage | '.config('app.name'))
+            ->replyTo($this->email, $this->name)
+            ->greeting('Neue Kontaktanfrage')
+            ->line('Über das SocialScope-Kontaktformular ist eine neue Nachricht eingegangen.')
+            ->line('Name: '.$this->name)
+            ->line('E-Mail: '.$this->email)
+            ->line('Betreff: '.$this->subject)
+            ->line('Nachricht: '.$this->message)
+            ->line('Du kannst direkt auf diese E-Mail antworten, um die anfragende Person zu kontaktieren.')
+            ->salutation('SocialScope Systembenachrichtigung');
     }
 
-    // Optionale Methode für die Datenbankbenachrichtigung (falls gewünscht)
-    public function toArray($notifiable)
+    public function toArray(object $notifiable): array
     {
         return [
             'name' => $this->name,

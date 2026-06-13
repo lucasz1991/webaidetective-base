@@ -2,12 +2,10 @@
 {{-- Greeting --}}
 @if (! empty($greeting))
 # {{ $greeting }}
+@elseif ($level === 'error')
+# Das hat leider nicht funktioniert.
 @else
-@if ($level === 'error')
-# @lang('Whoops!')
-@else
-# @lang('Hello!')
-@endif
+# Hallo!
 @endif
 
 {{-- Intro Lines --}}
@@ -39,20 +37,15 @@
 @if (! empty($salutation))
 {{ $salutation }}
 @else
-@lang('Regards'),<br>
-{{ config('app.name') }}
+Viele Grüße,<br>
+dein {{ config('app.name') }} Team
 @endif
 
 {{-- Subcopy --}}
 @isset($actionText)
 <x-slot:subcopy>
-@lang(
-    "Wenn Sie Probleme haben, den \":actionText\"-Button zu klicken, kopieren Sie bitte die folgende URL und fügen Sie sie\n".
-    'in Ihren Webbrowser ein:',
-    [
-        'actionText' => $actionText,
-    ]
-) <span class="break-all">[{{ $displayableActionUrl }}]({{ $actionUrl }})</span>
+Falls der Button „{{ $actionText }}“ nicht funktioniert, kopiere diesen Link in deinen Browser:
+<span class="break-all">[{{ $displayableActionUrl }}]({{ $actionUrl }})</span>
 </x-slot:subcopy>
 @endisset
 </x-mail::message>

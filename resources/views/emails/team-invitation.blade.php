@@ -1,23 +1,24 @@
-@component('mail::message')
-{{ __('You have been invited to join the :team team!', ['team' => $invitation->team->name]) }}
+<x-mail::message>
+# Einladung zu {{ $invitation->team->name }}
+
+Du wurdest eingeladen, dem SocialScope-Arbeitsbereich **{{ $invitation->team->name }}** beizutreten. Dort könnt ihr Recherchen, Profile und Erkenntnisse gemeinsam verwalten.
 
 @if (Laravel\Fortify\Features::enabled(Laravel\Fortify\Features::registration()))
-{{ __('If you do not have an account, you may create one by clicking the button below. After creating an account, you may click the invitation acceptance button in this email to accept the team invitation:') }}
+Falls du noch kein SocialScope-Konto hast, kannst du zuerst eines erstellen:
 
-@component('mail::button', ['url' => route('register')])
-{{ __('Create Account') }}
-@endcomponent
+<x-mail::button :url="route('register')">
+Konto erstellen
+</x-mail::button>
 
-{{ __('If you already have an account, you may accept this invitation by clicking the button below:') }}
-
-@else
-{{ __('You may accept this invitation by clicking the button below:') }}
+Anschließend kannst du über diese E-Mail dem Arbeitsbereich beitreten.
 @endif
 
+<x-mail::button :url="$acceptUrl" color="success">
+Einladung annehmen
+</x-mail::button>
 
-@component('mail::button', ['url' => $acceptUrl])
-{{ __('Accept Invitation') }}
-@endcomponent
+Wenn du diese Einladung nicht erwartet hast, kannst du die E-Mail einfach ignorieren.
 
-{{ __('If you did not expect to receive an invitation to this team, you may discard this email.') }}
-@endcomponent
+Viele Grüße,<br>
+dein SocialScope Team
+</x-mail::message>

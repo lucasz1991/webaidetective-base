@@ -3,7 +3,6 @@
 namespace App\Notifications;
 
 use Illuminate\Bus\Queueable;
-use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
 use Illuminate\Support\Carbon;
@@ -13,62 +12,37 @@ class CustomVerifyEmail extends Notification
 {
     use Queueable;
 
-    /**
-     * Create a new notification instance.
-     */
-    public function __construct()
-    {
-        //
-    }
-
-    /**
-     * Get the notification's delivery channels.
-     *
-     * @return array<int, string>
-     */
     public function via(object $notifiable): array
     {
         return ['mail'];
     }
 
-    /**
-     * Get the mail representation of the notification.
-     */
     public function toMail(object $notifiable): MailMessage
     {
-        $verificationUrl = $this->verificationUrl($notifiable);
-    
         return (new MailMessage)
-            ->subject('Bestätige deine E-Mail-Adresse')
-            ->greeting('Willkommen bei CBW Schulnetz!')
-            ->line('Vielen Dank, dass du dich bei CBW Schulnetz registriert hast.')
-            ->line('Bitte klicke auf den folgenden Button, um deine E-Mail-Adresse zu bestätigen:')
-            ->action('E-Mail bestätigen', $verificationUrl)
-            ->line('Falls du diese Aktion nicht angefordert hast, ignoriere bitte diese Nachricht.')
-            ->salutation('Liebe Grüße, dein CBW Schulnetz Team');
+            ->subject('E-Mail-Adresse bestätigen | '.config('app.name'))
+            ->greeting('Willkommen bei SocialScope, '.$notifiable->name.'!')
+            ->line('Bestätige jetzt deine E-Mail-Adresse, damit dein Konto vollständig aktiviert wird.')
+            ->action('E-Mail-Adresse bestätigen', $this->verificationUrl($notifiable))
+            ->line('Der Bestätigungslink ist 60 Minuten gültig.')
+            ->line('Falls du kein SocialScope-Konto erstellt hast, kannst du diese Nachricht ignorieren.')
+            ->salutation('Viele Grüße, dein SocialScope Team');
     }
 
-    /**
-     * Get the verification URL for the given notifiable.
-     */
-    protected function verificationUrl($notifiable): string
+    protected function verificationUrl(object $notifiable): string
     {
         return URL::temporarySignedRoute(
-            'verification.verify', 
-            Carbon::now()->addMinutes(60), 
-            ['id' => $notifiable->getKey(), 'hash' => sha1($notifiable->getEmailForVerification())]
+            'verification.verify',
+            Carbon::now()->addMinutes(60),
+            [
+                'id' => $notifiable->getKey(),
+                'hash' => sha1($notifiable->getEmailForVerification()),
+            ],
         );
     }
 
-    /**
-     * Get the array representation of the notification.
-     *
-     * @return array<string, mixed>
-     */
     public function toArray(object $notifiable): array
     {
-        return [
-            //
-        ];
+        return [];
     }
 }

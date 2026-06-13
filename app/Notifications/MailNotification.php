@@ -16,8 +16,7 @@ class MailNotification extends Notification implements ShouldQueue
 
     public function __construct(
         protected MailModel|array $mail,
-    ) {
-    }
+    ) {}
 
     public function via($notifiable): array
     {
@@ -27,7 +26,7 @@ class MailNotification extends Notification implements ShouldQueue
     public function toMail(object $notifiable): MailMessage
     {
         $content = $this->content();
-        $subject = $content['subject'] ?? 'Nachricht';
+        $subject = $content['subject'] ?? 'SocialScope Benachrichtigung';
         $greeting = $content['header'] ?? null;
         $body = $content['body'] ?? '';
         $link = $content['link'] ?? null;
@@ -48,7 +47,7 @@ class MailNotification extends Notification implements ShouldQueue
             $message->action('Weiter', $link);
         }
 
-        return $message->salutation('Mit freundlichen Gruessen, dein WebAIDetective Team');
+        return $message->salutation('Viele Grüße, dein SocialScope Team');
     }
 
     private function content(): array
