@@ -2,6 +2,7 @@
 
 namespace App\Services\TrackedPeople;
 
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Log;
@@ -23,6 +24,7 @@ class TrackedPersonInstagramScanCoordinator
             'generation' => $generation,
             'label' => $label,
             'startedAt' => now()->toIso8601String(),
+            'updatedAt' => now()->toIso8601String(),
             'processes' => [],
             'gracefulStopFilePath' => $gracefulStopFilePath,
             'gracefulStopRequested' => false,
@@ -79,6 +81,47 @@ class TrackedPersonInstagramScanCoordinator
         return true;
     }
 
+    public function hasActiveScan(int $trackedPersonId): bool
+    {
+        $active = $this->active($trackedPersonId);
+
+        if ((int) ($active['generation'] ?? 0) <= 0) {
+            return false;
+        }
+
+        $processes = is_array($active['processes'] ?? null) ? $active['processes'] : [];
+
+        if ($processes !== []) {
+            return collect($processes)->contains(
+                fn (array $process): bool => $this->processIsRunning((int) ($process['pid'] ?? 0)),
+            );
+        }
+
+        $updatedAt = $active['updatedAt'] ?? $active['startedAt'] ?? null;
+
+        if (! is_string($updatedAt) || $updatedAt === '') {
+            return false;
+        }
+
+        try {
+            return now()->diffInSeconds(Carbon::parse($updatedAt)) < 180;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    public function touchActiveScan(int $trackedPersonId): void
+    {
+        $active = $this->active($trackedPersonId);
+
+        if ((int) ($active['generation'] ?? 0) <= 0) {
+            return;
+        }
+
+        $active['updatedAt'] = now()->toIso8601String();
+        Cache::put($this->activeKey($trackedPersonId), $active, now()->addHours(12));
+    }
+
     public function shouldStopGracefully(int $trackedPersonId, int $generation): bool
     {
         $active = $this->active($trackedPersonId);
@@ -132,6 +175,7 @@ class TrackedPersonInstagramScanCoordinator
             ->all();
 
         $active['processes'] = $processes;
+        $active['updatedAt'] = now()->toIso8601String();
         Cache::put($this->activeKey($trackedPersonId), $active, now()->addHours(12));
     }
 
@@ -147,6 +191,7 @@ class TrackedPersonInstagramScanCoordinator
             ->reject(fn (array $process): bool => (int) ($process['pid'] ?? 0) === $pid)
             ->values()
             ->all();
+        $active['updatedAt'] = now()->toIso8601String();
 
         Cache::put($this->activeKey($trackedPersonId), $active, now()->addHours(12));
     }
@@ -261,6 +306,22 @@ class TrackedPersonInstagramScanCoordinator
         }
 
         (new Process(['kill', '-'.$signal, (string) $pid]))->setTimeout(5)->run();
+    }
+
+    private function processIsRunning(int $pid): bool
+    {
+        if ($pid <= 0) {
+            return false;
+        }
+
+        if (function_exists('posix_kill')) {
+            return @posix_kill($pid, 0);
+        }
+
+        $process = new Process(['ps', '-p', (string) $pid, '-o', 'pid=']);
+        $process->setTimeout(5)->run();
+
+        return $process->isSuccessful() && trim($process->getOutput()) !== '';
     }
 
     private function writeGracefulStopFile(array $active, string $reason): void

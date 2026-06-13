@@ -352,6 +352,10 @@
             return (Array.isArray(this.scanActivities) ? this.scanActivities : [])
                 .filter((scan) => ['queued', 'running'].includes(scan?.status));
         },
+        pausedScans() {
+            return (Array.isArray(this.scanActivities) ? this.scanActivities : [])
+                .filter((scan) => scan?.status === 'paused');
+        },
         scanPercent(scan) {
             return Math.max(0, Math.min(100, Number(scan?.percent || 0)));
         },
@@ -925,6 +929,41 @@
                                             class="mt-1.5 text-right text-[10px] font-semibold text-slate-400"
                                             x-text="scan.expected ? `${scan.loaded} von ${scan.expected}` : `${scan.loaded} geladen`"
                                         ></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+
+                        <template x-for="scan in pausedScans()" :key="'paused-scan-' + scan.token">
+                            <div class="max-w-[92%] overflow-hidden rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-sm">
+                                <div class="flex items-start gap-3">
+                                    <span class="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-amber-700 ring-1 ring-amber-200">
+                                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <path d="M9 8v8M15 8v8" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/>
+                                        </svg>
+                                    </span>
+                                    <div class="min-w-0 flex-1">
+                                        <p class="truncate font-black text-slate-900" x-text="scan.label || 'Instagram-Scan'"></p>
+                                        <p class="mt-0.5 text-[11px] font-bold uppercase tracking-wide text-amber-700">Unterbrochen</p>
+                                        <p class="mt-2 text-xs leading-5 text-amber-900" x-text="scan.message || 'Der bisherige Datenstand wurde gespeichert.'"></p>
+                                        <div class="mt-3 flex flex-wrap gap-2">
+                                            <button
+                                                type="button"
+                                                x-on:click="$wire.resumeAssistantScan(scan.token)"
+                                                x-bind:disabled="busy()"
+                                                class="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white transition hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60"
+                                            >
+                                                Scan fortsetzen
+                                            </button>
+                                            <button
+                                                type="button"
+                                                x-on:click="$wire.dismissAssistantScan(scan.token)"
+                                                x-bind:disabled="busy()"
+                                                class="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-black text-amber-900 transition hover:bg-amber-100 disabled:cursor-wait disabled:opacity-60"
+                                            >
+                                                Beenden, Daten behalten
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

@@ -37,4 +37,27 @@ class InvestigationAssistantScanStatusStoreTest extends TestCase
         $this->assertSame(100, $completed['percent']);
         $this->assertSame(99, data_get($store->get($token), 'result.snapshot_id'));
     }
+
+    public function test_it_marks_an_interrupted_scan_as_resumable_until_it_is_dismissed(): void
+    {
+        $token = (string) Str::uuid();
+        $store = app(InvestigationAssistantScanStatusStore::class);
+        $store->start($token, [
+            'user_id' => 42,
+            'tracked_person_id' => 7,
+            'scan_type' => 'followers',
+            'label' => 'Followerlisten-Scan',
+        ]);
+
+        $paused = $store->pause($token, 'Scan wurde unterbrochen.', [
+            'observed_count' => 120,
+        ]);
+        $dismissed = $store->dismiss($token, 'Datenstand wurde behalten.');
+
+        $this->assertSame('paused', $paused['status']);
+        $this->assertTrue($paused['resumable']);
+        $this->assertSame(120, data_get($paused, 'result.observed_count'));
+        $this->assertSame('dismissed', $dismissed['status']);
+        $this->assertFalse($dismissed['resumable']);
+    }
 }

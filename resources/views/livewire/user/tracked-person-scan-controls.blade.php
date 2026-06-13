@@ -89,6 +89,32 @@
         </div>
     @endif
 
+    @if($resumableInstagramScan)
+        <div class="rounded-lg border border-amber-300 bg-amber-50 p-4 text-amber-950">
+            <div class="text-sm font-bold">{{ $resumableInstagramScan['label'] }} wurde unterbrochen</div>
+            <p class="mt-1 text-xs leading-5">{{ $resumableInstagramScan['message'] }}</p>
+            <p class="mt-1 text-xs font-semibold">{{ number_format($resumableInstagramScan['saved_count'], 0, ',', '.') }} Eintraege/Kandidaten sind bereits gespeichert.</p>
+            <div class="mt-3 flex flex-wrap gap-2">
+                <button
+                    type="button"
+                    wire:click="resumeSavedInstagramScan('{{ $resumableInstagramScan['scan_type'] }}')"
+                    wire:loading.attr="disabled"
+                    class="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-bold text-white hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60"
+                >
+                    Scan fortsetzen
+                </button>
+                <button
+                    type="button"
+                    wire:click="dismissSavedInstagramScan('{{ $resumableInstagramScan['source'] }}', {{ $resumableInstagramScan['id'] }})"
+                    wire:loading.attr="disabled"
+                    class="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-900 hover:bg-amber-100 disabled:cursor-wait disabled:opacity-60"
+                >
+                    Beenden, Daten behalten
+                </button>
+            </div>
+        </div>
+    @endif
+
     <div class="rounded-lg border border-slate-200 bg-slate-50 p-3">
         <div class="flex flex-wrap items-center justify-between gap-2">
             <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Scan starten</div>

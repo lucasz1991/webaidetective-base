@@ -709,6 +709,11 @@ class TrackedPersonInstagramSuggestionScanService
     private function buildResumePendingFromLastScan(TrackedPersonInstagramSuggestionScan $lastScan): array
     {
         $payload = is_array($lastScan->raw_payload) ? $lastScan->raw_payload : [];
+
+        if (filled(data_get($payload, 'resumeDismissedAt'))) {
+            return [false, []];
+        }
+
         $scanPayload = $this->suggestionPayload($payload);
         $observed = $this->normalizeObservedSuggestionItems($scanPayload['observedSuggestions'] ?? []);
         $checked = $this->normalizeObservedSuggestionItems($scanPayload['checkedCandidates'] ?? []);

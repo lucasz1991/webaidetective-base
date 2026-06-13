@@ -4,10 +4,13 @@ namespace App\Livewire\User;
 
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\InstagramProfile;
+use App\Models\InstagramProfileListScan;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramMedia;
+use App\Models\TrackedPersonInstagramPublicProfileScan;
 use App\Models\TrackedPersonInstagramSnapshot;
+use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
@@ -290,6 +293,67 @@ class TrackedPersonDetail extends Component
     public function scanInstagramFollowingList(): void
     {
         $this->runInstagramRelationshipListScan('following');
+    }
+
+    public function resumeSavedInstagramScan(string $scanType): void
+    {
+        switch ($scanType) {
+            case 'followers':
+                $this->scanInstagramFollowersList();
+                break;
+            case 'following':
+                $this->scanInstagramFollowingList();
+                break;
+            case 'suggestions':
+                $this->scanInstagramSuggestions();
+                break;
+            case 'suggestion_deepsearch':
+                $this->scanInstagramSuggestionDeepSearch();
+                break;
+            case 'public_connections':
+                $this->scanPublicProfileConnections();
+                break;
+            default:
+                $this->setDetailStatus('Dieser Scan-Typ kann nicht fortgesetzt werden.', 'error');
+        }
+    }
+
+    public function dismissSavedInstagramScan(string $source, int $scanId): void
+    {
+        $trackedPerson = $this->resolveTrackedPerson();
+        $scan = match ($source) {
+            'list' => InstagramProfileListScan::query()
+                ->whereKey($scanId)
+                ->where('tracked_person_id', $trackedPerson->id)
+                ->where('user_id', Auth::id())
+                ->first(),
+            'suggestion' => TrackedPersonInstagramSuggestionScan::query()
+                ->whereKey($scanId)
+                ->where('tracked_person_id', $trackedPerson->id)
+                ->where('user_id', Auth::id())
+                ->first(),
+            'public_connections' => TrackedPersonInstagramPublicProfileScan::query()
+                ->whereKey($scanId)
+                ->where('tracked_person_id', $trackedPerson->id)
+                ->where('user_id', Auth::id())
+                ->first(),
+            default => null,
+        };
+
+        if (! $scan) {
+            return;
+        }
+
+        $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
+        $scan->forceFill([
+            'raw_payload' => [
+                ...$payload,
+                'isResumable' => false,
+                'resumeDismissedAt' => now('UTC')->toIso8601String(),
+            ],
+        ])->save();
+
+        $this->setDetailStatus('Scan beendet. Alle bisher erfassten Daten bleiben gespeichert.', 'partial');
     }
 
     public function scanPublicProfileConnections(): void
@@ -1210,8 +1274,11 @@ class TrackedPersonDetail extends Component
     public function render()
     {
         if ($this->compact) {
+            $trackedPerson = $this->resolveTrackedPerson()->load('latestInstagramSnapshot');
+
             return view('livewire.user.tracked-person-scan-controls', [
-                'trackedPerson' => $this->resolveTrackedPerson()->load('latestInstagramSnapshot'),
+                'trackedPerson' => $trackedPerson,
+                'resumableInstagramScan' => $this->resumableInstagramScan($trackedPerson),
             ]);
         }
 
@@ -1410,7 +1477,94 @@ class TrackedPersonDetail extends Component
             'latestDetectedChangeRows' => $this->detectedChangeRows($latestSnapshot?->detected_changes ?? []),
             'currentInstagramPostRows' => $this->instagramPostRows($trackedPerson->currentInstagramProfile?->posts ?? collect()),
             'historySnapshotRows' => $this->historySnapshotRows($trackedPerson->instagramSnapshots ?? collect()),
+            'resumableInstagramScan' => $this->resumableInstagramScan($trackedPerson),
         ];
+    }
+
+    private function resumableInstagramScan(TrackedPerson $trackedPerson): ?array
+    {
+        $candidates = [];
+        $latestListScan = InstagramProfileListScan::query()
+            ->where('tracked_person_id', $trackedPerson->id)
+            ->where('user_id', $trackedPerson->user_id)
+            ->latest('scanned_at')
+            ->first();
+
+        if (
+            $latestListScan
+            && ! (bool) data_get($latestListScan->raw_payload, 'resumeDismissedAt')
+            && (
+                $latestListScan->gracefully_stopped
+                || $latestListScan->rate_limited
+                || ! $latestListScan->complete
+            )
+        ) {
+            $candidates[] = [
+                'source' => 'list',
+                'id' => (int) $latestListScan->id,
+                'scan_type' => $latestListScan->list_type,
+                'label' => $latestListScan->list_type === 'followers' ? 'Followerlisten-Scan' : 'Gefolgt-Listen-Scan',
+                'message' => $latestListScan->status_message ?: 'Der Listen-Scan wurde unterbrochen.',
+                'saved_count' => (int) $latestListScan->observed_count,
+                'date' => $latestListScan->scanned_at,
+            ];
+        }
+
+        $latestSuggestionScan = TrackedPersonInstagramSuggestionScan::query()
+            ->where('tracked_person_id', $trackedPerson->id)
+            ->where('user_id', $trackedPerson->user_id)
+            ->latest('analyzed_at')
+            ->first();
+        $suggestionPayload = is_array($latestSuggestionScan?->raw_payload) ? $latestSuggestionScan->raw_payload : [];
+        $deepSearch = data_get($suggestionPayload, 'operationMode') === 'suggestion-connections';
+        $suggestionsIncomplete = $deepSearch
+            && $latestSuggestionScan
+            && (int) $latestSuggestionScan->suggestions_observed_count > (int) $latestSuggestionScan->suggestions_checked_count;
+
+        if (
+            $latestSuggestionScan
+            && ! (bool) data_get($suggestionPayload, 'resumeDismissedAt')
+            && ($latestSuggestionScan->gracefully_stopped || $suggestionsIncomplete)
+        ) {
+            $candidates[] = [
+                'source' => 'suggestion',
+                'id' => (int) $latestSuggestionScan->id,
+                'scan_type' => $deepSearch ? 'suggestion_deepsearch' : 'suggestions',
+                'label' => $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan',
+                'message' => $latestSuggestionScan->status_message ?: 'Der Vorschlaege-Scan wurde unterbrochen.',
+                'saved_count' => $deepSearch
+                    ? (int) $latestSuggestionScan->suggestions_checked_count
+                    : (int) $latestSuggestionScan->suggestions_observed_count,
+                'date' => $latestSuggestionScan->analyzed_at,
+            ];
+        }
+
+        $latestPublicScan = TrackedPersonInstagramPublicProfileScan::query()
+            ->where('tracked_person_id', $trackedPerson->id)
+            ->where('user_id', $trackedPerson->user_id)
+            ->latest('analyzed_at')
+            ->first();
+        $publicPayload = is_array($latestPublicScan?->raw_payload) ? $latestPublicScan->raw_payload : [];
+
+        if (
+            $latestPublicScan
+            && (bool) data_get($publicPayload, 'isResumable', false)
+            && ! (bool) data_get($publicPayload, 'resumeDismissedAt')
+        ) {
+            $candidates[] = [
+                'source' => 'public_connections',
+                'id' => (int) $latestPublicScan->id,
+                'scan_type' => 'public_connections',
+                'label' => 'Public-Profile-Verbindungsscan',
+                'message' => $latestPublicScan->status_message ?: 'Der Verbindungsscan wurde unterbrochen.',
+                'saved_count' => (int) data_get($publicPayload, 'candidatesChecked', 0),
+                'date' => $latestPublicScan->analyzed_at,
+            ];
+        }
+
+        return collect($candidates)
+            ->sortByDesc(fn (array $candidate) => optional($candidate['date'])->getTimestamp() ?? 0)
+            ->first();
     }
 
     private function detailStatusClass(?string $level): string

@@ -2,10 +2,17 @@
 
 namespace App\Livewire\Tools;
 
+use App\Jobs\RunTrackedPersonInstagramToolScan;
+use App\Models\InstagramProfileListScan;
 use App\Models\Setting;
+use App\Models\TrackedPerson;
+use App\Models\TrackedPersonInstagramPublicProfileScan;
+use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Services\Ai\InvestigationAssistantScanStatusStore;
 use App\Services\Ai\InvestigationAssistantToolService;
+use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use GuzzleHttp\Psr7\Utils;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -211,6 +218,17 @@ class Chatbot extends Component
                 continue;
             }
 
+            if (
+                ($status['status'] ?? null) === 'running'
+                && $this->assistantScanLooksInterrupted($status)
+            ) {
+                $status = $statusStore->pause(
+                    $token,
+                    'Der Scanprozess antwortet nicht mehr. Der bisher gespeicherte Datenstand kann fortgesetzt oder abgeschlossen werden.',
+                    is_array($status['result'] ?? null) ? $status['result'] : [],
+                );
+            }
+
             $this->scanActivities[$index] = [
                 ...$activity,
                 ...$status,
@@ -246,6 +264,94 @@ class Chatbot extends Component
             ->values()
             ->all();
         $this->persistScanActivities();
+    }
+
+    public function resumeAssistantScan(string $token): void
+    {
+        $user = Auth::user();
+        $statusStore = app(InvestigationAssistantScanStatusStore::class);
+        $status = $statusStore->get($token);
+        $scanType = strtolower(trim((string) ($status['scan_type'] ?? '')));
+        $trackedPersonId = (int) ($status['tracked_person_id'] ?? 0);
+        $supportedTypes = ['mini', 'full', 'followers', 'following', 'suggestions', 'suggestion_deepsearch', 'posts', 'public_connections'];
+
+        if (
+            ! $user
+            || ! $status
+            || (int) ($status['user_id'] ?? 0) !== (int) $user->id
+            || ($status['status'] ?? null) !== 'paused'
+            || ! in_array($scanType, $supportedTypes, true)
+        ) {
+            return;
+        }
+
+        $trackedPerson = TrackedPerson::query()
+            ->whereKey($trackedPersonId)
+            ->where('user_id', $user->id)
+            ->first();
+
+        if (! $trackedPerson || ! $trackedPerson->instagram_username) {
+            return;
+        }
+
+        $newToken = (string) Str::uuid();
+        $label = (string) ($status['label'] ?? 'Instagram-Scan');
+        $tracking = $statusStore->start($newToken, [
+            'user_id' => (int) $user->id,
+            'tracked_person_id' => (int) $trackedPerson->id,
+            'instagram_username' => $trackedPerson->instagram_username,
+            'scan_type' => $scanType,
+            'label' => $label,
+            'message' => $label.' wird ab dem gespeicherten Datenstand fortgesetzt.',
+            'resumed_from_token' => $token,
+        ]);
+
+        $statusStore->dismiss($token, 'Scan wurde in einem neuen Lauf fortgesetzt.');
+        RunTrackedPersonInstagramToolScan::dispatch((int) $trackedPerson->id, $scanType, false, $newToken);
+
+        $this->scanActivities = collect($this->scanActivities)
+            ->reject(fn (array $activity): bool => ($activity['token'] ?? null) === $token)
+            ->push([
+                ...$tracking,
+                'reacted' => false,
+            ])
+            ->take(-4)
+            ->values()
+            ->all();
+        $this->persistScanActivities();
+    }
+
+    public function dismissAssistantScan(string $token): void
+    {
+        $user = Auth::user();
+        $statusStore = app(InvestigationAssistantScanStatusStore::class);
+        $status = $statusStore->get($token);
+
+        if (
+            ! $user
+            || ! $status
+            || (int) ($status['user_id'] ?? 0) !== (int) $user->id
+            || ($status['status'] ?? null) !== 'paused'
+        ) {
+            return;
+        }
+
+        $this->dismissPersistedResumeState(
+            (int) ($status['tracked_person_id'] ?? 0),
+            (string) ($status['scan_type'] ?? ''),
+            (int) $user->id,
+        );
+        $statusStore->dismiss($token, 'Scan wurde beendet. Die bisher gespeicherten Daten bleiben erhalten.');
+        $this->scanActivities = collect($this->scanActivities)
+            ->reject(fn (array $activity): bool => ($activity['token'] ?? null) === $token)
+            ->values()
+            ->all();
+        $this->persistScanActivities();
+        $this->appendTransientToolAlert(
+            (string) ($status['label'] ?? 'Instagram-Scan'),
+            'Scan beendet. Die bisher gespeicherten Daten bleiben erhalten.',
+            true,
+        );
     }
 
     public function render()
@@ -768,6 +874,68 @@ class Chatbot extends Component
     private function persistScanActivities(): void
     {
         Session::put(self::SCAN_ACTIVITIES_KEY, array_slice($this->scanActivities, -4));
+    }
+
+    private function assistantScanLooksInterrupted(array $status): bool
+    {
+        $trackedPersonId = (int) ($status['tracked_person_id'] ?? 0);
+        $updatedAt = $status['updated_at'] ?? null;
+
+        if ($trackedPersonId <= 0 || ! is_string($updatedAt)) {
+            return false;
+        }
+
+        try {
+            if (Carbon::parse($updatedAt)->diffInSeconds(now()) < 30) {
+                return false;
+            }
+        } catch (\Throwable) {
+            return false;
+        }
+
+        return ! app(TrackedPersonInstagramScanCoordinator::class)->hasActiveScan($trackedPersonId);
+    }
+
+    private function dismissPersistedResumeState(int $trackedPersonId, string $scanType, int $userId): void
+    {
+        $scan = match ($scanType) {
+            'followers', 'following' => InstagramProfileListScan::query()
+                ->where('tracked_person_id', $trackedPersonId)
+                ->where('user_id', $userId)
+                ->where('list_type', $scanType)
+                ->latest('scanned_at')
+                ->first(),
+            'suggestions', 'suggestion_deepsearch' => TrackedPersonInstagramSuggestionScan::query()
+                ->where('tracked_person_id', $trackedPersonId)
+                ->where('user_id', $userId)
+                ->latest('analyzed_at')
+                ->limit(10)
+                ->get()
+                ->first(function (TrackedPersonInstagramSuggestionScan $scan) use ($scanType): bool {
+                    $isDeepSearch = data_get($scan->raw_payload, 'operationMode') === 'suggestion-connections';
+
+                    return $scanType === 'suggestion_deepsearch' ? $isDeepSearch : ! $isDeepSearch;
+                }),
+            'public_connections' => TrackedPersonInstagramPublicProfileScan::query()
+                ->where('tracked_person_id', $trackedPersonId)
+                ->where('user_id', $userId)
+                ->latest('analyzed_at')
+                ->first(),
+            default => null,
+        };
+
+        if (! $scan) {
+            return;
+        }
+
+        $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
+        $scan->forceFill([
+            'raw_payload' => [
+                ...$payload,
+                'isResumable' => false,
+                'resumeDismissedAt' => now('UTC')->toIso8601String(),
+            ],
+        ])->save();
     }
 
     private function trimTranscript(array $transcript): array

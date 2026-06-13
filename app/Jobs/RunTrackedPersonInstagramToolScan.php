@@ -7,6 +7,7 @@ use App\Models\TrackedPerson;
 use App\Services\Ai\InvestigationAssistantScanStatusStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -47,7 +48,10 @@ class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
 
         $statusStore = app(InvestigationAssistantScanStatusStore::class);
         $progress = $this->assistantScanToken
-            ? fn (array $state) => $statusStore->progress($this->assistantScanToken, $state)
+            ? function (array $state) use ($statusStore): void {
+                app(TrackedPersonInstagramScanCoordinator::class)->touchActiveScan($this->trackedPersonId);
+                $statusStore->progress($this->assistantScanToken, $state);
+            }
             : null;
 
         if ($this->assistantScanToken) {
@@ -64,7 +68,7 @@ class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
         ])->save();
 
         try {
-            match ($this->normalizedScanType()) {
+            $result = match ($this->normalizedScanType()) {
                 'mini' => app(TrackedPersonInstagramWorkflowService::class)->runAnalysis($trackedPerson, false, $progress),
                 'full' => app(TrackedPersonInstagramWorkflowService::class)->runAnalysis($trackedPerson, true, $progress),
                 'followers' => app(TrackedPersonInstagramAnalysisService::class)->scanRelationshipList($trackedPerson, 'followers', $progress),
@@ -82,18 +86,28 @@ class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
 
             if ($this->assistantScanToken) {
                 $freshPerson = $trackedPerson->fresh('latestInstagramSnapshot') ?: $trackedPerson;
-                $statusStore->complete(
-                    $this->assistantScanToken,
-                    [
-                        'tracked_person_id' => (int) $freshPerson->id,
-                        'instagram_username' => $freshPerson->instagram_username,
-                        'status_level' => $freshPerson->last_instagram_status_level,
-                        'status_message' => $freshPerson->last_instagram_status_message,
-                        'analyzed_at' => optional($freshPerson->last_instagram_analyzed_at)?->toIso8601String(),
-                        'snapshot_id' => $freshPerson->latestInstagramSnapshot?->id,
-                    ],
-                    $this->label().' wurde abgeschlossen.',
-                );
+                $statusResult = [
+                    'tracked_person_id' => (int) $freshPerson->id,
+                    'instagram_username' => $freshPerson->instagram_username,
+                    'status_level' => $freshPerson->last_instagram_status_level,
+                    'status_message' => $freshPerson->last_instagram_status_message,
+                    'analyzed_at' => optional($freshPerson->last_instagram_analyzed_at)?->toIso8601String(),
+                    'snapshot_id' => $freshPerson->latestInstagramSnapshot?->id,
+                ];
+
+                if ($this->resultIsResumable($result)) {
+                    $statusStore->pause(
+                        $this->assistantScanToken,
+                        $this->label().' wurde unterbrochen. Der bisherige Datenstand wurde gespeichert.',
+                        $statusResult,
+                    );
+                } else {
+                    $statusStore->complete(
+                        $this->assistantScanToken,
+                        $statusResult,
+                        $this->label().' wurde abgeschlossen.',
+                    );
+                }
             }
         } catch (TrackedPersonInstagramScanCancelledException) {
             $trackedPerson->markInstagramScanTerminal(
@@ -148,6 +162,56 @@ class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
             'public_connections' => 'Public-Profile-Verbindungsscan',
             default => 'Instagram-Scan',
         };
+    }
+
+    private function resultIsResumable(mixed $result): bool
+    {
+        if ($result instanceof \Illuminate\Support\Collection) {
+            return $result->contains(fn (mixed $item): bool => $this->resultIsResumable($item));
+        }
+
+        if (is_object($result)) {
+            if ((bool) ($result->gracefully_stopped ?? false)) {
+                return true;
+            }
+
+            if (in_array($result->status_level ?? null, ['cancelled', 'partial'], true)) {
+                return $this->containsResumeSignal($result->raw_payload ?? []);
+            }
+
+            return false;
+        }
+
+        return is_array($result) && (
+            in_array($result['resolvedStatusLevel'] ?? null, ['cancelled'], true)
+            || $this->containsResumeSignal($result)
+        );
+    }
+
+    private function containsResumeSignal(mixed $value): bool
+    {
+        if (is_object($value)) {
+            return $this->resultIsResumable($value);
+        }
+
+        if (! is_array($value)) {
+            return false;
+        }
+
+        foreach ($value as $key => $item) {
+            if (
+                in_array($key, ['gracefullyStopped', 'gracefully_stopped', 'stoppedForRateLimit', 'isResumable'], true)
+                && $item === true
+            ) {
+                return true;
+            }
+
+            if ((is_array($item) || is_object($item)) && $this->containsResumeSignal($item)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function failAssistantScan(string $message): void

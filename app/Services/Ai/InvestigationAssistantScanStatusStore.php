@@ -50,6 +50,29 @@ class InvestigationAssistantScanStatusStore
         ]);
     }
 
+    public function pause(string $token, string $message, array $result = []): array
+    {
+        return $this->update($token, [
+            'status' => 'paused',
+            'phase' => 'paused',
+            'message' => $message,
+            'resumable' => true,
+            'result' => $result,
+            'paused_at' => now()->toIso8601String(),
+        ]);
+    }
+
+    public function dismiss(string $token, string $message): array
+    {
+        return $this->update($token, [
+            'status' => 'dismissed',
+            'phase' => 'dismissed',
+            'message' => $message,
+            'resumable' => false,
+            'completed_at' => now()->toIso8601String(),
+        ]);
+    }
+
     public function fail(string $token, string $message, array $result = []): array
     {
         return $this->update($token, [

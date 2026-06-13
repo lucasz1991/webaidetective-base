@@ -273,6 +273,11 @@ class TrackedPersonInstagramProfileListScanService
         }
 
         $payload = is_array($lastScan->raw_payload) ? $lastScan->raw_payload : [];
+
+        if (filled(data_get($payload, 'resumeDismissedAt'))) {
+            return false;
+        }
+
         // Versuche verschiedene Pfade fuer observedCount zu lesen
         $observed = (int) (
             data_get($payload, 'profile.followersList.observedCount')
