@@ -5,7 +5,6 @@ namespace App\Livewire\Tools;
 use App\Models\Setting;
 use App\Services\Ai\InvestigationAssistantToolService;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Session;
@@ -141,7 +140,9 @@ class Chatbot extends Component
 
     private function runAssistantConversation(string $userMessage): string
     {
-        if (! $this->assistantIsConfigured()) {
+        $apiKey = Setting::getDecryptedValue('ai_assistant', 'api_key') ?? '';
+
+        if (! $this->assistantIsConfigured($apiKey)) {
             return 'Der AI-Assistent ist noch nicht vollstaendig konfiguriert. Bitte API-URL, API-Key und Modell im Adminbereich hinterlegen.';
         }
 
@@ -162,7 +163,7 @@ class Chatbot extends Component
         $finalMessage = '';
 
         for ($step = 0; $step < 5; $step++) {
-            $assistantResponse = $this->requestAssistant($transcript, $toolService->tools());
+            $assistantResponse = $this->requestAssistant($transcript, $toolService->tools(), $apiKey);
             $message = data_get($assistantResponse, 'choices.0.message', []);
             $toolCalls = $this->normalizeToolCalls($message['tool_calls'] ?? []);
             $content = trim((string) ($message['content'] ?? ''));
@@ -283,9 +284,8 @@ class Chatbot extends Component
         return $this->trimTranscript($transcript);
     }
 
-    private function requestAssistant(array $messages, array $tools): array
+    private function requestAssistant(array $messages, array $tools, string $apiKey): array
     {
-        $apiKey = $this->assistantApiKey();
         $apiUrl = trim((string) $this->apiUrl);
 
         $response = Http::acceptJson()
@@ -470,31 +470,13 @@ class Chatbot extends Component
         return array_filter($normalized, static fn (mixed $value): bool => $value !== null && $value !== '');
     }
 
-    private function assistantIsConfigured(): bool
+    private function assistantIsConfigured(string $apiKey): bool
     {
         return (bool) $this->status
             && is_string($this->apiUrl)
             && trim($this->apiUrl) !== ''
-            && $this->assistantApiKey() !== ''
+            && $apiKey !== ''
             && is_string($this->aiModel)
             && trim($this->aiModel) !== '';
-    }
-
-    private function assistantApiKey(): string
-    {
-        $value = Setting::getValue('ai_assistant', 'api_key');
-
-        if (! is_string($value) || trim($value) === '') {
-            return '';
-        }
-
-        try {
-            return trim(Crypt::decryptString($value));
-        } catch (\Throwable $exception) {
-            throw new \RuntimeException(
-                'Der gespeicherte AI API-Key kann nicht mit dem APP_KEY der Base-Installation entschluesselt werden. Bitte den Key im Adminbereich erneut speichern.',
-                previous: $exception,
-            );
-        }
     }
 }

@@ -1,4 +1,4 @@
-<div class="container mx-auto space-y-4" x-data="{ actionsOpen: false, scansOpen: false }">
+<div class="container mx-auto space-y-4">
     @php
         $visibility = $profile->profile_visibility ?: 'unknown';
         $visibilityLabel = match ($visibility) {
@@ -58,30 +58,33 @@
         </a>
 
         <div class="flex items-center gap-2">
-            <div class="relative">
-            <button
-                type="button"
-                @click="scansOpen = ! scansOpen; actionsOpen = false"
-                class="inline-flex h-9 items-center justify-center rounded-3xl bg-slate-950 px-4 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+            <x-ui.dropdown.anchor-dropdown
+                align="right"
+                width="auto"
+                :offset="8"
+                dropdown-classes=""
+                content-classes="w-72 rounded-2xl border border-slate-200 bg-white"
             >
-                Scans
-                <span class="ml-2 text-slate-300">▾</span>
-            </button>
-
-            <div
-                x-show="scansOpen"
-                x-cloak
-                @click.outside="scansOpen = false"
-                class="absolute right-0 top-full z-30 mt-2 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
-            >
-                <div class="border-b border-slate-100 px-4 py-3">
-                    <div class="text-xs font-bold uppercase tracking-wide text-slate-500">Profil scannen</div>
-                    <div class="mt-1 text-xs text-slate-500">{{ $visibilityLabel }}es Instagram-Profil</div>
-                </div>
-                <div class="flex flex-col p-2">
+                <x-slot name="trigger">
                     <button
                         type="button"
-                        @click="scansOpen = false"
+                        x-bind:aria-expanded="open"
+                        class="inline-flex h-9 items-center justify-center rounded-3xl bg-slate-950 px-4 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
+                    >
+                        Scans
+                        <span class="ml-2 text-slate-300">▾</span>
+                    </button>
+                </x-slot>
+
+                <x-slot name="content">
+                    <div class="border-b border-slate-100 px-4 py-3">
+                        <div class="text-xs font-bold uppercase tracking-wide text-slate-500">Profil scannen</div>
+                        <div class="mt-1 text-xs text-slate-500">{{ $visibilityLabel }}es Instagram-Profil</div>
+                    </div>
+                    <div class="flex flex-col p-2">
+                    <button
+                        type="button"
+                        @click="$dispatch('close')"
                         wire:click="analyzeInstagramMini"
                         wire:loading.attr="disabled"
                         wire:target="analyzeInstagramMini"
@@ -94,7 +97,7 @@
                     </button>
                     <button
                         type="button"
-                        @click="scansOpen = false"
+                        @click="$dispatch('close')"
                         wire:click="analyzeInstagram"
                         wire:loading.attr="disabled"
                         wire:target="analyzeInstagram"
@@ -109,7 +112,7 @@
                     <div class="my-1 border-t border-slate-100"></div>
                     <button
                         type="button"
-                        @click="scansOpen = false"
+                        @click="$dispatch('close')"
                         wire:click="scanInstagramFollowersList"
                         wire:loading.attr="disabled"
                         wire:target="scanInstagramFollowersList"
@@ -120,7 +123,7 @@
                     </button>
                     <button
                         type="button"
-                        @click="scansOpen = false"
+                        @click="$dispatch('close')"
                         wire:click="scanInstagramFollowingList"
                         wire:loading.attr="disabled"
                         wire:target="scanInstagramFollowingList"
@@ -131,7 +134,7 @@
                     </button>
                     <button
                         type="button"
-                        @click="scansOpen = false"
+                        @click="$dispatch('close')"
                         wire:click="scanInstagramPosts"
                         wire:loading.attr="disabled"
                         wire:target="scanInstagramPosts"
@@ -143,7 +146,7 @@
                     <div class="my-1 border-t border-slate-100"></div>
                     <button
                         type="button"
-                        @click="scansOpen = false"
+                        @click="$dispatch('close')"
                         wire:click="scanInstagramSuggestions"
                         wire:loading.attr="disabled"
                         wire:target="scanInstagramSuggestions"
@@ -156,7 +159,7 @@
                     </button>
                     <button
                         type="button"
-                        @click="scansOpen = false"
+                        @click="$dispatch('close')"
                         wire:click="scanInstagramSuggestionDeepSearch"
                         wire:loading.attr="disabled"
                         wire:target="scanInstagramSuggestionDeepSearch"
@@ -167,32 +170,35 @@
                             Vorschlaege und Listen · ab {{ number_format($scanCostSummary['profile'], 0, ',', '.') }} Credits
                         </span>
                     </button>
-                </div>
-            </div>
-            </div>
+                    </div>
+                </x-slot>
+            </x-ui.dropdown.anchor-dropdown>
 
-            <div class="relative">
-            <button
-                type="button"
-                @click="actionsOpen = ! actionsOpen; scansOpen = false"
-                class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/80 bg-white/85 px-4 text-xs font-semibold text-slate-950 shadow-sm backdrop-blur hover:bg-white"
+            <x-ui.dropdown.anchor-dropdown
+                align="right"
+                width="auto"
+                :offset="8"
+                dropdown-classes=""
+                content-classes="w-72 rounded-2xl border border-slate-200 bg-white"
             >
-                Aktionen
-                <span class="ml-2 text-slate-500">▾</span>
-            </button>
+                <x-slot name="trigger">
+                    <button
+                        type="button"
+                        x-bind:aria-expanded="open"
+                        class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/80 bg-white/85 px-4 text-xs font-semibold text-slate-950 shadow-sm backdrop-blur hover:bg-white"
+                    >
+                        Aktionen
+                        <span class="ml-2 text-slate-500">▾</span>
+                    </button>
+                </x-slot>
 
-            <div
-                x-show="actionsOpen"
-                x-cloak
-                @click.outside="actionsOpen = false"
-                class="absolute right-0 top-full z-20 mt-2 w-72 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"
-            >
-                <div class="flex flex-col p-2">
+                <x-slot name="content">
+                    <div class="flex flex-col p-2">
                     @if($trackedPerson)
                         <a
                             href="{{ route('tracked-people.show', $trackedPerson->id) }}"
                             wire:navigate
-                            @click="actionsOpen = false"
+                            @click="$dispatch('close')"
                             class="rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
                         >
                             Beobachtete Person
@@ -200,7 +206,7 @@
                     @else
                         <button
                             type="button"
-                            @click="actionsOpen = false"
+                            @click="$dispatch('close')"
                             wire:click="addAsTrackedPerson"
                             wire:loading.attr="disabled"
                             class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
@@ -213,7 +219,7 @@
                         href="{{ $profile->profile_url ?: 'https://www.instagram.com/'.$profile->username.'/' }}"
                         target="_blank"
                         rel="noopener noreferrer"
-                        @click="actionsOpen = false"
+                        @click="$dispatch('close')"
                         class="rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
                     >
                         Instagram oeffnen
@@ -221,7 +227,7 @@
 
                     <button
                         type="button"
-                        @click="actionsOpen = false"
+                        @click="$dispatch('close')"
                         wire:click="openListModal('followers')"
                         class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
                     >
@@ -229,15 +235,15 @@
                     </button>
                     <button
                         type="button"
-                        @click="actionsOpen = false"
+                        @click="$dispatch('close')"
                         wire:click="openListModal('following')"
                         class="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
                     >
                         Gefolgt-Liste ansehen
                     </button>
-                </div>
-            </div>
-            </div>
+                    </div>
+                </x-slot>
+            </x-ui.dropdown.anchor-dropdown>
         </div>
         </x-slot:toolbar>
 

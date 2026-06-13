@@ -83,25 +83,29 @@
                         :tracked-person="$trackedPerson"
                         :on-detail-page="true"
                     />
-                    <div x-data="{ menuOpen: false }" class="relative">
-                        <button
-                            type="button"
-                            @click="menuOpen = ! menuOpen"
-                            class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/80 bg-white/85 px-4 text-xs font-semibold text-slate-950 shadow-sm backdrop-blur hover:bg-white"
-                        >
-                            Aktionen
-                            <span class="ml-2 text-slate-500">▾</span>
-                        </button>
-                        <div
-                            x-show="menuOpen"
-                            x-cloak
-                            @click.outside="menuOpen = false"
-                            class="absolute right-0 top-full z-20 mt-2 w-64 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl"
-                        >
+                    <x-ui.dropdown.anchor-dropdown
+                        align="right"
+                        width="auto"
+                        :offset="8"
+                        dropdown-classes=""
+                        content-classes="w-64 rounded-3xl border border-slate-200 bg-white"
+                    >
+                        <x-slot name="trigger">
+                            <button
+                                type="button"
+                                x-bind:aria-expanded="open"
+                                class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/80 bg-white/85 px-4 text-xs font-semibold text-slate-950 shadow-sm backdrop-blur hover:bg-white"
+                            >
+                                Aktionen
+                                <span class="ml-2 text-slate-500">▾</span>
+                            </button>
+                        </x-slot>
+
+                        <x-slot name="content">
                             <div class="flex flex-col p-2">
                                 <button
                                     type="button"
-                                    @click="menuOpen = false"
+                                    @click="$dispatch('close')"
                                     wire:click="confirmTrackedPersonDeletion"
                                     class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-rose-700 hover:bg-rose-50"
                                 >
@@ -109,7 +113,7 @@
                                 </button>
                                 <button
                                     type="button"
-                                    @click="menuOpen = false"
+                                    @click="$dispatch('close')"
                                     wire:click="analyzeInstagramMini"
                                     wire:loading.attr="disabled"
                                     wire:target="analyzeInstagramMini"
@@ -120,7 +124,7 @@
                                 </button>
                                 <button
                                     type="button"
-                                    @click="menuOpen = false"
+                                    @click="$dispatch('close')"
                                     wire:click="$set('showSettingsModal', true)"
                                     class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
                                 >
@@ -128,7 +132,7 @@
                                 </button>
                                 <button
                                     type="button"
-                                    @click="menuOpen = false"
+                                    @click="$dispatch('close')"
                                     wire:click="scanInstagramSuggestions"
                                     wire:loading.attr="disabled"
                                     wire:target="scanInstagramSuggestions"
@@ -139,7 +143,7 @@
                                 </button>
                                 <button
                                     type="button"
-                                    @click="menuOpen = false"
+                                    @click="$dispatch('close')"
                                     wire:click="scanInstagramSuggestionDeepSearch"
                                     wire:loading.attr="disabled"
                                     wire:target="scanInstagramSuggestionDeepSearch"
@@ -149,8 +153,8 @@
                                     Vorschlaege DeepSearch
                                 </button>
                             </div>
-                        </div>
-                    </div>
+                        </x-slot>
+                    </x-ui.dropdown.anchor-dropdown>
                 </div>
         </x-slot:toolbar>
 
