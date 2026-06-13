@@ -1,3 +1,52 @@
+@guest
+<nav x-data="{ open: false }" class="sticky top-0 z-50 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
+    <div class="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        <a href="{{ route('welcome') }}" wire:navigate class="flex items-center gap-3">
+            <x-application-mark class="h-10 w-10" />
+            <span class="text-lg font-black tracking-tight text-slate-950">SocialScope</span>
+        </a>
+
+        <div class="hidden items-center gap-8 md:flex">
+            <a href="{{ route('welcome') }}#features" class="text-sm font-bold text-slate-600 transition hover:text-cyan-700">Funktionen</a>
+            <a href="{{ route('welcome') }}#workflow" class="text-sm font-bold text-slate-600 transition hover:text-cyan-700">Workflow</a>
+            <a href="{{ route('packages') }}" wire:navigate class="text-sm font-bold text-slate-600 transition hover:text-cyan-700">Pakete</a>
+        </div>
+
+        <div class="hidden items-center gap-3 md:flex">
+            <a href="{{ route('login') }}" wire:navigate class="rounded-xl px-4 py-2.5 text-sm font-black text-slate-700 transition hover:bg-slate-100">
+                Anmelden
+            </a>
+            <a href="{{ route('register') }}" wire:navigate class="rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-black text-white shadow-lg shadow-slate-900/10 transition hover:bg-cyan-700">
+                Kostenlos starten
+            </a>
+        </div>
+
+        <button
+            type="button"
+            x-on:click="open = !open"
+            class="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-700 md:hidden"
+            aria-label="Navigation oeffnen"
+        >
+            <svg x-show="!open" class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            <svg x-cloak x-show="open" class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+        </button>
+    </div>
+
+    <div x-cloak x-show="open" x-collapse class="border-t border-slate-200 bg-white px-4 py-4 md:hidden">
+        <div class="grid gap-1">
+            <a href="{{ route('welcome') }}#features" class="rounded-xl px-3 py-3 font-bold text-slate-700">Funktionen</a>
+            <a href="{{ route('welcome') }}#workflow" class="rounded-xl px-3 py-3 font-bold text-slate-700">Workflow</a>
+            <a href="{{ route('packages') }}" wire:navigate class="rounded-xl px-3 py-3 font-bold text-slate-700">Pakete</a>
+            <a href="{{ route('login') }}" wire:navigate class="rounded-xl px-3 py-3 font-bold text-slate-700">Anmelden</a>
+            <a href="{{ route('register') }}" wire:navigate class="mt-2 rounded-xl bg-slate-950 px-4 py-3 text-center font-black text-white">Kostenlos starten</a>
+        </div>
+    </div>
+</nav>
+@else
 <div
     wire:poll.15000ms="refreshNavigationData"
     x-data="{
@@ -78,8 +127,9 @@
                  <!-- Primary Navigation Menu -->
                  <div class="container mx-auto flex justify-between items-center ">
                         <div class="flex-none flex items-center h-full py-2 max-md:order-1" @click="$dispatch('navhide')">
-                             <a href="{{ \App\Providers\RouteServiceProvider::home() }}" wire:navigate   class="h-full flex items-center max-sm:max-w-[120px]">
-                                 <x-application-mark />
+                             <a href="{{ \App\Providers\RouteServiceProvider::home() }}" wire:navigate class="flex h-full items-center gap-3">
+                                 <x-application-mark class="h-10 w-10" />
+                                 <span class="hidden text-lg font-black tracking-tight text-slate-950 sm:block">SocialScope</span>
                              </a>
                          </div>
                          <div class="flex items-center space-x-4 max-md:order-3 md:order-2  flex-none" @click="$dispatch('navhide')">
@@ -136,7 +186,7 @@
                                                  @click="modalOpen = true; open = false; selectedMessage = { subject: '{{ $message->subject }}', body: '{!! addslashes($message->message) !!}', createdAt: '{{ $message->created_at->diffForHumans() }}' }; $wire.setMessageStatus({{ $message->id }}); " 
                                                  class="flex items-center p-4 hover:bg-slate-50 cursor-pointer @if($message->status == 1) bg-blue-200 @endif">
                                                  <div class="block h-10 w-10 size-4 flex-none rounded-full">
-                                                     <x-application-logo class="w-10" />
+                                                     <x-application-mark class="h-10 w-10" />
                                                  </div>
                                                  <div class="ml-4 flex-auto">    
                                                      <div class="font-medium">{{ $message->subject }}</div>
@@ -508,3 +558,4 @@
     <div :style="'height: ' + navHeight + 'px'" class="min-h-12 transition-all duration-300 ease-in-out md:min-h-[4rem]"></div>
     <div id="megamenu" class="transition-all duration-200 ease-in-out"></div>
 </div>
+@endguest

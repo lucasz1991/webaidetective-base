@@ -1,6 +1,6 @@
 <x-layouts.auth-layout>
     <x-slot name="title">
-        webaiDetective
+        SocialScope
     </x-slot>
 
     <x-slot name="description">

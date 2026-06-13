@@ -9,9 +9,13 @@ use Livewire\Component;
 class Login extends Component
 {
     public $message;
+
     public $messageType;
-    public $email = 'test-teilnehmer@example.com';
-    public $password = '12345678910!LMZ';
+
+    public $email = '';
+
+    public $password = '';
+
     public $remember = false;
 
     protected $rules = [

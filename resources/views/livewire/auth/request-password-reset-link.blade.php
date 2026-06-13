@@ -4,7 +4,7 @@
     </x-slot>
 
     <x-slot name="description">
-        Fordere einen sicheren Link an und setze dein webaiDetective-Passwort in wenigen Schritten zurueck.
+        Fordere einen sicheren Link an und setze dein SocialScope-Passwort in wenigen Schritten zurueck.
     </x-slot>
 
     <x-slot name="form">

@@ -5,7 +5,7 @@
                 <p class="text-xs font-semibold uppercase tracking-wide text-teal-700">E-Mail-Verifizierung</p>
                 <h2 class="mt-2 text-2xl font-bold tracking-tight text-slate-950">Postfach pruefen</h2>
                 <p class="mt-2 text-sm leading-6 text-slate-600">
-                    Bevor du webaiDetective vollstaendig nutzt, bestaetige bitte deine E-Mail-Adresse ueber den Link, den wir dir gesendet haben.
+                    Bevor du SocialScope vollstaendig nutzt, bestaetige bitte deine E-Mail-Adresse ueber den Link, den wir dir gesendet haben.
                 </p>
             </div>
 

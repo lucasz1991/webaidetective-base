@@ -4,7 +4,7 @@
     </x-slot>
 
     <x-slot name="description">
-        Vergib ein neues Passwort fuer deinen webaiDetective-Zugang und kehre direkt in deinen Kundenbereich zurueck.
+        Vergib ein neues Passwort fuer deinen SocialScope-Zugang und kehre direkt in deinen Workspace zurueck.
     </x-slot>
 
     <x-slot name="form">

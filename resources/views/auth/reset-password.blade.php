@@ -10,7 +10,7 @@
                 <p class="text-xs font-semibold uppercase tracking-wide text-teal-700">Passwort aktualisieren</p>
                 <h2 class="mt-2 text-2xl font-bold tracking-tight text-slate-950">Neues Passwort setzen</h2>
                 <p class="mt-2 text-sm leading-6 text-slate-600">
-                    Waehle ein neues Passwort fuer deinen webaiDetective-Zugang.
+                    Waehle ein neues Passwort fuer deinen SocialScope-Zugang.
                 </p>
             </div>
 

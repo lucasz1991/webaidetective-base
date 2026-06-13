@@ -4,7 +4,7 @@
             <div class="flex items-center gap-8">
                 <a href="{{ route('welcome') }}" class="flex items-center gap-3">
                     <x-application-mark class="h-9 w-9" />
-                    <span class="hidden text-lg font-black text-slate-950 sm:block">webaiDetective</span>
+                    <span class="hidden text-lg font-black text-slate-950 sm:block">SocialScope</span>
                 </a>
 
                 <div class="hidden items-center gap-7 md:flex">

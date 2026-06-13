@@ -16,7 +16,7 @@ return [
     |
     */
 
-    'name' => env('APP_NAME', 'MiniFinds'),
+    'name' => env('APP_NAME', 'SocialScope'),
 
     /*
     |--------------------------------------------------------------------------

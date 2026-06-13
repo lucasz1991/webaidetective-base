@@ -167,6 +167,10 @@ class TrackedPersonInstagramSuggestionScanService
             'finalUsernames' => [],
         ];
 
+        // Neu: deduplizierende Sets fuer inkrementelles Speichern waehrend des Scans
+        $persistedObservedUsernames = [];
+        $persistedConnectionUsernames = [];
+
         $this->reportProgress($progress, [
             'phase' => 'suggestions',
             'percent' => 1,
@@ -204,30 +208,101 @@ class TrackedPersonInstagramSuggestionScanService
                 $targetUsername,
                 // On every 3rd normal scan, run the checked scan under the hood
                 $deepSearch || $elevateToDeepSearch ? 'suggestion-connections' : 'suggestions',
-                function (array $state) use ($trackedPerson, $targetUsername, $progress, &$liveConnections, &$liveObservedSuggestions, &$liveSuggestionDebug): void {
+                function (array $state) use (
+                    $trackedPerson,
+                    $targetUsername,
+                    $progress,
+                    &$liveConnections,
+                    &$liveObservedSuggestions,
+                    &$liveSuggestionDebug,
+                    &$persistedObservedUsernames,
+                    &$persistedConnectionUsernames,
+                ): void {
+                    // Suggestion-Connections (Matches) zusammenfuehren
                     if (array_key_exists('suggestionConnections', $state)) {
                         $liveConnections = $this->mergeSuggestionConnections(
                             $liveConnections,
                             $this->normalizeSuggestionConnections($state['suggestionConnections']),
                         );
 
+                        // Inkrementell: Inferred Connections und inverse Public-Listen speichern
                         if ($trackedPerson && $liveConnections !== []) {
-                            $this->storeInferredSuggestionConnections(
-                                $trackedPerson,
-                                null,
-                                $targetUsername,
-                                $liveConnections,
-                                ['progress' => true],
-                                now('UTC'),
-                            );
+                            try {
+                                // Nur neue Kandidaten seit letztem Persist-Durchlauf speichern
+                                $newConnections = array_values(array_filter($liveConnections, function (array $c) use (&$persistedConnectionUsernames): bool {
+                                    $u = $this->scraper->normalizeInstagramUsername($c['username'] ?? null);
+                                    if ($u === null) {
+                                        return false;
+                                    }
+                                    if (isset($persistedConnectionUsernames[$u])) {
+                                        return false;
+                                    }
+                                    $persistedConnectionUsernames[$u] = true;
+
+                                    return true;
+                                }));
+
+                                if ($newConnections !== []) {
+                                    $now = now('UTC');
+                                    $this->storeInferredSuggestionConnections(
+                                        $trackedPerson,
+                                        null,
+                                        $targetUsername,
+                                        $newConnections,
+                                        ['progress' => true],
+                                        $now,
+                                    );
+                                    // inverse Public-Listen (Followers/Following) sofort als Preview anlegen
+                                    $this->storePublicListRelationships(
+                                        $trackedPerson,
+                                        null,
+                                        $targetUsername,
+                                        $newConnections,
+                                        $now,
+                                    );
+                                }
+                            } catch (\Throwable) {
+                                // Fehler beim Live-Speichern duerfen den Scan nicht abbrechen
+                            }
                         }
                     }
 
+                    // Beobachtete Vorschlaege zusammenfuehren
                     if (array_key_exists('observedSuggestions', $state)) {
                         $liveObservedSuggestions = $this->mergeObservedSuggestionItems(
                             $liveObservedSuggestions,
                             $this->normalizeObservedSuggestionItems($state['observedSuggestions']),
                         );
+
+                        // Inkrementell: neu beobachtete Vorschlaege sofort als Profile anlegen/aktualisieren
+                        if ($liveObservedSuggestions !== []) {
+                            try {
+                                $newObserved = [];
+                                foreach ($liveObservedSuggestions as $item) {
+                                    $u = $this->scraper->normalizeInstagramUsername($item['username'] ?? null);
+                                    if ($u === null || isset($persistedObservedUsernames[$u])) {
+                                        continue;
+                                    }
+                                    $persistedObservedUsernames[$u] = true;
+                                    $newObserved[] = $item;
+                                }
+
+                                if ($newObserved !== []) {
+                                    $this->storeObservedSuggestionProfiles(
+                                        $trackedPerson,
+                                        [
+                                            'suggestionScan' => [
+                                                'observedSuggestions' => $newObserved,
+                                            ],
+                                        ],
+                                        now('UTC'),
+                                    );
+                                }
+                            } catch (\Throwable) {
+                                // Live-Speichern der beobachteten Vorschlaege ist best-effort
+                            }
+                        }
+
                         $liveSuggestionDebug['finalUsernames'] = collect($liveObservedSuggestions)
                             ->pluck('username')
                             ->filter()
@@ -236,6 +311,7 @@ class TrackedPersonInstagramSuggestionScanService
                             ->all();
                     }
 
+                    // Debug-Events einsammeln
                     if (is_array($state['suggestionCollectionDebug'] ?? null)) {
                         $debugEvent = $state['suggestionCollectionDebug'];
                         if (is_scalar($state['liveScreenshotUrl'] ?? null)) {
@@ -379,6 +455,7 @@ class TrackedPersonInstagramSuggestionScanService
                 'analyzed_at' => $analyzedAt,
             ]);
 
+            // Endgueltig alle beobachteten Kandidaten dieses Laufs nochmals sicherstellen
             $this->storeObservedSuggestionProfiles($trackedPerson, $payload, $analyzedAt);
             if ($deepSearch) {
                 if ($trackedPerson) {
@@ -915,7 +992,7 @@ class TrackedPersonInstagramSuggestionScanService
             $sourceLists[] = 'public_profile_following';
         }
 
-        return array_values(array_unique($sourceLists ?: ['profile_suggestions']));
+        return array_values(array_unique($sourceLists ?: ['profile_suggestions'])));
     }
 
     private function mergeSuggestionConnections(array ...$connectionGroups): array
