@@ -261,7 +261,8 @@ class TrackedPersonInstagramProfileListScanService
         return InstagramProfileListScan::query()
             ->where('instagram_profile_id', $profile->id)
             ->where('list_type', $relationship)
-            ->latest('analyzed_at')
+            ->orderByDesc('scanned_at')
+            ->orderByDesc('id')
             ->first();
     }
 
