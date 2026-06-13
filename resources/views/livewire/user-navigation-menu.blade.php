@@ -62,8 +62,8 @@
 
         init() {
             this.$nextTick(() => {
-                this.navHeight = this.$refs.nav.offsetHeight;
                 this.isMobile = window.innerWidth <= 768;
+                this.measureNavHeight();
             });
 
             this.soundListenerCleanup = Livewire.on('playNotificationSound', () => {
@@ -95,8 +95,20 @@
             this.$nextTick(() => {
                 this.isMobile = window.innerWidth <= 768;
                 this.isMobileMenuOpen = false;
-                this.navHeight = this.$refs.nav.offsetHeight;
+                this.measureNavHeight();
             });
+        },
+
+        measureNavHeight() {
+            const nav = this.$refs.nav || this.$el.querySelector('[data-user-navigation]');
+
+            if (!nav) return;
+
+            const measuredHeight = nav.offsetHeight;
+
+            if (measuredHeight > 0) {
+                this.navHeight = measuredHeight;
+            }
         },
 
         playNotificationSound() {
@@ -111,13 +123,13 @@
             });
         }
     }"
-    x-init="init()"
     x-on:scroll.window="handleScroll()"
     x-resize="handleResize()"
     x-on:click.outside="isMobileMenuOpen = false"
 >
     <nav
         x-ref="nav"
+        data-user-navigation
         :style="(!showNav && !isMobileMenuOpen) ? 'margin-top: -' + navHeight + 'px' : 'margin-top: 0px'"
         class="fixed z-30 w-screen bg-white transition-all duration-300 ease-in-out"
         wire:loading.class="cursor-wait"
