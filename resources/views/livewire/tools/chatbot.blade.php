@@ -349,8 +349,17 @@
             $wire.dismissToolEvent(key);
         },
         activeScans() {
+            const now = Date.now();
+
             return (Array.isArray(this.scanActivities) ? this.scanActivities : [])
-                .filter((scan) => ['queued', 'running', 'stopping'].includes(scan?.status));
+                .filter((scan) => {
+                    if (!['queued', 'running', 'stopping'].includes(scan?.status)) return false;
+
+                    const updatedAt = Date.parse(scan?.heartbeat_at || scan?.updated_at || scan?.started_at || '');
+                    const maxAge = scan?.status === 'queued' ? 120000 : 35000;
+
+                    return Number.isFinite(updatedAt) && now - updatedAt <= maxAge;
+                });
         },
         pausedScans() {
             return (Array.isArray(this.scanActivities) ? this.scanActivities : [])

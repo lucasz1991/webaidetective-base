@@ -73,6 +73,7 @@ class Chatbot extends Component
         $this->chatHistory = Session::get(self::DISPLAY_HISTORY_KEY, []);
         $this->toolEvents = [];
         $this->scanActivities = Session::get(self::SCAN_ACTIVITIES_KEY, []);
+        $this->removeStaleAssistantScans();
         Session::forget(self::TOOL_EVENTS_KEY);
         $this->status = (bool) Setting::getValue('ai_assistant', 'status');
         $this->assistantName = Setting::getValue('ai_assistant', 'assistant_name') ?: 'Investigation Copilot';
@@ -205,6 +206,7 @@ class Chatbot extends Component
         $statusStore = app(InvestigationAssistantScanStatusStore::class);
         $scanCoordinator = app(TrackedPersonInstagramScanCoordinator::class);
         $terminalScan = null;
+        $hiddenTokens = [];
 
         foreach ($this->scanActivities as $index => $activity) {
             $token = (string) ($activity['token'] ?? '');
@@ -223,20 +225,27 @@ class Chatbot extends Component
             $stopRequested = (bool) ($scanState['gracefulStopRequested'] ?? false)
                 || (bool) ($status['stop_requested'] ?? false);
             $scanIsActive = $scanCoordinator->hasActiveScan((int) ($status['tracked_person_id'] ?? 0));
-            $scanIsResponsive = $scanCoordinator->isResponsive((int) ($status['tracked_person_id'] ?? 0));
+            $status['heartbeat_at'] = $scanState['lastProcessOutputAt']
+                ?? $scanState['updatedAt']
+                ?? $status['updated_at']
+                ?? null;
 
             if (
-                ($status['status'] ?? null) === 'running'
-                && $scanIsActive
-                && ! $scanIsResponsive
-                && $this->assistantScanLooksInterrupted($status, 35)
+                in_array($status['status'] ?? null, ['queued', 'running', 'stopping'], true)
+                && $this->assistantScanIsStale($status, $scanCoordinator)
             ) {
-                $scanCoordinator->terminateUnresponsiveScan((int) ($status['tracked_person_id'] ?? 0));
-                $status = $statusStore->pause(
+                if ($scanIsActive) {
+                    $scanCoordinator->terminateUnresponsiveScan((int) ($status['tracked_person_id'] ?? 0));
+                }
+
+                $statusStore->pause(
                     $token,
-                    'Der Scan reagiert nicht mehr und wurde angehalten. Der bisher gespeicherte Datenstand kann fortgesetzt oder abgeschlossen werden.',
+                    'Der Scan wurde wegen eines veralteten Heartbeats beendet. Bereits gespeicherte Daten bleiben erhalten.',
                     is_array($status['result'] ?? null) ? $status['result'] : [],
                 );
+                $hiddenTokens[] = $token;
+
+                continue;
             } elseif ($stopRequested && $scanIsActive) {
                 $status = $statusStore->stopping(
                     $token,
@@ -269,6 +278,13 @@ class Chatbot extends Component
                 $this->scanActivities[$index]['reacted'] = true;
                 $terminalScan = $this->scanActivities[$index];
             }
+        }
+
+        if ($hiddenTokens !== []) {
+            $this->scanActivities = collect($this->scanActivities)
+                ->reject(fn (array $activity): bool => in_array($activity['token'] ?? null, $hiddenTokens, true))
+                ->values()
+                ->all();
         }
 
         $this->persistScanActivities();
@@ -921,6 +937,82 @@ class Chatbot extends Component
         }
 
         return true;
+    }
+
+    private function assistantScanIsStale(
+        array $status,
+        TrackedPersonInstagramScanCoordinator $scanCoordinator,
+    ): bool {
+        $statusName = (string) ($status['status'] ?? '');
+        $trackedPersonId = (int) ($status['tracked_person_id'] ?? 0);
+
+        if (! in_array($statusName, ['queued', 'running', 'stopping'], true)) {
+            return false;
+        }
+
+        if ($statusName === 'queued') {
+            return $this->assistantScanLooksInterrupted($status, 120);
+        }
+
+        return ! $scanCoordinator->isResponsive($trackedPersonId)
+            && $this->assistantScanLooksInterrupted($status, 35);
+    }
+
+    private function removeStaleAssistantScans(): void
+    {
+        $user = Auth::user();
+
+        if (! $user || $this->scanActivities === []) {
+            return;
+        }
+
+        $statusStore = app(InvestigationAssistantScanStatusStore::class);
+        $scanCoordinator = app(TrackedPersonInstagramScanCoordinator::class);
+
+        $this->scanActivities = collect($this->scanActivities)
+            ->map(function (array $activity) use ($user, $statusStore, $scanCoordinator): ?array {
+                $token = (string) ($activity['token'] ?? '');
+                $status = $token !== '' ? $statusStore->get($token) : null;
+
+                if (
+                    ! $status
+                    || (int) ($status['user_id'] ?? 0) !== (int) $user->id
+                ) {
+                    return $activity;
+                }
+
+                $scanState = $scanCoordinator->activeState((int) ($status['tracked_person_id'] ?? 0));
+                $status['heartbeat_at'] = $scanState['lastProcessOutputAt']
+                    ?? $scanState['updatedAt']
+                    ?? $status['updated_at']
+                    ?? null;
+
+                if (! $this->assistantScanIsStale($status, $scanCoordinator)) {
+                    return [
+                        ...$activity,
+                        ...$status,
+                    ];
+                }
+
+                $trackedPersonId = (int) ($status['tracked_person_id'] ?? 0);
+
+                if ($scanCoordinator->hasActiveScan($trackedPersonId)) {
+                    $scanCoordinator->terminateUnresponsiveScan($trackedPersonId);
+                }
+
+                $statusStore->pause(
+                    $token,
+                    'Der Scan wurde wegen eines veralteten Heartbeats beendet. Bereits gespeicherte Daten bleiben erhalten.',
+                    is_array($status['result'] ?? null) ? $status['result'] : [],
+                );
+
+                return null;
+            })
+            ->filter()
+            ->values()
+            ->all();
+
+        $this->persistScanActivities();
     }
 
     private function dismissPersistedResumeState(int $trackedPersonId, string $scanType, int $userId): void

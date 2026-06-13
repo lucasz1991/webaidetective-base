@@ -43,4 +43,12 @@ class RunTrackedPersonInstagramToolScanTest extends TestCase
         $this->assertStringContainsString('Scan fortsetzen', $profileView);
         $this->assertStringContainsString('Beenden, Daten behalten', $profileView);
     }
+
+    public function test_chat_hides_active_scans_with_an_expired_heartbeat(): void
+    {
+        $view = file_get_contents(resource_path('views/livewire/tools/chatbot.blade.php'));
+
+        $this->assertStringContainsString('scan?.heartbeat_at || scan?.updated_at', $view);
+        $this->assertStringContainsString('now - updatedAt <= maxAge', $view);
+    }
 }
