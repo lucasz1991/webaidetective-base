@@ -166,7 +166,7 @@
             const label = String(scanLabel || scanType);
             const prompt = [
                 '[SCAN_TYPE_CONFIRMED]',
-                `Starte jetzt für @${username} den Scan-Typ "${scanType}".`,
+                `Starte jetzt für @${username} den Scan-Typ ${scanType}.`,
                 `Ausgewählte Aktion: ${label}.`,
                 `Profiltyp: ${profileType}.`,
                 'Diese Auswahl ist meine ausdrückliche Bestätigung für genau diesen Scan.',
