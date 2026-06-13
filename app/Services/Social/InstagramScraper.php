@@ -5,6 +5,7 @@ namespace App\Services\Social;
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\Setting;
 use App\Services\Scraper\ScraperProfileDatabaseStore;
+use App\Services\TrackedPeople\InstagramScanPolicyService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
@@ -15,7 +16,38 @@ use Symfony\Component\Process\Process as SymfonyProcess;
 
 class InstagramScraper
 {
+    public function __construct(
+        private readonly InstagramScanPolicyService $scanPolicies,
+    ) {}
+
     public function scrape(
+        string $username,
+        string $operationMode = 'analyze',
+        ?callable $progress = null,
+        array $runtimeConfigOverrides = [],
+        int $progressStart = 0,
+        int $progressEnd = 100,
+    ): array {
+        $runtimeConfigOverrides = [
+            ...$this->scanPolicies->runtimeOverrides($operationMode),
+            ...$runtimeConfigOverrides,
+        ];
+
+        return $this->runWithRetries(
+            $operationMode,
+            $progress,
+            fn (): array => $this->scrapeOnce(
+                $username,
+                $operationMode,
+                $progress,
+                $runtimeConfigOverrides,
+                $progressStart,
+                $progressEnd,
+            ),
+        );
+    }
+
+    private function scrapeOnce(
         string $username,
         string $operationMode = 'analyze',
         ?callable $progress = null,
@@ -37,6 +69,9 @@ class InstagramScraper
         }
 
         $scanControl = $this->extractScanControl($runtimeConfigOverrides);
+        if ($scanControl !== null) {
+            $scanControl['processStallTimeoutSeconds'] = $this->scanPolicies->processStallTimeoutSeconds();
+        }
         $runtimeConfigOverrides = $this->withScanControlRuntimeConfig($runtimeConfigOverrides, $scanControl);
         $runtimeConfigPath = $this->writeRuntimeConfig($runtimeConfigOverrides);
         $stdout = '';
@@ -118,6 +153,30 @@ class InstagramScraper
         ?callable $progress = null,
         array $runtimeConfigOverrides = [],
     ): array {
+        $operationMode = 'public-profile-connections';
+        $runtimeConfigOverrides = [
+            ...$this->scanPolicies->runtimeOverrides($operationMode),
+            ...$runtimeConfigOverrides,
+        ];
+
+        return $this->runWithRetries(
+            $operationMode,
+            $progress,
+            fn (): array => $this->scanPublicProfileConnectionOnce(
+                $publicUsername,
+                $targetUsername,
+                $progress,
+                $runtimeConfigOverrides,
+            ),
+        );
+    }
+
+    private function scanPublicProfileConnectionOnce(
+        string $publicUsername,
+        string $targetUsername,
+        ?callable $progress = null,
+        array $runtimeConfigOverrides = [],
+    ): array {
         $publicUsername = $this->normalizeInstagramUsername($publicUsername);
         $targetUsername = $this->normalizeInstagramUsername($targetUsername);
 
@@ -132,6 +191,9 @@ class InstagramScraper
         }
 
         $scanControl = $this->extractScanControl($runtimeConfigOverrides);
+        if ($scanControl !== null) {
+            $scanControl['processStallTimeoutSeconds'] = $this->scanPolicies->processStallTimeoutSeconds();
+        }
         $runtimeConfigOverrides = $this->withScanControlRuntimeConfig($runtimeConfigOverrides, $scanControl);
         $runtimeConfigPath = $this->writeRuntimeConfig($runtimeConfigOverrides);
         $stdout = '';
@@ -292,6 +354,113 @@ class InstagramScraper
         return $payload;
     }
 
+    private function runWithRetries(
+        string $operationMode,
+        ?callable $progress,
+        callable $callback,
+    ): array {
+        $maxAttempts = $this->scanPolicies->errorAttempts($operationMode);
+        $retryDelayMilliseconds = $this->scanPolicies->retryDelayMilliseconds($operationMode);
+        $attemptLog = [];
+        $lastException = null;
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $payload = $callback();
+                $attemptLog[] = [
+                    'attempt' => $attempt,
+                    'statusLevel' => $payload['statusLevel'] ?? null,
+                    'statusMessage' => $payload['statusMessage'] ?? null,
+                    'processSuccessful' => $payload['_process_successful'] ?? null,
+                ];
+
+                if (! $this->payloadRequiresRetry($payload) || $attempt >= $maxAttempts) {
+                    $payload['_scan_attempt'] = $attempt;
+                    $payload['_scan_max_attempts'] = $maxAttempts;
+                    $payload['_scan_attempts'] = $attemptLog;
+
+                    return $payload;
+                }
+
+                $this->reportRetry(
+                    $progress,
+                    $operationMode,
+                    $attempt + 1,
+                    $maxAttempts,
+                    (string) ($payload['statusMessage'] ?? $payload['error'] ?? 'Scraper-Fehler'),
+                );
+            } catch (TrackedPersonInstagramScanCancelledException $exception) {
+                throw $exception;
+            } catch (\Throwable $exception) {
+                $lastException = $exception;
+                $attemptLog[] = [
+                    'attempt' => $attempt,
+                    'exception' => $exception->getMessage(),
+                ];
+
+                if ($attempt >= $maxAttempts) {
+                    throw $exception;
+                }
+
+                $this->reportRetry(
+                    $progress,
+                    $operationMode,
+                    $attempt + 1,
+                    $maxAttempts,
+                    $exception->getMessage(),
+                );
+            }
+
+            if ($retryDelayMilliseconds > 0) {
+                usleep($retryDelayMilliseconds * 1000);
+            }
+        }
+
+        throw $lastException ?: new \RuntimeException('Instagram-Scan konnte nicht ausgefuehrt werden.');
+    }
+
+    private function payloadRequiresRetry(array $payload): bool
+    {
+        if (
+            (bool) ($payload['gracefullyStopped'] ?? false)
+            || (bool) ($payload['stoppedForRateLimit'] ?? false)
+            || (bool) data_get($payload, 'suggestionScan.rateLimited', false)
+        ) {
+            return false;
+        }
+
+        $statusLevel = Str::lower(trim((string) ($payload['statusLevel'] ?? '')));
+
+        return $statusLevel === 'error'
+            || (($payload['_process_successful'] ?? true) === false && ! (bool) ($payload['ok'] ?? false));
+    }
+
+    private function reportRetry(
+        ?callable $progress,
+        string $operationMode,
+        int $nextAttempt,
+        int $maxAttempts,
+        string $reason,
+    ): void {
+        if (! $progress) {
+            return;
+        }
+
+        $progress([
+            'phase' => 'retry',
+            'percent' => 0,
+            'message' => sprintf(
+                'Instagram-%s wird nach einem Fehler erneut gestartet (Versuch %d/%d): %s',
+                $operationMode,
+                $nextAttempt,
+                $maxAttempts,
+                Str::limit(trim($reason), 180),
+            ),
+            'attempt' => $nextAttempt,
+            'maxAttempts' => $maxAttempts,
+        ]);
+    }
+
     private function extractScanControl(array &$runtimeConfigOverrides): ?array
     {
         $scanControl = $runtimeConfigOverrides['_scanControl'] ?? null;
@@ -344,9 +513,8 @@ class InstagramScraper
         $process->setIdleTimeout(null);
         $process->start();
 
-        $coordinator = $scanControl
-            ? app(TrackedPersonInstagramScanCoordinator::class)
-            : null;
+        $processCoordinator = app(TrackedPersonInstagramScanCoordinator::class);
+        $coordinator = $scanControl ? $processCoordinator : null;
         $trackedPersonId = (int) ($scanControl['trackedPersonId'] ?? 0);
         $generation = (int) ($scanControl['generation'] ?? 0);
         $pid = (int) ($process->getPid() ?? 0);
@@ -363,7 +531,10 @@ class InstagramScraper
         $stdout = '';
         $stderr = '';
         $lastOutputAt = microtime(true);
-        $processStallTimeoutSeconds = max(60, (int) ($scanControl['processStallTimeoutSeconds'] ?? 900));
+        $processStallTimeoutSeconds = max(
+            60,
+            (int) ($scanControl['processStallTimeoutSeconds'] ?? $this->scanPolicies->processStallTimeoutSeconds()),
+        );
 
         try {
             while ($process->isRunning()) {
@@ -394,14 +565,11 @@ class InstagramScraper
                     );
                 }
 
-                if (
-                    $coordinator
-                    && (microtime(true) - $lastOutputAt) >= $processStallTimeoutSeconds
-                ) {
+                if ((microtime(true) - $lastOutputAt) >= $processStallTimeoutSeconds) {
                     $process->stop(1);
 
                     if ($pid > 0) {
-                        $coordinator->terminateProcessTree($pid);
+                        $processCoordinator->terminateProcessTree($pid);
                     }
 
                     throw new \RuntimeException(

@@ -11,6 +11,7 @@ use App\Models\TrackedPersonInstagramPublicProfileScanLog;
 use App\Models\TrackedPersonPublicProfile;
 use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramScraper;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -27,8 +28,8 @@ class TrackedPersonInstagramPublicProfileScanService
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
-    ) {
-    }
+        private readonly InstagramScanPolicyService $scanPolicies,
+    ) {}
 
     private ?array $activeScanControl = null;
 
@@ -69,8 +70,10 @@ class TrackedPersonInstagramPublicProfileScanService
         string $targetUsername,
         ?callable $progress = null,
         ?int $onlyPublicProfileId = null,
-    ): Collection
-    {
+    ): Collection {
+        $policy = $this->scanPolicies->for('public_connections');
+        $resumePrevious = (bool) ($policy['resume_previous'] ?? true);
+        $skipCompletedCandidates = (bool) ($policy['skip_completed_candidates'] ?? true);
         $publicProfiles = $trackedPerson->publicProfiles()
             ->where('platform', 'instagram')
             ->where('is_public', true)
@@ -142,12 +145,21 @@ class TrackedPersonInstagramPublicProfileScanService
 
             $profileStart = (int) floor(($index / $total) * 100);
             $profileEnd = (int) floor((($index + 1) / $total) * 100);
-            $scan = $this->startOrResumeProgressScan($trackedPerson, $publicProfile, $targetUsername, $publicUsername, $candidates);
-            $resumePayload = $scan->raw_payload ?? [];
-            $resumeCheckedCandidateUsernames = $this->filterCandidateUsernamesForCandidates(
-                $this->normalizeCandidateUsernames(data_get($resumePayload, 'checkedCandidateUsernames', [])),
+            $scan = $this->startOrResumeProgressScan(
+                $trackedPerson,
+                $publicProfile,
+                $targetUsername,
+                $publicUsername,
                 $candidates,
+                $resumePrevious,
             );
+            $resumePayload = $scan->raw_payload ?? [];
+            $resumeCheckedCandidateUsernames = $skipCompletedCandidates
+                ? $this->filterCandidateUsernamesForCandidates(
+                    $this->normalizeCandidateUsernames(data_get($resumePayload, 'checkedCandidateUsernames', [])),
+                    $candidates,
+                )
+                : [];
             $resumeProfileInferredFollowers = $this->normalizeProgressConnectionItems(data_get($resumePayload, 'inferredFollowers', []), $publicUsername);
             $resumeProfileInferredFollowing = $this->normalizeProgressConnectionItems(data_get($resumePayload, 'inferredFollowing', []), $publicUsername);
 
@@ -493,21 +505,24 @@ class TrackedPersonInstagramPublicProfileScanService
         string $targetUsername,
         string $publicUsername,
         array $candidates,
+        bool $resumePrevious,
     ): TrackedPersonInstagramPublicProfileScan {
-        $resumableScan = TrackedPersonInstagramPublicProfileScan::query()
-            ->where('tracked_person_id', $trackedPerson->id)
-            ->where('public_profile_id', $publicProfile->id)
-            ->where('target_username', Str::lower($targetUsername))
-            ->where('public_username', Str::lower($publicUsername))
-            ->latest('updated_at')
-            ->limit(10)
-            ->get()
-            ->first(function (TrackedPersonInstagramPublicProfileScan $scan): bool {
-                $payload = is_array($scan->raw_payload ?? null) ? $scan->raw_payload : [];
+        $resumableScan = $resumePrevious
+            ? TrackedPersonInstagramPublicProfileScan::query()
+                ->where('tracked_person_id', $trackedPerson->id)
+                ->where('public_profile_id', $publicProfile->id)
+                ->where('target_username', Str::lower($targetUsername))
+                ->where('public_username', Str::lower($publicUsername))
+                ->latest('updated_at')
+                ->limit(10)
+                ->get()
+                ->first(function (TrackedPersonInstagramPublicProfileScan $scan): bool {
+                    $payload = is_array($scan->raw_payload ?? null) ? $scan->raw_payload : [];
 
-                return (bool) data_get($payload, 'isResumable', false)
-                    && in_array(data_get($payload, 'progressStatus'), ['in_progress', 'rate_limited', 'stopped'], true);
-            });
+                    return (bool) data_get($payload, 'isResumable', false)
+                        && in_array(data_get($payload, 'progressStatus'), ['in_progress', 'rate_limited', 'stopped'], true);
+                })
+            : null;
 
         if ($resumableScan) {
             $payload = is_array($resumableScan->raw_payload ?? null) ? $resumableScan->raw_payload : [];
@@ -958,7 +973,7 @@ class TrackedPersonInstagramPublicProfileScanService
                 'analyzed_at' => $analyzedAt,
             ];
 
-            $scan = $existingScan ?: new TrackedPersonInstagramPublicProfileScan();
+            $scan = $existingScan ?: new TrackedPersonInstagramPublicProfileScan;
             $scan->forceFill($scanData)->save();
 
             $this->scanCreditService->charge(
@@ -1034,7 +1049,7 @@ class TrackedPersonInstagramPublicProfileScanService
             'analyzed_at' => now('UTC'),
         ];
 
-        $scan = $existingScan ?: new TrackedPersonInstagramPublicProfileScan();
+        $scan = $existingScan ?: new TrackedPersonInstagramPublicProfileScan;
         $scan->forceFill($scanData)->save();
         $this->storeScanLog(
             $scan,
@@ -1110,7 +1125,7 @@ class TrackedPersonInstagramPublicProfileScanService
         ?string $message,
         ?string $detail,
         ?array $context,
-        \Illuminate\Support\Carbon $loggedAt,
+        Carbon $loggedAt,
     ): void {
         $detail = $this->nullableTrim($detail);
 
@@ -1197,7 +1212,7 @@ class TrackedPersonInstagramPublicProfileScanService
         TrackedPersonPublicProfile $publicProfile,
         TrackedPersonInstagramPublicProfileScan $scan,
         array $payload,
-        \Illuminate\Support\Carbon $analyzedAt,
+        Carbon $analyzedAt,
     ): void {
         foreach ([
             'inferredFollowers' => 'follows_target',

@@ -130,6 +130,10 @@ const runtimeConfigDefaults = {
   suggestionDialogMaxRounds: 48,
   suggestionCandidateInlineMaxRounds: 24,
   suggestionCandidateDialogMaxRounds: 36,
+  suggestionCandidateMaxAttempts: 1,
+  suggestionCandidateRetryDelayMs: 3000,
+  suggestionSkipPreviouslyChecked: true,
+  suggestionNoMatchSkipAfter: 2,
   suggestionMaxScraperProfileSwitches: 3,
   postScanMaxItems: 100,
   postScanMaxScrollRounds: 40,
@@ -7395,7 +7399,7 @@ async function collectBatchCandidateConnectionUntilDefinitive(
   const candidateScreenshots = [];
   const startedAt = Date.now();
   const maxAttempts = Math.min(
-    3,
+    10,
     Math.floor(normalizeNumberAtLeast(runtimeState.runtimeConfig.publicConnectionCandidateMaxAttempts, 3, 1)),
   );
   const maxDurationMs = normalizeNumberAtLeast(

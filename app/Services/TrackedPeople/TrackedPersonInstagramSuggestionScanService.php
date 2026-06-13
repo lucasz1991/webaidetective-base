@@ -20,6 +20,7 @@ class TrackedPersonInstagramSuggestionScanService
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
+        private readonly InstagramScanPolicyService $scanPolicies,
     ) {}
 
     private ?array $activeScanControl = null;
@@ -154,6 +155,9 @@ class TrackedPersonInstagramSuggestionScanService
         bool $deepSearch = false,
     ): TrackedPersonInstagramSuggestionScan {
         $profile ??= $this->profileRelationshipStore->ensureProfile($targetUsername);
+        $deepSearchPolicy = $this->scanPolicies->for('suggestion_deep_search');
+        $skipPreviouslyChecked = (bool) ($deepSearchPolicy['skip_previously_checked'] ?? true);
+        $noMatchSkipAfter = max(1, min(100, (int) ($deepSearchPolicy['no_match_skip_after'] ?? 2)));
 
         $liveConnections = [];
         $liveObservedSuggestions = [];
@@ -237,16 +241,9 @@ class TrackedPersonInstagramSuggestionScanService
                     ]);
                 },
                 $this->withActiveScanControl([
-                    'suggestionScanMaxItems' => 500,
-                    'suggestionCandidateMaxItems' => 300,
-                    'suggestionPublicListSearchMaxScrollRounds' => 60,
-                    'suggestionInlineMaxRounds' => 60,
-                    'suggestionDialogMaxRounds' => 100,
-                    'suggestionCandidateInlineMaxRounds' => 40,
-                    'suggestionCandidateDialogMaxRounds' => 70,
                     'suggestionDebug' => true,
-                    'suggestionCandidateHistory' => $deepSearch && $trackedPerson
-                        ? $this->buildSuggestionCandidateHistory($trackedPerson)
+                    'suggestionCandidateHistory' => $deepSearch && $trackedPerson && $skipPreviouslyChecked
+                        ? $this->buildSuggestionCandidateHistory($trackedPerson, $noMatchSkipAfter)
                         : [],
                 ]),
             );
@@ -585,8 +582,10 @@ class TrackedPersonInstagramSuggestionScanService
         return is_array($suggestionPayload) ? $suggestionPayload : [];
     }
 
-    private function buildSuggestionCandidateHistory(TrackedPerson $trackedPerson): array
-    {
+    private function buildSuggestionCandidateHistory(
+        TrackedPerson $trackedPerson,
+        int $noMatchSkipAfter,
+    ): array {
         $history = [];
 
         TrackedPersonInstagramInferredConnection::query()
@@ -614,7 +613,7 @@ class TrackedPersonInstagramSuggestionScanService
             ->latest('analyzed_at')
             ->limit(100)
             ->get()
-            ->each(function (TrackedPersonInstagramSuggestionScan $scan) use (&$history): void {
+            ->each(function (TrackedPersonInstagramSuggestionScan $scan) use (&$history, $noMatchSkipAfter): void {
                 $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
                 $scanPayload = $this->suggestionPayload($payload);
 
@@ -703,8 +702,11 @@ class TrackedPersonInstagramSuggestionScanService
                         ...($history[$username] ?? []),
                         'hasMatch' => false,
                         'noMatchChecks' => $noMatchChecks,
-                        'permanentlyDismissed' => $noMatchChecks >= 2
-                            || (bool) ($candidate['finalDismissedAfterSecondMiss'] ?? false),
+                        'permanentlyDismissed' => $noMatchChecks >= $noMatchSkipAfter
+                            || (
+                                $noMatchSkipAfter <= 2
+                                && (bool) ($candidate['finalDismissedAfterSecondMiss'] ?? false)
+                            ),
                     ];
                 }
             });

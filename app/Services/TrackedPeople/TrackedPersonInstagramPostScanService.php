@@ -88,10 +88,7 @@ class TrackedPersonInstagramPostScanService
                 $username,
                 'posts',
                 $progress,
-                $this->withActiveScanControl([
-                    'postScanMaxItems' => 100,
-                    'postScanMaxScrollRounds' => 40,
-                ]),
+                $this->withActiveScanControl([]),
             );
 
             return $this->storeScan($trackedPerson, $profile, $snapshot, $payload, $userId);

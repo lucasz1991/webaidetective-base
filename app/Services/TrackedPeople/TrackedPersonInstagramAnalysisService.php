@@ -16,14 +16,13 @@ use Illuminate\Support\Str;
 
 class TrackedPersonInstagramAnalysisService
 {
-    private const MAX_VISIBLE_RETRY_ATTEMPTS = 3;
-
     public function __construct(
         private readonly InstagramScraper $scraper,
         private readonly InstagramProfileDataExtractor $extractor,
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
+        private readonly InstagramScanPolicyService $scanPolicies,
     ) {}
 
     private ?array $activeScanControl = null;
@@ -835,8 +834,20 @@ class TrackedPersonInstagramAnalysisService
         return 'tracked-person-instagram-analysis:'.$trackedPerson->getKey();
     }
 
+    private function visibleCountAttempts(): int
+    {
+        return max(
+            1,
+            min(10, (int) ($this->scanPolicies->for('profile')['visible_count_attempts'] ?? 3)),
+        );
+    }
+
     private function scrapeMini(string $username, ?callable $progress = null): array
     {
+        $miniPolicy = $this->scanPolicies->for('mini');
+        $sessionFallbackEnabled = (bool) ($miniPolicy['session_fallback_enabled'] ?? true);
+        $maxAttempts = $sessionFallbackEnabled ? 2 : 1;
+
         $this->reportProgress($progress, [
             'phase' => 'profile',
             'percent' => 4,
@@ -866,7 +877,7 @@ class TrackedPersonInstagramAnalysisService
             'ok' => (bool) ($payload['ok'] ?? false),
         ];
 
-        if (! $countsFound || ! (bool) ($payload['ok'] ?? false)) {
+        if ((! $countsFound || ! (bool) ($payload['ok'] ?? false)) && $sessionFallbackEnabled) {
             if ($this->shouldStopGracefully() || (bool) ($payload['gracefullyStopped'] ?? false)) {
                 $payload['ok'] = false;
                 $payload['statusLevel'] = 'partial';
@@ -878,7 +889,7 @@ class TrackedPersonInstagramAnalysisService
                     [
                         'scan_mode' => 'mini',
                         'used_attempt' => count($attempts),
-                        'max_attempts' => 2,
+                        'max_attempts' => $maxAttempts,
                         'session_fallback_used' => false,
                         'visible_counts_complete' => (bool) ($extracted['visible_counts_complete'] ?? false),
                         'counts_found' => $countsFound,
@@ -923,7 +934,9 @@ class TrackedPersonInstagramAnalysisService
         if (! $countsFound) {
             $payload['ok'] = false;
             $payload['statusLevel'] = 'error';
-            $payload['statusMessage'] = 'Instagram-Mini-Scan fehlgeschlagen: Es wurden auch mit Session keine Kennzahlen im sichtbaren DOM oder HTML gefunden.';
+            $payload['statusMessage'] = $sessionFallbackEnabled
+                ? 'Instagram-Mini-Scan fehlgeschlagen: Es wurden auch mit Session keine Kennzahlen im sichtbaren DOM oder HTML gefunden.'
+                : 'Instagram-Mini-Scan fehlgeschlagen: Es wurden keine Kennzahlen im sichtbaren DOM oder HTML gefunden; der Session-Fallback ist deaktiviert.';
         }
 
         $this->reportProgress($progress, [
@@ -938,7 +951,7 @@ class TrackedPersonInstagramAnalysisService
             [
                 'scan_mode' => 'mini',
                 'used_attempt' => count($attempts),
-                'max_attempts' => 2,
+                'max_attempts' => $maxAttempts,
                 'session_fallback_used' => count($attempts) > 1,
                 'visible_counts_complete' => (bool) ($extracted['visible_counts_complete'] ?? false),
                 'counts_found' => $countsFound,
@@ -991,8 +1004,10 @@ class TrackedPersonInstagramAnalysisService
         $attempts = [];
         $lastPayload = [];
         $lastExtracted = [];
+        $maxAttempts = $this->visibleCountAttempts();
+        $retryDelaySeconds = max(0, min(300, (int) ($this->scanPolicies->for('profile')['retry_delay_seconds'] ?? 2)));
 
-        for ($attempt = 1; $attempt <= self::MAX_VISIBLE_RETRY_ATTEMPTS; $attempt++) {
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
             $this->reportProgress($progress, [
                 'phase' => 'profile',
                 'percent' => 4,
@@ -1034,8 +1049,8 @@ class TrackedPersonInstagramAnalysisService
                 break;
             }
 
-            if ($attempt < self::MAX_VISIBLE_RETRY_ATTEMPTS) {
-                usleep(1200000);
+            if ($attempt < $maxAttempts && $retryDelaySeconds > 0) {
+                usleep($retryDelaySeconds * 1000000);
             }
         }
 
@@ -1044,7 +1059,7 @@ class TrackedPersonInstagramAnalysisService
             $lastExtracted,
             [
                 'used_attempt' => count($attempts),
-                'max_attempts' => self::MAX_VISIBLE_RETRY_ATTEMPTS,
+                'max_attempts' => $maxAttempts,
                 'visible_counts_complete' => (bool) ($lastExtracted['visible_counts_complete'] ?? false),
                 'attempts' => $attempts,
             ],
@@ -1378,7 +1393,7 @@ class TrackedPersonInstagramAnalysisService
             'retryAttempts' => $attemptInfo['attempts'] ?? [],
             'scrapePhases' => $attemptInfo['phases'] ?? [],
             'usedAttempt' => $attemptInfo['used_attempt'] ?? 1,
-            'maxAttempts' => $attemptInfo['max_attempts'] ?? self::MAX_VISIBLE_RETRY_ATTEMPTS,
+            'maxAttempts' => $attemptInfo['max_attempts'] ?? $this->visibleCountAttempts(),
             'countsFound' => (bool) ($attemptInfo['counts_found'] ?? false),
             'preservedProfileFields' => $attemptInfo['preserved_profile_fields'] ?? [],
             'invalidComparisonBaseline' => ! $this->extractedHasComparableProfileValue($extracted, $profileImageHash),

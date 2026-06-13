@@ -116,12 +116,18 @@ async function runProfileSuggestionConnectionScan(
   const dismissedCandidates = [];
   const dismissedUsernames = new Set();
   const observedSuggestionsByUsername = new Map();
-  const candidateHistory = normalizeSuggestionCandidateHistory(runtimeConfig.suggestionCandidateHistory || {});
+  const skipPreviouslyChecked = runtimeConfig.suggestionSkipPreviouslyChecked !== false;
+  const noMatchSkipAfter = Math.max(1, Math.min(100, Number(runtimeConfig.suggestionNoMatchSkipAfter || 2)));
+  const candidateErrorMaxAttempts = Math.max(1, Math.min(10, Number(runtimeConfig.suggestionCandidateMaxAttempts || 1)));
+  const candidateRetryDelayMs = Math.max(0, Number(runtimeConfig.suggestionCandidateRetryDelayMs || 3000));
+  const candidateHistory = skipPreviouslyChecked
+    ? normalizeSuggestionCandidateHistory(runtimeConfig.suggestionCandidateHistory || {})
+    : {};
   const alreadyScannedSuggestionUsernames = new Set(Object.entries(candidateHistory)
     .filter(([, history]) => (
       Boolean(history?.hasMatch)
       || Boolean(history?.permanentlyDismissed)
-      || Number(history?.noMatchChecks || 0) >= 2
+      || Number(history?.noMatchChecks || 0) >= noMatchSkipAfter
     ))
     .map(([username]) => normalizeInstagramUsername(username))
     .filter(Boolean));
@@ -130,7 +136,7 @@ async function runProfileSuggestionConnectionScan(
   let rateLimitText = null;
   let dismissedCount = 0;
   let scraperProfileSwitchCount = 0;
-  const maxScraperProfileSwitches = Math.max(0, Math.min(3, Number(runtimeConfig.suggestionMaxScraperProfileSwitches || 3)));
+  const maxScraperProfileSwitches = Math.max(0, Math.min(10, Number(runtimeConfig.suggestionMaxScraperProfileSwitches || 3)));
 
   const rememberObservedSuggestion = (candidate, extra = {}) => {
     const username = normalizeInstagramUsername(candidate?.username || '');
@@ -432,7 +438,8 @@ async function runProfileSuggestionConnectionScan(
       permanentlyDismissed: false,
     };
     const shouldDismissAsKnownMatch = Boolean(history.hasMatch);
-    const shouldDismissAsFinalMiss = Boolean(history.permanentlyDismissed) || Number(history.noMatchChecks || 0) >= 2;
+    const shouldDismissAsFinalMiss = Boolean(history.permanentlyDismissed)
+      || Number(history.noMatchChecks || 0) >= noMatchSkipAfter;
 
     rememberObservedSuggestion(candidate, {
       checked: false,
@@ -541,6 +548,7 @@ async function runProfileSuggestionConnectionScan(
   if (!rateLimited) {
     for (let index = 0; index < candidatesToCheck.length; index += 1) {
       const candidate = candidatesToCheck[index];
+      const candidateErrorAttempt = Math.max(1, Number(candidate.candidateErrorAttempt || 1));
       const stopRequest = markGracefulStopIfRequested('suggestions', {
         loaded: checkedCandidates.length,
         expectedCount: candidatesToCheck.length,
@@ -623,35 +631,59 @@ async function runProfileSuggestionConnectionScan(
         }
 
         if (!candidateNavigation.ok) {
+          if (candidateErrorAttempt < candidateErrorMaxAttempts) {
+            candidatesToCheck[index] = {
+              ...candidate,
+              candidateErrorAttempt: candidateErrorAttempt + 1,
+            };
+
+            progressLog('suggestions-candidate-retry', {
+              relationship: 'suggestions',
+              loaded: checkedCandidates.length,
+              expectedCount: candidatesToCheck.length,
+              candidateUsername: candidate.username,
+              attempt: candidateErrorAttempt + 1,
+              maxAttempts: candidateErrorMaxAttempts,
+              message: `@${candidate.username} konnte nicht stabil geladen werden und wird erneut versucht (${candidateErrorAttempt + 1}/${candidateErrorMaxAttempts}).`,
+            });
+
+            if (candidateRetryDelayMs > 0) {
+              await sleep(candidateRetryDelayMs);
+            }
+
+            index -= 1;
+            continue;
+          }
+
           checkedCandidates.push({
-          ...candidate,
-          checked: false,
-          error: candidateNavigation.error,
-          skipped: true,
-          skippedReason: 'candidate-navigation-error',
-        });
-        rememberObservedSuggestion(candidate, {
-          checked: false,
-          skipped: true,
-          skippedReason: 'candidate-navigation-error',
-          error: candidateNavigation.error,
-        });
+            ...candidate,
+            checked: false,
+            error: candidateNavigation.error,
+            skipped: true,
+            skippedReason: 'candidate-navigation-error',
+          });
+          rememberObservedSuggestion(candidate, {
+            checked: false,
+            skipped: true,
+            skippedReason: 'candidate-navigation-error',
+            error: candidateNavigation.error,
+          });
 
-        progressLog('suggestions-candidate-error', {
-          relationship: 'suggestions',
-          loaded: checkedCandidates.length,
-          expectedCount: candidatesToCheck.length,
-          candidateUsername: candidate.username,
-          foundSuggestions: matchedCandidates.length,
-          suggestionConnectionsPreview: matchedCandidates.slice(-40),
-          observedSuggestionCount: observedSuggestionsByUsername.size,
-          observedSuggestionsPreview: observedSuggestionsPreview(),
-          message: `@${candidate.username} konnte nicht stabil geladen werden.`,
-          ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
-        });
+          progressLog('suggestions-candidate-error', {
+            relationship: 'suggestions',
+            loaded: checkedCandidates.length,
+            expectedCount: candidatesToCheck.length,
+            candidateUsername: candidate.username,
+            foundSuggestions: matchedCandidates.length,
+            suggestionConnectionsPreview: matchedCandidates.slice(-40),
+            observedSuggestionCount: observedSuggestionsByUsername.size,
+            observedSuggestionsPreview: observedSuggestionsPreview(),
+            message: `@${candidate.username} konnte nicht stabil geladen werden.`,
+            ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+          });
 
-        continue;
-      }
+          continue;
+        }
 
       await sleep(1300);
       const candidateProfile = await collectProfileInfo(page, candidate.username);
@@ -747,7 +779,9 @@ async function runProfileSuggestionConnectionScan(
           targetFoundInPublicLists: targetFound,
           targetFoundInFollowers: Boolean(publicListSearch.targetFoundInFollowers),
           targetFoundInFollowing: Boolean(publicListSearch.targetFoundInFollowing),
-          finalDismissedAfterSecondMiss: definitiveNoMatch && Number(candidate.previousNoMatchChecks || 0) >= 1,
+          finalDismissedAfterSecondMiss: skipPreviouslyChecked
+            && definitiveNoMatch
+            && Number(candidate.previousNoMatchChecks || 0) >= noMatchSkipAfter - 1,
           dismissedFromSuggestions: Boolean(candidate.dismissedBeforeCheck),
           suggestionsObserved: 0,
           suggestionsAvailable: false,
@@ -884,7 +918,9 @@ async function runProfileSuggestionConnectionScan(
             : (hasFiniteNumericValue(candidate.followingCount) ? Number(candidate.followingCount) : candidateProfile.followingCount),
           hoverCard: candidateHoverCard,
           targetFoundAsSuggestion: targetFound,
-          finalDismissedAfterSecondMiss: definitiveNoMatch && Number(candidate.previousNoMatchChecks || 0) >= 1,
+          finalDismissedAfterSecondMiss: skipPreviouslyChecked
+            && definitiveNoMatch
+            && Number(candidate.previousNoMatchChecks || 0) >= noMatchSkipAfter - 1,
           dismissedFromSuggestions: Boolean(candidate.dismissedBeforeCheck),
           suggestionsObserved: candidateSuggestions.items.length,
           suggestionsAvailable: Boolean(candidateSuggestions.available),
@@ -965,6 +1001,31 @@ async function runProfileSuggestionConnectionScan(
 
         const errorMessage = normalizeCandidateErrorMessage(error);
 
+        if (candidateErrorAttempt < candidateErrorMaxAttempts) {
+          candidatesToCheck[index] = {
+            ...candidate,
+            candidateErrorAttempt: candidateErrorAttempt + 1,
+          };
+
+          progressLog('suggestions-candidate-retry', {
+            relationship: 'suggestions',
+            loaded: checkedCandidates.length,
+            expectedCount: candidatesToCheck.length,
+            candidateUsername: candidate.username,
+            attempt: candidateErrorAttempt + 1,
+            maxAttempts: candidateErrorMaxAttempts,
+            candidateError: errorMessage,
+            message: `@${candidate.username} wird nach einem Fehler erneut versucht (${candidateErrorAttempt + 1}/${candidateErrorMaxAttempts}).`,
+          });
+
+          if (candidateRetryDelayMs > 0) {
+            await sleep(candidateRetryDelayMs);
+          }
+
+          index -= 1;
+          continue;
+        }
+
         checkedCandidates.push({
           ...candidate,
           checked: false,
@@ -999,7 +1060,7 @@ async function runProfileSuggestionConnectionScan(
     }
   }
 
-  const candidatesNeedingPostDismissal = [
+  const candidatesNeedingPostDismissal = skipPreviouslyChecked ? [
     ...matchedCandidates.map((candidate) => ({
       ...candidate,
       dismissReason: 'newly-saved-match',
@@ -1012,7 +1073,7 @@ async function runProfileSuggestionConnectionScan(
       })),
   ].filter((candidate) => (
     !dismissedUsernames.has(normalizeInstagramUsername(candidate.username))
-  ));
+  )) : [];
 
   if (!rateLimited && !gracefullyStopped && candidatesNeedingPostDismissal.length > 0) {
     try {

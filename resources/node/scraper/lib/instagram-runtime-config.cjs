@@ -21,8 +21,7 @@ function normalizeSuggestionCandidateHistory(value = {}, helpers = {}) {
       noMatchChecks,
       permanentlyDismissed:
         state.permanentlyDismissed === true
-        || state.permanently_dismissed === true
-        || noMatchChecks >= 2,
+        || state.permanently_dismissed === true,
     };
   }
 
@@ -150,8 +149,24 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
     suggestionDialogMaxRounds: normalizeOptionalPositiveInteger(input?.suggestionDialogMaxRounds, merged.suggestionDialogMaxRounds || 48) || 48,
     suggestionCandidateInlineMaxRounds: normalizeOptionalPositiveInteger(input?.suggestionCandidateInlineMaxRounds, merged.suggestionCandidateInlineMaxRounds || 24) || 24,
     suggestionCandidateDialogMaxRounds: normalizeOptionalPositiveInteger(input?.suggestionCandidateDialogMaxRounds, merged.suggestionCandidateDialogMaxRounds || 36) || 36,
+    suggestionCandidateMaxAttempts: Math.min(
+      10,
+      Math.floor(normalizeNumberAtLeast(input?.suggestionCandidateMaxAttempts, merged.suggestionCandidateMaxAttempts || 1, 1)),
+    ),
+    suggestionCandidateRetryDelayMs: normalizeNumberAtLeast(
+      input?.suggestionCandidateRetryDelayMs,
+      merged.suggestionCandidateRetryDelayMs || 3000,
+      0,
+    ),
+    suggestionSkipPreviouslyChecked: input?.suggestionSkipPreviouslyChecked !== false
+      && input?.suggestion_skip_previously_checked !== false
+      && merged.suggestionSkipPreviouslyChecked !== false,
+    suggestionNoMatchSkipAfter: Math.min(
+      100,
+      Math.floor(normalizeNumberAtLeast(input?.suggestionNoMatchSkipAfter, merged.suggestionNoMatchSkipAfter || 2, 1)),
+    ),
     suggestionMaxScraperProfileSwitches: Math.min(
-      3,
+      10,
       Math.floor(normalizeNumberAtLeast(input?.suggestionMaxScraperProfileSwitches, merged.suggestionMaxScraperProfileSwitches || 3, 0)),
     ),
     postScanMaxItems: normalizeOptionalPositiveInteger(input?.postScanMaxItems, merged.postScanMaxItems || 100) || 100,
@@ -169,7 +184,7 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
     scriptStallTimeoutMs: normalizeNumberAtLeast(input?.scriptStallTimeoutMs || input?.nodeStallTimeoutMs, merged.scriptStallTimeoutMs || 900000, 60000),
     browserDisconnectAbort: input?.browserDisconnectAbort !== false && input?.browser_disconnect_abort !== false,
     publicConnectionCandidateMaxAttempts: Math.min(
-      3,
+      10,
       Math.floor(normalizeNumberAtLeast(input?.publicConnectionCandidateMaxAttempts, merged.publicConnectionCandidateMaxAttempts || 3, 1)),
     ),
     publicConnectionCandidateMaxDurationMs: normalizeNumberAtLeast(input?.publicConnectionCandidateMaxDurationMs, merged.publicConnectionCandidateMaxDurationMs || 1200000, 60000),
