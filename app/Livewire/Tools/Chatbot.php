@@ -203,6 +203,7 @@ class Chatbot extends Component
         }
 
         $statusStore = app(InvestigationAssistantScanStatusStore::class);
+        $scanCoordinator = app(TrackedPersonInstagramScanCoordinator::class);
         $terminalScan = null;
 
         foreach ($this->scanActivities as $index => $activity) {
@@ -218,13 +219,26 @@ class Chatbot extends Component
                 continue;
             }
 
-            if (
-                ($status['status'] ?? null) === 'running'
-                && $this->assistantScanLooksInterrupted($status)
+            $scanState = $scanCoordinator->activeState((int) ($status['tracked_person_id'] ?? 0));
+            $stopRequested = (bool) ($scanState['gracefulStopRequested'] ?? false)
+                || (bool) ($status['stop_requested'] ?? false);
+            $scanIsActive = $scanCoordinator->hasActiveScan((int) ($status['tracked_person_id'] ?? 0));
+
+            if ($stopRequested && $scanIsActive) {
+                $status = $statusStore->stopping(
+                    $token,
+                    'Stop wurde erkannt. Der aktuelle Zwischenstand wird gespeichert.',
+                );
+            } elseif (
+                in_array($status['status'] ?? null, ['running', 'stopping'], true)
+                && ! $scanIsActive
+                && ($stopRequested || $this->assistantScanLooksInterrupted($status, 8))
             ) {
                 $status = $statusStore->pause(
                     $token,
-                    'Der Scanprozess antwortet nicht mehr. Der bisher gespeicherte Datenstand kann fortgesetzt oder abgeschlossen werden.',
+                    $stopRequested
+                        ? 'Der Scan wurde gestoppt. Der bisherige Datenstand wurde gespeichert.'
+                        : 'Der Scanprozess antwortet nicht mehr. Der bisher gespeicherte Datenstand kann fortgesetzt oder abgeschlossen werden.',
                     is_array($status['result'] ?? null) ? $status['result'] : [],
                 );
             }
@@ -876,7 +890,7 @@ class Chatbot extends Component
         Session::put(self::SCAN_ACTIVITIES_KEY, array_slice($this->scanActivities, -4));
     }
 
-    private function assistantScanLooksInterrupted(array $status): bool
+    private function assistantScanLooksInterrupted(array $status, int $staleAfterSeconds = 30): bool
     {
         $trackedPersonId = (int) ($status['tracked_person_id'] ?? 0);
         $updatedAt = $status['updated_at'] ?? null;
@@ -886,14 +900,14 @@ class Chatbot extends Component
         }
 
         try {
-            if (Carbon::parse($updatedAt)->diffInSeconds(now()) < 30) {
+            if (Carbon::parse($updatedAt)->diffInSeconds(now()) < $staleAfterSeconds) {
                 return false;
             }
         } catch (\Throwable) {
             return false;
         }
 
-        return ! app(TrackedPersonInstagramScanCoordinator::class)->hasActiveScan($trackedPersonId);
+        return true;
     }
 
     private function dismissPersistedResumeState(int $trackedPersonId, string $scanType, int $userId): void

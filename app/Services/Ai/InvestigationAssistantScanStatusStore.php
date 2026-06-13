@@ -62,6 +62,16 @@ class InvestigationAssistantScanStatusStore
         ]);
     }
 
+    public function stopping(string $token, string $message): array
+    {
+        return $this->update($token, [
+            'status' => 'stopping',
+            'phase' => 'saving',
+            'message' => $message,
+            'stop_requested' => true,
+        ]);
+    }
+
     public function dismiss(string $token, string $message): array
     {
         return $this->update($token, [

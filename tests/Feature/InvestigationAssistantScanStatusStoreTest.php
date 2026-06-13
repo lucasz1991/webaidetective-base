@@ -60,4 +60,20 @@ class InvestigationAssistantScanStatusStoreTest extends TestCase
         $this->assertSame('dismissed', $dismissed['status']);
         $this->assertFalse($dismissed['resumable']);
     }
+
+    public function test_it_tracks_the_saving_phase_after_a_stop_request(): void
+    {
+        $token = (string) Str::uuid();
+        $store = app(InvestigationAssistantScanStatusStore::class);
+        $store->start($token, [
+            'user_id' => 42,
+            'tracked_person_id' => 7,
+        ]);
+
+        $stopping = $store->stopping($token, 'Zwischenstand wird gespeichert.');
+
+        $this->assertSame('stopping', $stopping['status']);
+        $this->assertSame('saving', $stopping['phase']);
+        $this->assertTrue($stopping['stop_requested']);
+    }
 }

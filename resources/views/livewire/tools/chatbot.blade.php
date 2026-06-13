@@ -350,7 +350,7 @@
         },
         activeScans() {
             return (Array.isArray(this.scanActivities) ? this.scanActivities : [])
-                .filter((scan) => ['queued', 'running'].includes(scan?.status));
+                .filter((scan) => ['queued', 'running', 'stopping'].includes(scan?.status));
         },
         pausedScans() {
             return (Array.isArray(this.scanActivities) ? this.scanActivities : [])
@@ -361,6 +361,7 @@
         },
         scanStatusLabel(scan) {
             if (scan?.status === 'queued') return 'Warteschlange';
+            if (scan?.status === 'stopping') return 'Wird beendet und gespeichert';
             if (scan?.phase) return String(scan.phase).replaceAll('_', ' ');
             return 'Scan laeuft';
         },
@@ -432,7 +433,7 @@
     })"
     class="investigation-copilot"
 >
-    @if(collect($scanActivities)->contains(fn (array $scan): bool => in_array($scan['status'] ?? null, ['queued', 'running'], true)))
+    @if(collect($scanActivities)->contains(fn (array $scan): bool => in_array($scan['status'] ?? null, ['queued', 'running', 'stopping'], true)))
         <div wire:poll.2000ms="pollAssistantScans" class="hidden" aria-hidden="true"></div>
     @endif
 

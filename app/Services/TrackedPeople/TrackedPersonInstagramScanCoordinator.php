@@ -83,7 +83,7 @@ class TrackedPersonInstagramScanCoordinator
 
     public function hasActiveScan(int $trackedPersonId): bool
     {
-        $active = $this->active($trackedPersonId);
+        $active = $this->activeState($trackedPersonId);
 
         if ((int) ($active['generation'] ?? 0) <= 0) {
             return false;
@@ -108,6 +108,11 @@ class TrackedPersonInstagramScanCoordinator
         } catch (\Throwable) {
             return false;
         }
+    }
+
+    public function activeState(int $trackedPersonId): array
+    {
+        return $this->active($trackedPersonId);
     }
 
     public function touchActiveScan(int $trackedPersonId): void
@@ -315,7 +320,14 @@ class TrackedPersonInstagramScanCoordinator
         }
 
         if (function_exists('posix_kill')) {
-            return @posix_kill($pid, 0);
+            if (! @posix_kill($pid, 0)) {
+                return false;
+            }
+
+            $process = new Process(['ps', '-p', (string) $pid, '-o', 'stat=']);
+            $process->setTimeout(5)->run();
+
+            return ! $process->isSuccessful() || ! str_starts_with(trim($process->getOutput()), 'Z');
         }
 
         $process = new Process(['ps', '-p', (string) $pid, '-o', 'pid=']);
