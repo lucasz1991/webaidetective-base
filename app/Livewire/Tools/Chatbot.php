@@ -3,9 +3,9 @@
 namespace App\Livewire\Tools;
 
 use App\Models\Setting;
-use App\Services\Ai\AssistantApiKeyCipher;
 use App\Services\Ai\InvestigationAssistantToolService;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Session;
@@ -488,6 +488,13 @@ class Chatbot extends Component
             return '';
         }
 
-        return app(AssistantApiKeyCipher::class)->decrypt($value);
+        try {
+            return trim(Crypt::decryptString($value));
+        } catch (\Throwable $exception) {
+            throw new \RuntimeException(
+                'Der gespeicherte AI API-Key kann nicht mit dem APP_KEY der Base-Installation entschluesselt werden. Bitte den Key im Adminbereich erneut speichern.',
+                previous: $exception,
+            );
+        }
     }
 }
