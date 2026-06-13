@@ -130,19 +130,45 @@ class TrackedPersonInstagramProfileListScanService
             $expectedOverride = $relationship === 'followers' ? 'expectedFollowerCount' : 'expectedFollowingCount';
             $expectedCount = $relationship === 'followers' ? $profile->followers_count : $profile->following_count;
 
+            // Resume-Entscheidung: Fuer grosse Listen (>= 250) und unvollstaendigen letzten Lauf direkt die alphabetische Suche nutzen
+            $shouldResumeViaSearch = false;
+            if ((int) $expectedCount >= 250) {
+                $lastListScan = $this->lastListScanFor($profile, $relationship);
+                if ($lastListScan) {
+                    $shouldResumeViaSearch = $this->lastScanSuggestsResume($lastListScan, (int) $expectedCount);
+                }
+            }
+
+            // Modus pro Beziehung festlegen
+            $operationMode = $relationship;
+            $runtimeOverrides = [
+                $expectedOverride => max(0, (int) $expectedCount),
+            ];
+
+            if ($shouldResumeViaSearch) {
+                // Ueberspringe Scroll-Phase und nutze alphabetische Suche
+                $operationMode = $relationship === 'followers' ? 'followers-search' : 'following-search';
+                $runtimeOverrides = [
+                    ...$runtimeOverrides,
+                    'relationshipSearchOnly' => true,
+                    // Scroll-Phase auslassen / minimal halten
+                    'relationshipListMaxScrollRounds' => 1,
+                ];
+            }
+
             $this->reportProgress($progress, [
                 'phase' => $relationship,
                 'percent' => $start,
-                'message' => $label.' von @'.$username.' wird vorbereitet.',
+                'message' => ($shouldResumeViaSearch
+                    ? $label.' von @'.$username.' wird fortgesetzt (alphabetische Suche).'
+                    : $label.' von @'.$username.' wird vorbereitet.'),
             ]);
 
             $payload = $this->scraper->scrape(
                 $username,
-                $relationship,
+                $operationMode,
                 $progress,
-                $this->withActiveScanControl([
-                    $expectedOverride => max(0, (int) $expectedCount),
-                ]),
+                $this->withActiveScanControl($runtimeOverrides),
                 $start,
                 $end,
             );
@@ -165,7 +191,7 @@ class TrackedPersonInstagramProfileListScanService
                 'last_status_message' => $payload['statusMessage'] ?? null,
                 'last_scanned_at' => $payload['analyzedAt'],
                 'raw_profile' => [
-                    'operation_mode' => $payload['operationMode'] ?? $relationship,
+                    'operation_mode' => $payload['operationMode'] ?? $operationMode,
                     'profile_visibility' => $extracted['profile_visibility'] ?? null,
                     'visible_counts_complete' => (bool) ($extracted['visible_counts_complete'] ?? false),
                 ],
@@ -228,6 +254,52 @@ class TrackedPersonInstagramProfileListScanService
         ]);
 
         return $scans->values();
+    }
+
+    private function lastListScanFor(InstagramProfile $profile, string $relationship): ?InstagramProfileListScan
+    {
+        return InstagramProfileListScan::query()
+            ->where('instagram_profile_id', $profile->id)
+            ->where('list_type', $relationship)
+            ->latest('analyzed_at')
+            ->first();
+    }
+
+    private function lastScanSuggestsResume(InstagramProfileListScan $lastScan, int $expectedCount): bool
+    {
+        if ($expectedCount <= 0) {
+            return false;
+        }
+
+        $payload = is_array($lastScan->raw_payload) ? $lastScan->raw_payload : [];
+        // Versuche verschiedene Pfade fuer observedCount zu lesen
+        $observed = (int) (
+            data_get($payload, 'profile.followersList.observedCount')
+            ?? data_get($payload, 'profile.followingList.observedCount')
+            ?? data_get($payload, 'followers_list.observedCount')
+            ?? data_get($payload, 'following_list.observedCount')
+            ?? 0
+        );
+        $rateLimited = (bool) (
+            data_get($payload, 'profile.followersList.rateLimited')
+            || data_get($payload, 'profile.followingList.rateLimited')
+            || data_get($payload, 'followers_list.rateLimited')
+            || data_get($payload, 'following_list.rateLimited')
+            || data_get($payload, 'list.rateLimited')
+            || data_get($payload, 'rateLimited')
+        );
+        $graceful = (bool) (
+            data_get($payload, 'profile.followersList.gracefullyStopped')
+            || data_get($payload, 'profile.followingList.gracefullyStopped')
+            || data_get($payload, 'followers_list.gracefullyStopped')
+            || data_get($payload, 'following_list.gracefullyStopped')
+            || data_get($payload, 'list.gracefullyStopped')
+            || data_get($payload, 'gracefullyStopped')
+        );
+
+        return ($observed > 0 && $observed < $expectedCount)
+            || $rateLimited
+            || $graceful;
     }
 
     private function reportProgress(?callable $progress, array $payload): void
