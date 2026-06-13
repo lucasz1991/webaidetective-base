@@ -155,8 +155,8 @@
                 </div>
             </div>
 
-            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div class="flex items-center gap-4">
+            <div class="flex items-start justify-between gap-3">
+                <div class="flex min-w-0 flex-1 items-center gap-4">
                     <div class="relative h-20 w-20 shrink-0">
                         <div class="h-20 w-20 overflow-hidden rounded-full border-2 bg-slate-100 shadow-sm {{ $profileImageFrameClass }}" title="{{ $latestProfileVisibilityLabel }}">
                             @if($trackedPerson->profile_image_url)
@@ -180,91 +180,82 @@
                     </div>
                 </div>
 
-                <div class="grid w-full max-w-2xl grid-cols-1 gap-3 text-left sm:grid-cols-3 lg:w-auto">
-                    @if($latestFollowerListAvailable || $latestProfileIsPublic)
-                        <button
-                            type="button"
-                            wire:click="$set('showFollowersModal', true)"
-                            @class([
-                                'rounded-3xl border bg-white px-4 py-3 shadow-sm transition focus:outline-none focus:ring-2',
-                                'border-emerald-100 hover:border-emerald-300 hover:bg-emerald-50 focus:ring-emerald-300' => $latestFollowerListAvailable,
-                                'border-slate-200 opacity-60 grayscale-[50%] hover:border-slate-300 hover:bg-slate-50 focus:ring-slate-300' => ! $latestFollowerListAvailable,
-                            ])
-                            title="{{ $latestFollowerListAvailable ? 'Followerliste oeffnen' : 'Followerliste scannen' }}"
-                        >
-                            <div class="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                                <span>Follower</span>
-                                <span @class([
-                                    'rounded-full px-2 py-0.5 text-[10px] ring-1',
-                                    'bg-emerald-50 text-emerald-700 ring-emerald-200' => $latestFollowerListAvailable,
-                                    'bg-slate-100 text-slate-600 ring-slate-200' => ! $latestFollowerListAvailable,
-                                ])>{{ $latestFollowerListAvailable ? 'Liste' : 'Scan' }}</span>
+                <div class="w-[min(58vw,24rem)] shrink-0 overflow-hidden rounded-3xl border border-white/80 bg-white/90 shadow-sm backdrop-blur">
+                    <div class="grid grid-cols-3 divide-x divide-slate-200">
+                        @if($latestFollowerListAvailable || $latestProfileIsPublic)
+                            <button
+                                type="button"
+                                wire:click="$set('showFollowersModal', true)"
+                                @class([
+                                    'px-3 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-inset',
+                                    'hover:bg-emerald-50 focus:ring-emerald-300' => $latestFollowerListAvailable,
+                                    'opacity-60 grayscale-[50%] hover:bg-slate-50 focus:ring-slate-300' => ! $latestFollowerListAvailable,
+                                ])
+                                title="{{ $latestFollowerListAvailable ? 'Followerliste oeffnen' : 'Followerliste scannen' }}"
+                            >
+                                <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Follower</div>
+                                <div class="mt-1 text-base font-bold text-slate-950 sm:text-xl">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
+                                <div @class([
+                                    'mt-1 text-[10px] font-semibold',
+                                    'text-emerald-700' => $latestFollowerListAvailable,
+                                    'text-slate-500' => ! $latestFollowerListAvailable,
+                                ])>{{ $latestFollowerListAvailable ? 'Liste' : 'Keine Liste' }}</div>
+                            </button>
+                        @else
+                            <div class="px-3 py-3 opacity-60 grayscale-[50%]">
+                                <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Follower</div>
+                                <div class="mt-1 text-base font-bold text-slate-950 sm:text-xl">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
+                                <div class="mt-1 text-[10px] font-semibold text-slate-500">Keine Liste</div>
                             </div>
-                            <div class="mt-2 text-xl font-bold text-slate-950">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
-                            <div @class([
-                                'mt-1 text-xs font-semibold',
-                                'text-emerald-700' => $latestFollowerListAvailable,
-                                'text-slate-500' => ! $latestFollowerListAvailable,
-                            ])>{{ $latestFollowerListAvailable ? number_format($latestFollowerStats['observedCount']).' gespeichert' : 'Keine Liste' }}</div>
-                        </button>
-                    @else
-                        <div class="rounded-3xl border border-slate-200 bg-white px-4 py-3 opacity-60 shadow-sm grayscale-[50%]">
-                            <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Follower</div>
-                            <div class="mt-2 text-xl font-bold text-slate-950">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
-                            <div class="mt-1 text-xs font-semibold text-slate-500">Keine Liste</div>
-                        </div>
-                    @endif
-                    @if($latestFollowingListAvailable || $latestProfileIsPublic)
-                        <button
-                            type="button"
-                            wire:click="$set('showFollowingModal', true)"
-                            @class([
-                                'rounded-3xl border bg-white px-4 py-3 shadow-sm transition focus:outline-none focus:ring-2',
-                                'border-sky-100 hover:border-sky-300 hover:bg-sky-50 focus:ring-sky-300' => $latestFollowingListAvailable,
-                                'border-slate-200 opacity-60 grayscale-[50%] hover:border-slate-300 hover:bg-slate-50 focus:ring-slate-300' => ! $latestFollowingListAvailable,
-                            ])
-                            title="{{ $latestFollowingListAvailable ? 'Gefolgt-Liste oeffnen' : 'Gefolgt-Liste scannen' }}"
-                        >
-                            <div class="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                                <span>Gefolgt</span>
-                                <span @class([
-                                    'rounded-full px-2 py-0.5 text-[10px] ring-1',
-                                    'bg-sky-50 text-sky-700 ring-sky-200' => $latestFollowingListAvailable,
-                                    'bg-slate-100 text-slate-600 ring-slate-200' => ! $latestFollowingListAvailable,
-                                ])>{{ $latestFollowingListAvailable ? 'Liste' : 'Scan' }}</span>
+                        @endif
+
+                        @if($latestFollowingListAvailable || $latestProfileIsPublic)
+                            <button
+                                type="button"
+                                wire:click="$set('showFollowingModal', true)"
+                                @class([
+                                    'px-3 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-inset',
+                                    'hover:bg-sky-50 focus:ring-sky-300' => $latestFollowingListAvailable,
+                                    'opacity-60 grayscale-[50%] hover:bg-slate-50 focus:ring-slate-300' => ! $latestFollowingListAvailable,
+                                ])
+                                title="{{ $latestFollowingListAvailable ? 'Gefolgt-Liste oeffnen' : 'Gefolgt-Liste scannen' }}"
+                            >
+                                <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Gefolgt</div>
+                                <div class="mt-1 text-base font-bold text-slate-950 sm:text-xl">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
+                                <div @class([
+                                    'mt-1 text-[10px] font-semibold',
+                                    'text-sky-700' => $latestFollowingListAvailable,
+                                    'text-slate-500' => ! $latestFollowingListAvailable,
+                                ])>{{ $latestFollowingListAvailable ? 'Liste' : 'Keine Liste' }}</div>
+                            </button>
+                        @else
+                            <div class="px-3 py-3 opacity-60 grayscale-[50%]">
+                                <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Gefolgt</div>
+                                <div class="mt-1 text-base font-bold text-slate-950 sm:text-xl">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
+                                <div class="mt-1 text-[10px] font-semibold text-slate-500">Keine Liste</div>
                             </div>
-                            <div class="mt-2 text-xl font-bold text-slate-950">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
-                            <div @class([
-                                'mt-1 text-xs font-semibold',
-                                'text-sky-700' => $latestFollowingListAvailable,
-                                'text-slate-500' => ! $latestFollowingListAvailable,
-                            ])>{{ $latestFollowingListAvailable ? number_format($latestFollowingStats['observedCount']).' gespeichert' : 'Keine Liste' }}</div>
-                        </button>
-                    @else
-                        <div class="rounded-3xl border border-slate-200 bg-white px-4 py-3 opacity-60 shadow-sm grayscale-[50%]">
-                            <div class="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Gefolgt</div>
-                            <div class="mt-2 text-xl font-bold text-slate-950">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
-                            <div class="mt-1 text-xs font-semibold text-slate-500">Keine Liste</div>
+                        @endif
+
+                        <div class="px-3 py-3 text-left">
+                            <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Beitraege</div>
+                            <div class="mt-1 text-base font-bold text-slate-950 sm:text-xl">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-' }}</div>
+                            <div class="mt-1 text-[10px] font-semibold text-violet-700">
+                                @if($latestProfileIsPublic)
+                                    <button
+                                        type="button"
+                                        wire:click="scanInstagramPosts"
+                                        wire:loading.attr="disabled"
+                                        wire:target="scanInstagramPosts"
+                                        @disabled(! $trackedPerson->instagram_username)
+                                        class="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] text-violet-700 ring-1 ring-violet-200 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        Scan
+                                    </button>
+                                @else
+                                    Profilmetriken
+                                @endif
+                            </div>
                         </div>
-                    @endif
-                    <div class="rounded-3xl border border-violet-100 bg-white px-4 py-3 shadow-sm">
-                        <div class="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                            <span>Beitraege</span>
-                            @if($latestProfileIsPublic)
-                                <button
-                                    type="button"
-                                    wire:click="scanInstagramPosts"
-                                    wire:loading.attr="disabled"
-                                    wire:target="scanInstagramPosts"
-                                    @disabled(! $trackedPerson->instagram_username)
-                                    class="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] text-violet-700 ring-1 ring-violet-200 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                    Scan
-                                </button>
-                            @endif
-                        </div>
-                        <div class="mt-2 text-xl font-bold text-slate-950">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-' }}</div>
-                        <div class="mt-1 text-xs font-semibold text-slate-500">Profilmetriken</div>
                     </div>
                 </div>
 
