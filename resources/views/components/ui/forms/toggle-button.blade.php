@@ -2,6 +2,7 @@
     'id'    => 'toggle-' . Str::random(6),
     'label' => null,
     'model' => null,   // z. B. maintenanceMode
+    'alpineModel' => null,
     'change' => null,  // optional: JS change handler
     'checked' => false,
 ])
@@ -11,6 +12,7 @@
         id="{{ $id }}"
         type="checkbox"
         @if($model) wire:model.live="{{ $model }}" @endif
+        @if($alpineModel) x-model="{{ $alpineModel }}" @endif
         @if($change) @change="{{ $change }}" @endif
         @checked($checked)
         class="sr-only peer"

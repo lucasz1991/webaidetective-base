@@ -191,6 +191,14 @@ class TrackedPersonInstagramSuggestionScanService
         }
         $elevateToDeepSearch = (!$deepSearch) && ($previousScanCount % $recheckEvery === $recheckEvery - 1);
 
+        // Resume support: detect last incomplete scan and build a pending list
+        $lastScan = $this->lastSuggestionScanForContext($trackedPerson, $profile);
+        $resumePendingOnly = false;
+        $pendingCandidates = [];
+        if ($lastScan) {
+            [$resumePendingOnly, $pendingCandidates] = $this->buildResumePendingFromLastScan($lastScan);
+        }
+
         try {
             $payload = $this->scraper->scrape(
                 $targetUsername,
@@ -263,6 +271,11 @@ class TrackedPersonInstagramSuggestionScanService
                         : []),
                     // On elevated 3rd scan, force full recheck (no skipping)
                     ...($elevateToDeepSearch ? ['suggestionSkipPreviouslyChecked' => false] : []),
+                    // Resume-only: if last scan incomplete, pass pending list and a hint to prefer resume
+                    ...($pendingCandidates !== [] ? [
+                        'suggestionPendingCandidates' => $pendingCandidates,
+                        'suggestionResumePendingOnly' => $resumePendingOnly,
+                    ] : []),
                 ]),
             );
         } catch (\Throwable $exception) {
@@ -598,6 +611,88 @@ class TrackedPersonInstagramSuggestionScanService
         $suggestionPayload = $payload['suggestionScan'] ?? data_get($payload, 'profile.suggestionScan', []);
 
         return is_array($suggestionPayload) ? $suggestionPayload : [];
+    }
+
+    private function lastSuggestionScanForContext(?TrackedPerson $trackedPerson, ?InstagramProfile $profile): ?TrackedPersonInstagramSuggestionScan
+    {
+        if ($trackedPerson) {
+            return $trackedPerson->instagramSuggestionScans()->latest('analyzed_at')->first();
+        }
+
+        if ($profile) {
+            return TrackedPersonInstagramSuggestionScan::query()
+                ->where('instagram_profile_id', $profile->id)
+                ->latest('analyzed_at')
+                ->first();
+        }
+
+        return null;
+    }
+
+    private function buildResumePendingFromLastScan(TrackedPersonInstagramSuggestionScan $lastScan): array
+    {
+        $payload = is_array($lastScan->raw_payload) ? $lastScan->raw_payload : [];
+        $scanPayload = $this->suggestionPayload($payload);
+        $observed = $this->normalizeObservedSuggestionItems($scanPayload['observedSuggestions'] ?? []);
+        $checked = $this->normalizeObservedSuggestionItems($scanPayload['checkedCandidates'] ?? []);
+
+        // Determine if last scan was incomplete
+        $observedCount = (int) ($scanPayload['observedCount'] ?? count($observed));
+        $checkedCount = (int) ($scanPayload['checkedCount'] ?? count(array_filter($checked, static fn ($c) => (bool) ($c['checked'] ?? false))));
+        $incomplete = ($observedCount > 0) && ($checkedCount < $observedCount);
+
+        // Collect pending usernames: observed but not checked, and retriable errors from checkedCandidates
+        $retryableReasons = ['candidate-error', 'candidate-navigation-error', 'candidate-http-429'];
+        $pendingByUsername = [];
+
+        foreach ($observed as $item) {
+            $username = $this->scraper->normalizeInstagramUsername($item['username'] ?? null);
+            if ($username === null) {
+                continue;
+            }
+
+            $checkedFlag = (bool) ($item['checked'] ?? false);
+            $skipped = (bool) ($item['skipped'] ?? false);
+            $skippedReason = is_scalar($item['skippedReason'] ?? null) ? (string) $item['skippedReason'] : null;
+
+            // Exclude already-saved matches or permanently dismissed non-matches
+            if (in_array($skippedReason, ['already-saved-match', 'already-dismissed-no-match'], true)) {
+                continue;
+            }
+
+            if (! $checkedFlag) {
+                $pendingByUsername[$username] = [
+                    'username' => $username,
+                    'profileUrl' => $this->nullableTrim($item['profileUrl'] ?? null) ?: 'https://www.instagram.com/'.$username.'/',
+                ];
+            }
+        }
+
+        foreach ($scanPayload['checkedCandidates'] ?? [] as $candidate) {
+            if (! is_array($candidate) || ! is_scalar($candidate['username'] ?? null)) {
+                continue;
+            }
+            $username = $this->scraper->normalizeInstagramUsername((string) $candidate['username']);
+            if ($username === null) {
+                continue;
+            }
+
+            $isChecked = (bool) ($candidate['checked'] ?? false);
+            $skipped = (bool) ($candidate['skipped'] ?? false);
+            $skippedReason = is_scalar($candidate['skippedReason'] ?? null) ? (string) $candidate['skippedReason'] : null;
+
+            // Retry candidates that failed due to transient errors
+            if (! $isChecked && $skipped && in_array($skippedReason, $retryableReasons, true)) {
+                $pendingByUsername[$username] = [
+                    'username' => $username,
+                    'profileUrl' => $this->nullableTrim($candidate['profileUrl'] ?? null) ?: 'https://www.instagram.com/'.$username.'/',
+                ];
+            }
+        }
+
+        $pending = array_values($pendingByUsername);
+
+        return [$incomplete, $pending];
     }
 
     private function buildSuggestionCandidateHistory(

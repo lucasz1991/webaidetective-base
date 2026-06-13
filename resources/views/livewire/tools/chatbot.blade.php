@@ -5,12 +5,22 @@
         isLoading: @entangle('isLoading'),
         chatHistory: @entangle('chatHistory'),
         toolEvents: @entangle('toolEvents'),
+        attachedFiles: @entangle('uploads'),
         pageContext: @js($pageContext),
         voiceSupported: false,
         listening: false,
         recognition: null,
+        speechSupported: false,
+        speaking: false,
+        speakingIndex: null,
+        autoRead: $persist(false).as('investigation-copilot-auto-read'),
+        speechRate: $persist(1).as('investigation-copilot-speech-rate'),
+        lastAssistantMessageKey: null,
         init() {
             this.voiceSupported = ('SpeechRecognition' in window) || ('webkitSpeechRecognition' in window);
+            this.speechSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+            this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
+            this.$watch('chatHistory', (history) => this.handleNewAssistantMessage(history));
             this.syncContext();
         },
         normalizeEventDetail(event) {
@@ -48,16 +58,19 @@
         },
         async send() {
             if (this.isLoading) return;
+            if (!(this.draft || '').trim() && !this.hasUploads()) return;
             await this.syncContext();
             $wire.set('message', this.draft || '');
-            $wire.sendMessage();
+            await $wire.sendMessage();
+            this.$nextTick(() => this.resizeComposer());
         },
         async quick(prompt) {
             if (this.isLoading) return;
             await this.syncContext();
             this.draft = prompt;
             $wire.set('message', prompt);
-            $wire.sendMessage();
+            await $wire.sendMessage();
+            this.$nextTick(() => this.resizeComposer());
         },
         selectNetworkNode(event) {
             const detail = this.normalizeEventDetail(event);
@@ -103,6 +116,82 @@
 
             return `Kontext: ${this.pageContext.page_title || this.pageContext.path || 'aktuelle Seite'}`;
         },
+        hasUploads() {
+            return (Array.isArray(this.attachedFiles) && this.attachedFiles.length > 0)
+                || Boolean(this.$refs.fileInput?.files?.length);
+        },
+        resizeComposer() {
+            const composer = this.$refs.composer;
+            if (!composer) return;
+            composer.style.height = 'auto';
+            composer.style.height = `${Math.min(composer.scrollHeight, 144)}px`;
+        },
+        latestAssistantMessageKey(history) {
+            const messages = Array.isArray(history) ? history : [];
+            const item = [...messages].reverse().find((message) => message?.role === 'assistant');
+            return item ? `${item.time || ''}|${item.content || ''}` : null;
+        },
+        handleNewAssistantMessage(history) {
+            const messages = Array.isArray(history) ? history : [];
+            const index = messages.map((item) => item?.role).lastIndexOf('assistant');
+            if (index < 0) return;
+
+            const item = messages[index];
+            const key = `${item.time || ''}|${item.content || ''}`;
+            if (key === this.lastAssistantMessageKey) return;
+
+            this.lastAssistantMessageKey = key;
+            if (this.autoRead && item.content) {
+                this.speak(item.content, index);
+            }
+        },
+        speak(text, index = null) {
+            if (!this.speechSupported || !text) return;
+
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(String(text));
+            utterance.lang = 'de-DE';
+            utterance.rate = Number(this.speechRate || 1);
+            utterance.pitch = 1;
+            utterance.onstart = () => {
+                this.speaking = true;
+                this.speakingIndex = index;
+            };
+            utterance.onend = () => {
+                this.speaking = false;
+                this.speakingIndex = null;
+            };
+            utterance.onerror = () => {
+                this.speaking = false;
+                this.speakingIndex = null;
+            };
+            window.speechSynthesis.speak(utterance);
+        },
+        stopSpeaking() {
+            if (!this.speechSupported) return;
+            window.speechSynthesis.cancel();
+            this.speaking = false;
+            this.speakingIndex = null;
+        },
+        handleUiAction(event) {
+            const detail = this.normalizeEventDetail(event);
+            const action = detail.action || detail;
+
+            if (action?.type === 'navigate' && action.url) {
+                window.setTimeout(() => this.navigateTo(action.url), 850);
+            }
+        },
+        navigateTo(url) {
+            if (!url) return;
+            this.stopSpeaking();
+
+            if (window.Livewire?.navigate) {
+                window.Livewire.navigate(url);
+                return;
+            }
+
+            window.location.assign(url);
+        },
         toggleVoice() {
             if (!this.voiceSupported || this.isLoading) return;
 
@@ -121,6 +210,7 @@
 
                     this.draft = `${this.draft || ''} ${transcript}`.trim();
                     $wire.set('message', this.draft);
+                    this.$nextTick(() => this.resizeComposer());
                 };
                 this.recognition.onend = () => this.listening = false;
                 this.recognition.onerror = () => this.listening = false;
@@ -139,6 +229,7 @@
     x-on:network-map-node-selected.window="selectNetworkNode($event)"
     x-on:assistant-network-context.window="updateNetworkContext($event)"
     x-on:assistant-context-profile-preview.window="updateProfilePreview($event)"
+    x-on:assistant-ui-action.window="handleUiAction($event)"
     x-on:livewire:navigated.window="syncContext({
         selected_node_id: null,
         selected_node_type: null,
@@ -182,9 +273,85 @@
                         <p class="mt-1 truncate text-[11px] text-slate-300" x-text="contextLabel()"></p>
                     </div>
                     <div class="flex items-center gap-2">
+                        <x-ui.dropdown.anchor-dropdown
+                            align="right"
+                            width="auto"
+                            :offset="8"
+                            dropdown-classes=""
+                            content-classes="w-72 rounded-xl border border-slate-200 bg-white text-slate-900"
+                        >
+                            <x-slot name="trigger">
+                                <button
+                                    type="button"
+                                    x-bind:aria-expanded="open"
+                                    class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
+                                    title="Sprach-Einstellungen"
+                                >
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" stroke="currentColor" stroke-width="2"/>
+                                        <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.09A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.09A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.1.38.31.73.6 1 .3.27.68.41 1.09.4H21v4h-.09A1.7 1.7 0 0 0 19.4 15Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                            </x-slot>
+
+                            <x-slot name="content">
+                                <div class="space-y-4 p-4 text-left">
+                                    <div>
+                                        <p class="text-xs font-black uppercase tracking-[.14em] text-slate-500">Sprachausgabe</p>
+                                        <p class="mt-1 text-xs leading-5 text-slate-500">Antworten einzeln oder automatisch mit der Browserstimme vorlesen.</p>
+                                    </div>
+
+                                    <div class="flex items-center justify-between gap-4">
+                                        <div>
+                                            <p class="text-sm font-bold text-slate-800">Automatisch vorlesen</p>
+                                            <p class="text-[11px] text-slate-500">Nur neue Copilot-Antworten</p>
+                                        </div>
+                                        <x-ui.forms.toggle-button
+                                            id="assistant-auto-read"
+                                            alpine-model="autoRead"
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label for="assistant-speech-rate" class="mb-1 block text-xs font-bold text-slate-600">Sprechgeschwindigkeit</label>
+                                        <select
+                                            id="assistant-speech-rate"
+                                            x-model.number="speechRate"
+                                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 focus:border-emerald-500 focus:ring-emerald-500"
+                                        >
+                                            <option value="0.8">Ruhig</option>
+                                            <option value="1">Normal</option>
+                                            <option value="1.2">Schnell</option>
+                                            <option value="1.4">Sehr schnell</option>
+                                        </select>
+                                    </div>
+
+                                    <div class="flex gap-2">
+                                        <button
+                                            type="button"
+                                            x-on:click="speak('Die Sprachausgabe ist einsatzbereit.')"
+                                            x-bind:disabled="!speechSupported"
+                                            class="inline-flex flex-1 items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                                        >
+                                            Stimme testen
+                                        </button>
+                                        <button
+                                            type="button"
+                                            x-show="speaking"
+                                            x-on:click="stopSpeaking()"
+                                            class="inline-flex items-center justify-center rounded-lg bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
+                                        >
+                                            Stoppen
+                                        </button>
+                                    </div>
+                                </div>
+                            </x-slot>
+                        </x-ui.dropdown.anchor-dropdown>
+
                         <button
                             type="button"
                             wire:click="clearChat"
+                            x-on:click="stopSpeaking()"
                             class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
                             title="Chat leeren"
                         >
@@ -194,7 +361,7 @@
                         </button>
                         <button
                             type="button"
-                            x-on:click="showChat = false"
+                            x-on:click="stopSpeaking(); showChat = false"
                             class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
                             title="Schließen"
                         >
@@ -249,9 +416,54 @@
                             >
                                 <div class="mb-1 flex items-center justify-between gap-3">
                                     <strong class="text-xs uppercase tracking-[.14em]" x-text="item.role === 'user' ? 'Du' : 'Copilot'"></strong>
-                                    <span class="text-[11px] text-slate-400" x-text="item.time"></span>
+                                    <div class="flex items-center gap-2">
+                                        <button
+                                            type="button"
+                                            x-show="item.role === 'assistant' && speechSupported"
+                                            x-on:click="speaking && speakingIndex === index ? stopSpeaking() : speak(item.content, index)"
+                                            class="inline-flex h-6 w-6 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-emerald-700"
+                                            x-bind:title="speaking && speakingIndex === index ? 'Vorlesen stoppen' : 'Antwort vorlesen'"
+                                        >
+                                            <svg x-show="!(speaking && speakingIndex === index)" class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                <path d="M5 9v6h4l5 4V5L9 9H5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                                                <path d="M17 9a4 4 0 0 1 0 6M19.5 6.5a7.5 7.5 0 0 1 0 11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                            </svg>
+                                            <svg x-show="speaking && speakingIndex === index" class="h-3.5 w-3.5 text-rose-600" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                                                <rect x="6" y="6" width="12" height="12" rx="2"/>
+                                            </svg>
+                                        </button>
+                                        <span class="text-[11px] text-slate-400" x-text="item.time"></span>
+                                    </div>
                                 </div>
                                 <p class="whitespace-pre-line" x-text="item.content"></p>
+
+                                <div x-show="Array.isArray(item.profiles) && item.profiles.length" class="mt-3 flex flex-wrap gap-2">
+                                    <template x-for="profile in (item.profiles || [])" :key="profile.type + '-' + profile.id">
+                                        <button
+                                            type="button"
+                                            x-on:click="navigateTo(profile.url)"
+                                            class="group inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 py-1 pl-1 pr-3 text-left transition hover:border-emerald-300 hover:bg-emerald-50"
+                                            x-bind:title="'Profil öffnen: @' + profile.username"
+                                        >
+                                            <span class="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-200 text-xs font-black uppercase text-slate-600 ring-1 ring-white">
+                                                <span x-text="(profile.display_name || profile.username || '?').charAt(0)"></span>
+                                                <img
+                                                    x-show="profile.image_url"
+                                                    x-bind:src="profile.image_url"
+                                                    x-bind:alt="'Profilbild von @' + profile.username"
+                                                    x-on:error="$el.remove()"
+                                                    class="absolute inset-0 h-full w-full object-cover"
+                                                    loading="lazy"
+                                                    referrerpolicy="no-referrer"
+                                                >
+                                            </span>
+                                            <span class="min-w-0">
+                                                <span class="block truncate text-xs font-black text-slate-800 group-hover:text-emerald-800" x-text="profile.display_name || '@' + profile.username"></span>
+                                                <span class="block truncate text-[10px] text-slate-500" x-text="'@' + profile.username"></span>
+                                            </span>
+                                        </button>
+                                    </template>
+                                </div>
                             </div>
                         </template>
 
@@ -270,78 +482,142 @@
                             </div>
                         </template>
 
-                        <div x-show="isLoading" x-collapse class="max-w-[92%] rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                        <div x-show="isLoading" x-collapse class="max-w-[92%] overflow-hidden rounded-xl border border-emerald-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
                             <div class="flex items-center gap-3">
-                                <svg class="h-4 w-4 animate-spin text-emerald-700" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                    <circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
-                                    <path class="opacity-90" d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
-                                </svg>
-                                <span>Analysiere und pruefe Tools...</span>
+                                <span class="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-50">
+                                    <span class="absolute inset-1 animate-ping rounded-full bg-emerald-300/40"></span>
+                                    <svg class="relative h-4 w-4 animate-spin text-emerald-700" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <circle class="opacity-20" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
+                                        <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+                                    </svg>
+                                </span>
+                                <div class="min-w-0">
+                                    <p class="font-bold text-slate-800">Copilot arbeitet</p>
+                                    <div class="mt-1 flex items-center gap-1 text-xs text-slate-500">
+                                        <span>Kontext und Tools werden geprüft</span>
+                                        <span class="flex gap-1" aria-hidden="true">
+                                            <span class="h-1 w-1 animate-bounce rounded-full bg-emerald-500 [animation-delay:-.3s]"></span>
+                                            <span class="h-1 w-1 animate-bounce rounded-full bg-emerald-500 [animation-delay:-.15s]"></span>
+                                            <span class="h-1 w-1 animate-bounce rounded-full bg-emerald-500"></span>
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mt-3 h-1 overflow-hidden rounded-full bg-slate-100">
+                                <div class="h-full w-2/3 animate-pulse rounded-full bg-gradient-to-r from-emerald-400 via-cyan-400 to-emerald-400"></div>
                             </div>
                         </div>
                     </div>
 
-                    <footer class="border-t border-slate-200 bg-white p-4">
-                        <div class="mb-3 flex flex-wrap items-center gap-2">
-                            <input
-                                x-ref="fileInput"
-                                type="file"
-                                wire:model="uploads"
-                                multiple
-                                class="hidden"
-                                accept=".txt,.csv,.json,.md,.log,.xml,.html,.yaml,.yml,.pdf,.png,.jpg,.jpeg,.webp"
+                    <footer class="border-t border-slate-200 bg-white p-3">
+                        <input
+                            x-ref="fileInput"
+                            type="file"
+                            wire:model="uploads"
+                            multiple
+                            class="hidden"
+                            accept=".txt,.csv,.json,.md,.log,.xml,.html,.yaml,.yml,.pdf,.png,.jpg,.jpeg,.webp"
+                        >
+
+                        <div
+                            class="overflow-hidden rounded-2xl border bg-white shadow-sm transition focus-within:border-emerald-400 focus-within:ring-4 focus-within:ring-emerald-100"
+                            :class="listening ? 'border-rose-300 ring-4 ring-rose-100' : 'border-slate-300'"
+                        >
+                            <div
+                                x-show="listening"
+                                x-collapse
+                                class="flex items-center gap-2 border-b border-rose-100 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700"
                             >
-                            <button
-                                type="button"
-                                x-on:click="$refs.fileInput.click()"
-                                :disabled="isLoading"
-                                class="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-300 px-3 text-xs font-black uppercase tracking-[.12em] text-slate-700 transition hover:border-emerald-400 hover:text-emerald-800 disabled:opacity-50"
-                                title="Dateien hinzufuegen"
-                            >
-                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                    <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                                </svg>
-                                Datei
-                            </button>
-                            <button
-                                type="button"
-                                x-on:click="toggleVoice()"
-                                :disabled="!voiceSupported || isLoading"
-                                class="inline-flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-black uppercase tracking-[.12em] transition disabled:cursor-not-allowed disabled:opacity-40"
-                                :class="listening ? 'border-rose-300 bg-rose-50 text-rose-700' : 'border-slate-300 text-slate-700 hover:border-emerald-400 hover:text-emerald-800'"
-                                title="Spracheingabe"
-                            >
-                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                    <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" stroke="currentColor" stroke-width="2"/>
-                                    <path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                                </svg>
-                                <span x-text="listening ? 'Hoert zu' : 'Sprache'"></span>
-                            </button>
-                            <span wire:loading wire:target="uploads" class="text-xs font-bold text-slate-500">Dateien werden vorbereitet...</span>
+                                <span class="relative flex h-2 w-2">
+                                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
+                                    <span class="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
+                                </span>
+                                Spracheingabe aktiv. Ich höre zu.
+                            </div>
+
                             @if(count($uploads) > 0)
-                                <span class="text-xs font-bold text-emerald-700">{{ count($uploads) }} Datei(en) bereit</span>
+                                <div class="flex items-center gap-2 border-b border-slate-100 bg-slate-50 px-3 py-2">
+                                    <span class="inline-flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">
+                                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <path d="M8 12.5 12 16l6-7M7 3h7l4 4v14H7V3Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                        </svg>
+                                    </span>
+                                    <span class="min-w-0 flex-1 truncate text-xs font-bold text-slate-700">{{ count($uploads) }} Datei(en) für die Analyse bereit</span>
+                                    <button type="button" wire:click="$set('uploads', [])" class="text-xs font-bold text-slate-400 hover:text-rose-600">Entfernen</button>
+                                </div>
                             @endif
+
+                            <textarea
+                                x-ref="composer"
+                                x-model="draft"
+                                x-init="$nextTick(() => resizeComposer())"
+                                x-on:input="resizeComposer()"
+                                x-on:keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send(); }"
+                                rows="1"
+                                class="block min-h-[58px] max-h-36 w-full resize-none border-0 bg-transparent px-4 pb-2 pt-3 text-sm leading-6 text-slate-950 placeholder:text-slate-400 focus:ring-0"
+                                placeholder="Frage stellen, Profil öffnen oder Analyse starten..."
+                            ></textarea>
+
+                            <div class="flex items-center justify-between gap-3 px-2 pb-2">
+                                <div class="flex items-center gap-1">
+                                    <button
+                                        type="button"
+                                        x-on:click="$refs.fileInput.click()"
+                                        :disabled="isLoading"
+                                        class="inline-flex h-9 w-9 items-center justify-center rounded-xl text-slate-500 transition hover:bg-slate-100 hover:text-emerald-700 disabled:opacity-40"
+                                        title="Dateien hinzufügen"
+                                    >
+                                        <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <path d="m12.5 6.5-6.8 6.8a3.2 3.2 0 0 0 4.5 4.5l7.6-7.6a4.5 4.5 0 0 0-6.4-6.4L4.6 10.6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                        </svg>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        x-on:click="toggleVoice()"
+                                        :disabled="!voiceSupported || isLoading"
+                                        class="inline-flex h-9 w-9 items-center justify-center rounded-xl transition disabled:cursor-not-allowed disabled:opacity-30"
+                                        :class="listening ? 'bg-rose-100 text-rose-700' : 'text-slate-500 hover:bg-slate-100 hover:text-emerald-700'"
+                                        :title="voiceSupported ? 'Spracheingabe' : 'Spracheingabe wird nicht unterstützt'"
+                                    >
+                                        <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z" stroke="currentColor" stroke-width="2"/>
+                                            <path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                        </svg>
+                                    </button>
+
+                                    <span wire:loading wire:target="uploads" class="ml-1 inline-flex items-center gap-2 text-[11px] font-bold text-slate-500">
+                                        <svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <circle class="opacity-20" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
+                                            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+                                        </svg>
+                                        Upload
+                                    </span>
+                                </div>
+
+                                <div class="flex items-center gap-2">
+                                    <span class="hidden text-[10px] font-semibold text-slate-400 sm:inline">Enter senden · Shift+Enter Zeile</span>
+                                    <button
+                                        type="button"
+                                        @click="send()"
+                                        :disabled="isLoading || (!(draft || '').trim() && !hasUploads())"
+                                        class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                                        title="Senden"
+                                    >
+                                        <svg x-show="!isLoading" class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <path d="m5 12 14-7-4 14-3-6-7-1Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                                        </svg>
+                                        <svg x-show="isLoading" class="h-5 w-5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <circle class="opacity-25" cx="12" cy="12" r="9" stroke="currentColor" stroke-width="3"></circle>
+                                            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
                         </div>
 
-                        <div class="flex gap-2">
-                            <textarea
-                                x-model="draft"
-                                x-on:keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); send(); }"
-                                class="min-h-[54px] flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm text-slate-950 focus:border-emerald-500 focus:ring-0"
-                                placeholder="Profil analysieren, Kontakt speichern, Scan starten oder naechste Schritte planen..."
-                            ></textarea>
-                            <button
-                                type="button"
-                                @click="send()"
-                                :disabled="isLoading"
-                                class="inline-flex h-[54px] w-[54px] shrink-0 items-center justify-center rounded-xl bg-slate-950 text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                                title="Senden"
-                            >
-                                <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                    <path d="m5 12 14-7-4 14-3-6-7-1Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-                                </svg>
-                            </button>
-                        </div>
+                        <p class="mt-2 px-1 text-[10px] leading-4 text-slate-400">
+                            Der Copilot kann freigegebene Profile und App-Seiten öffnen. Aktionen werden im Chat protokolliert.
+                        </p>
                     </footer>
                 </section>
             </div>

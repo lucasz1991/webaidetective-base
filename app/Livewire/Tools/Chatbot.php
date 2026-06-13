@@ -101,8 +101,13 @@ class Chatbot extends Component
         $this->appendDisplayMessage('user', $displayMessage);
 
         try {
-            $assistantMessage = $this->runAssistantConversation(trim($userMessage."\n\n".$attachmentContext));
+            $assistantResponse = $this->runAssistantConversation(trim($userMessage."\n\n".$attachmentContext));
+            $assistantMessage = $assistantResponse['message'] ?? '';
             $this->appendDisplayMessage('assistant', $assistantMessage ?: 'Ich habe dazu gerade keine belastbare Antwort erhalten.');
+
+            if (is_array($assistantResponse['ui_action'] ?? null)) {
+                $this->dispatch('assistant-ui-action', action: $assistantResponse['ui_action']);
+            }
         } catch (\Throwable $exception) {
             Log::warning('Investigation Assistant fehlgeschlagen.', [
                 'error' => $exception->getMessage(),
@@ -138,12 +143,15 @@ class Chatbot extends Component
         return view('livewire.tools.chatbot');
     }
 
-    private function runAssistantConversation(string $userMessage): string
+    private function runAssistantConversation(string $userMessage): array
     {
         $apiKey = trim((string) (Setting::getValue('ai_assistant', 'api_key') ?? ''));
 
         if (! $this->assistantIsConfigured($apiKey)) {
-            return 'Der AI-Assistent ist noch nicht vollstaendig konfiguriert. Bitte API-URL, API-Key und Modell im Adminbereich hinterlegen.';
+            return [
+                'message' => 'Der AI-Assistent ist noch nicht vollstaendig konfiguriert. Bitte API-URL, API-Key und Modell im Adminbereich hinterlegen.',
+                'ui_action' => null,
+            ];
         }
 
         /** @var InvestigationAssistantToolService $toolService */
@@ -161,6 +169,7 @@ class Chatbot extends Component
         ];
 
         $finalMessage = '';
+        $uiAction = null;
 
         for ($step = 0; $step < 5; $step++) {
             $assistantResponse = $this->requestAssistant($transcript, $toolService->tools(), $apiKey);
@@ -189,6 +198,10 @@ class Chatbot extends Component
                 $result = $toolService->execute($toolName, $arguments, Auth::user());
                 $this->appendToolEvent($toolName, $arguments, $result);
 
+                if (($result['ok'] ?? false) && is_array($result['ui_action'] ?? null)) {
+                    $uiAction = $result['ui_action'];
+                }
+
                 $transcript[] = [
                     'role' => 'tool',
                     'tool_call_id' => $toolCall['id'] ?? ('tool-'.$step),
@@ -200,7 +213,10 @@ class Chatbot extends Component
 
         Session::put(self::TRANSCRIPT_KEY, $this->trimTranscript($transcript));
 
-        return $this->sanitizeAssistantText($finalMessage);
+        return [
+            'message' => $this->sanitizeAssistantText($finalMessage),
+            'ui_action' => $uiAction,
+        ];
     }
 
     private function buildAttachmentContext(): string
@@ -368,11 +384,17 @@ class Chatbot extends Component
 
     private function appendDisplayMessage(string $role, string $content, string $level = 'neutral'): void
     {
+        $content = $this->sanitizeAssistantText($content);
+        $profileReferences = $role === 'assistant'
+            ? app(InvestigationAssistantToolService::class)->profileReferences(Auth::user(), $content)
+            : [];
+
         $this->chatHistory[] = [
             'role' => $role,
-            'content' => $this->sanitizeAssistantText($content),
+            'content' => $content,
             'level' => $level,
             'time' => now()->format('H:i'),
+            'profiles' => $profileReferences,
         ];
 
         $this->chatHistory = array_slice($this->chatHistory, -30);
