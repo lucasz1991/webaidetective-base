@@ -154,6 +154,49 @@
                 this.scrollMessages();
             }
         },
+        async requestProfileScanType(profile, scanType, scanLabel) {
+            if (this.busy()) return;
+
+            const username = String(profile?.username || '').replace(/^@/, '').trim();
+            if (!username || !scanType) return;
+
+            const profileType = String(profile?.type || 'instagram_profile');
+            const profileId = Number(profile?.id || 0) || null;
+            const displayName = String(profile?.display_name || `@${username}`);
+            const label = String(scanLabel || scanType);
+            const prompt = [
+                '[SCAN_TYPE_CONFIRMED]',
+                `Starte jetzt für @${username} den Scan-Typ "${scanType}".`,
+                `Ausgewählte Aktion: ${label}.`,
+                `Profiltyp: ${profileType}.`,
+                'Diese Auswahl ist meine ausdrückliche Bestätigung für genau diesen Scan.',
+                'Nutze das passende Scan-Tool und starte keinen anderen Scan-Typ.',
+            ].join('\n');
+
+            this.stopSpeaking();
+            this.submitting = true;
+            this.pendingLabel = `${label} für @${username} starten.`;
+            this.scrollMessages();
+
+            try {
+                await this.syncContext({
+                    selected_node_id: profileId
+                        ? (profileType === 'tracked_person' ? `person-${profileId}` : `instagram-profile-${profileId}`)
+                        : null,
+                    selected_node_type: profileType,
+                    selected_profile_username: username,
+                    selected_profile_name: displayName,
+                    selected_profile_open: false,
+                });
+                this.draft = '';
+                await $wire.sendMessage(prompt);
+            } finally {
+                this.submitting = false;
+                this.pendingLabel = '';
+                this.$nextTick(() => this.resizeComposer());
+                this.scrollMessages();
+            }
+        },
         selectNetworkNode(event) {
             const detail = this.normalizeEventDetail(event);
             const handle = String(detail.handle || '').replace(/^@/, '');
@@ -672,38 +715,130 @@
                                 </div>
                                 <p class="whitespace-pre-line" x-text="item.content"></p>
 
+                                <div
+                                    x-show="item.role === 'assistant' && Array.isArray(item.options) && item.options.length"
+                                    class="mt-3 space-y-2 border-t border-slate-100 pt-3"
+                                >
+                                    <p
+                                        x-show="item.options_prompt"
+                                        class="text-xs font-bold leading-5 text-slate-600"
+                                        x-text="item.options_prompt"
+                                    ></p>
+                                    <div class="grid gap-2">
+                                        <template x-for="(option, optionIndex) in (item.options || [])" :key="'option-' + index + '-' + optionIndex">
+                                            <button
+                                                type="button"
+                                                x-on:click="quick(option.prompt)"
+                                                x-bind:disabled="busy()"
+                                                class="group flex w-full items-center gap-3 rounded-xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-emerald-50/70 px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-cyan-400 hover:shadow-sm disabled:cursor-wait disabled:opacity-50"
+                                            >
+                                                <span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-cyan-700 shadow-sm ring-1 ring-cyan-100 transition group-hover:bg-cyan-600 group-hover:text-white">
+                                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                        <path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                                    </svg>
+                                                </span>
+                                                <span class="min-w-0 flex-1">
+                                                    <span class="block text-xs font-black text-slate-900" x-text="option.label"></span>
+                                                    <span
+                                                        x-show="option.description"
+                                                        class="mt-0.5 block text-[11px] leading-4 text-slate-500"
+                                                        x-text="option.description"
+                                                    ></span>
+                                                </span>
+                                            </button>
+                                        </template>
+                                    </div>
+                                </div>
+
                                 <div x-show="Array.isArray(item.profiles) && item.profiles.length" class="mt-3 flex flex-wrap gap-2">
                                     <template x-for="profile in (item.profiles || [])" :key="profile.type + '-' + profile.id">
-                                        <button
-                                            type="button"
-                                            x-on:click="requestProfileScan(profile)"
-                                            x-bind:disabled="busy()"
-                                            class="group inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 py-1 pl-1 pr-3 text-left transition hover:border-cyan-300 hover:bg-cyan-50 disabled:cursor-wait disabled:opacity-50"
-                                            x-bind:title="'Scan für @' + profile.username + ' auswählen'"
-                                        >
-                                            <span class="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-200 text-xs font-black uppercase text-slate-600 ring-1 ring-white">
-                                                <span x-text="(profile.display_name || profile.username || '?').charAt(0)"></span>
-                                                <img
-                                                    x-show="profile.image_url"
-                                                    x-bind:src="profile.image_url"
-                                                    x-bind:alt="'Profilbild von @' + profile.username"
-                                                    x-on:error="$el.remove()"
-                                                    class="absolute inset-0 h-full w-full object-cover"
-                                                    loading="lazy"
-                                                    referrerpolicy="no-referrer"
+                                        <div class="group/profile relative max-w-full">
+                                            <button
+                                                type="button"
+                                                x-on:click="requestProfileScan(profile)"
+                                                x-bind:disabled="busy()"
+                                                class="inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 py-1 pl-1 pr-3 text-left transition hover:border-cyan-300 hover:bg-cyan-50 disabled:cursor-wait disabled:opacity-50"
+                                                x-bind:title="'Scan für @' + profile.username + ' auswählen'"
+                                            >
+                                                <span class="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-200 text-xs font-black uppercase text-slate-600 ring-1 ring-white">
+                                                    <span x-text="(profile.display_name || profile.username || '?').charAt(0)"></span>
+                                                    <img
+                                                        x-show="profile.image_url"
+                                                        x-bind:src="profile.image_url"
+                                                        x-bind:alt="'Profilbild von @' + profile.username"
+                                                        x-on:error="$el.remove()"
+                                                        class="absolute inset-0 h-full w-full object-cover"
+                                                        loading="lazy"
+                                                        referrerpolicy="no-referrer"
+                                                    >
+                                                </span>
+                                                <span class="min-w-0">
+                                                    <span class="block truncate text-xs font-black text-slate-800 group-hover/profile:text-cyan-800" x-text="profile.display_name || '@' + profile.username"></span>
+                                                    <span class="flex items-center gap-1 truncate text-[10px] font-semibold text-cyan-700">
+                                                        <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                            <circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="2"/>
+                                                            <path d="m16 16 4 4M11 8v6M8 11h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                                        </svg>
+                                                        <span>Scan auswählen</span>
+                                                    </span>
+                                                </span>
+                                            </button>
+
+                                            <div
+                                                class="pointer-events-none absolute bottom-[calc(100%-2px)] left-1/2 z-20 flex -translate-x-1/2 translate-y-1 items-center gap-1 rounded-xl border border-slate-200 bg-white p-1.5 opacity-0 shadow-xl transition group-hover/profile:pointer-events-auto group-hover/profile:translate-y-0 group-hover/profile:opacity-100 group-focus-within/profile:pointer-events-auto group-focus-within/profile:translate-y-0 group-focus-within/profile:opacity-100"
+                                                aria-label="Direkte Scan-Aktionen"
+                                            >
+                                                <button
+                                                    type="button"
+                                                    x-show="profile.type === 'tracked_person'"
+                                                    x-on:click.stop="requestProfileScanType(profile, 'mini', 'Mini-Scan')"
+                                                    x-bind:disabled="busy()"
+                                                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-sky-700 transition hover:bg-sky-100 disabled:opacity-40"
+                                                    title="Mini-Scan starten"
                                                 >
-                                            </span>
-                                            <span class="min-w-0">
-                                                <span class="block truncate text-xs font-black text-slate-800 group-hover:text-cyan-800" x-text="profile.display_name || '@' + profile.username"></span>
-                                                <span class="flex items-center gap-1 truncate text-[10px] font-semibold text-cyan-700">
-                                                    <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                        <path d="M5 12h14M12 5v14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                                    </svg>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    x-on:click.stop="requestProfileScanType(profile, 'full', 'Vollanalyse')"
+                                                    x-bind:disabled="busy()"
+                                                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-violet-700 transition hover:bg-violet-100 disabled:opacity-40"
+                                                    title="Vollanalyse starten"
+                                                >
+                                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                                         <circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="2"/>
                                                         <path d="m16 16 4 4M11 8v6M8 11h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                                                     </svg>
-                                                    <span>Scan auswählen</span>
-                                                </span>
-                                            </span>
-                                        </button>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    x-show="profile.type === 'tracked_person'"
+                                                    x-on:click.stop="requestProfileScanType(profile, 'followers', 'Follower-Scan')"
+                                                    x-bind:disabled="busy()"
+                                                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-emerald-700 transition hover:bg-emerald-100 disabled:opacity-40"
+                                                    title="Follower scannen"
+                                                >
+                                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                        <circle cx="9" cy="8" r="3" stroke="currentColor" stroke-width="2"/>
+                                                        <path d="M3.5 19a5.5 5.5 0 0 1 11 0M17 9v6M14 12h6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                                    </svg>
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    x-show="profile.type === 'tracked_person'"
+                                                    x-on:click.stop="requestProfileScanType(profile, 'suggestions', 'Vorschläge-Scan')"
+                                                    x-bind:disabled="busy()"
+                                                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg text-amber-700 transition hover:bg-amber-100 disabled:opacity-40"
+                                                    title="Vorschläge scannen"
+                                                >
+                                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                        <path d="M12 3 14.2 8.8 20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2L12 3Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                                                    </svg>
+                                                </button>
+                                            </div>
+                                        </div>
                                     </template>
                                 </div>
                             </div>
@@ -798,6 +933,10 @@
                             <div class="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100">
                                 <div class="h-full w-full origin-left animate-pulse rounded-full bg-gradient-to-r from-sky-500 via-cyan-400 to-emerald-500"></div>
                             </div>
+                            <p
+                                wire:stream="assistant-response-stream"
+                                class="mt-3 whitespace-pre-line border-t border-cyan-100 pt-3 text-sm leading-6 text-slate-700 [&:empty]:hidden"
+                            ></p>
                         </div>
                     </div>
 

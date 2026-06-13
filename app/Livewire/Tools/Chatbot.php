@@ -5,6 +5,7 @@ namespace App\Livewire\Tools;
 use App\Models\Setting;
 use App\Services\Ai\InvestigationAssistantScanStatusStore;
 use App\Services\Ai\InvestigationAssistantToolService;
+use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -13,6 +14,7 @@ use Illuminate\Support\Str;
 use Livewire\Component;
 use Livewire\Features\SupportFileUploads\TemporaryUploadedFile;
 use Livewire\WithFileUploads;
+use Psr\Http\Message\StreamInterface;
 
 class Chatbot extends Component
 {
@@ -117,7 +119,12 @@ class Chatbot extends Component
         try {
             $assistantResponse = $this->runAssistantConversation(trim($userMessage."\n\n".$attachmentContext));
             $assistantMessage = $assistantResponse['message'] ?? '';
-            $this->appendDisplayMessage('assistant', $assistantMessage ?: 'Ich habe dazu gerade keine belastbare Antwort erhalten.');
+            $this->appendDisplayMessage(
+                'assistant',
+                $assistantMessage ?: 'Ich habe dazu gerade keine belastbare Antwort erhalten.',
+                'neutral',
+                $assistantResponse['chat_options'] ?? null,
+            );
 
             if (is_array($assistantResponse['ui_action'] ?? null)) {
                 $this->dispatch('assistant-ui-action', action: $assistantResponse['ui_action']);
@@ -234,6 +241,7 @@ class Chatbot extends Component
             return [
                 'message' => 'Der AI-Assistent ist noch nicht vollstaendig konfiguriert. Bitte API-URL, API-Key und Modell im Adminbereich hinterlegen.',
                 'ui_action' => null,
+                'chat_options' => null,
             ];
         }
 
@@ -253,9 +261,22 @@ class Chatbot extends Component
 
         $finalMessage = '';
         $uiAction = null;
+        $chatOptions = null;
 
         for ($step = 0; $step < 5; $step++) {
-            $assistantResponse = $this->requestAssistant($transcript, $toolService->tools(), $apiKey);
+            $this->stream('assistant-response-stream', '', true);
+            $assistantResponse = $this->requestAssistant(
+                $transcript,
+                $toolService->tools(),
+                $apiKey,
+                function (string $chunk): void {
+                    $chunk = $this->sanitizeAssistantChunk($chunk);
+
+                    if ($chunk !== '') {
+                        $this->stream('assistant-response-stream', e($chunk));
+                    }
+                },
+            );
             $message = data_get($assistantResponse, 'choices.0.message', []);
             $toolCalls = $this->normalizeToolCalls($message['tool_calls'] ?? []);
             $content = trim((string) ($message['content'] ?? ''));
@@ -285,6 +306,10 @@ class Chatbot extends Component
                     $uiAction = $result['ui_action'];
                 }
 
+                if (($result['ok'] ?? false) && is_array($result['chat_options'] ?? null)) {
+                    $chatOptions = $this->normalizeChatOptions($result['chat_options']);
+                }
+
                 $transcript[] = [
                     'role' => 'tool',
                     'tool_call_id' => $toolCall['id'] ?? ('tool-'.$step),
@@ -299,6 +324,7 @@ class Chatbot extends Component
         return [
             'message' => $this->sanitizeAssistantText($finalMessage),
             'ui_action' => $uiAction,
+            'chat_options' => $chatOptions,
         ];
     }
 
@@ -383,8 +409,12 @@ class Chatbot extends Component
         return $this->trimTranscript($transcript);
     }
 
-    private function requestAssistant(array $messages, array $tools, string $apiKey): array
-    {
+    private function requestAssistant(
+        array $messages,
+        array $tools,
+        string $apiKey,
+        ?callable $onTextDelta = null,
+    ): array {
         $apiUrl = trim((string) $this->apiUrl);
 
         $response = Http::acceptJson()
@@ -395,14 +425,19 @@ class Chatbot extends Component
                 'X-Title' => trim((string) $this->modelTitle),
             ]))
             ->withoutRedirecting()
+            ->connectTimeout(15)
             ->timeout(90)
-            ->retry(2, 750, throw: false)
+            ->withOptions([
+                'stream' => true,
+                'http_errors' => false,
+            ])
             ->post($apiUrl, [
                 'model' => $this->aiModel,
                 'messages' => $messages,
                 'tools' => $tools,
                 'tool_choice' => 'auto',
                 'temperature' => 0.2,
+                'stream' => true,
             ]);
 
         if ($response->redirect()) {
@@ -423,16 +458,147 @@ class Chatbot extends Component
         }
 
         if (! $response->successful()) {
-            throw new \RuntimeException('AI-API antwortet mit HTTP '.$response->status().': '.mb_substr($response->body(), 0, 500));
+            throw new \RuntimeException(
+                'AI-API antwortet mit HTTP '.$response->status().': '
+                .mb_substr((string) $response->toPsrResponse()->getBody(), 0, 500),
+            );
         }
 
-        $payload = $response->json();
+        $body = $response->toPsrResponse()->getBody();
+        $contentType = Str::lower((string) $response->header('Content-Type'));
+
+        if (str_contains($contentType, 'text/event-stream')) {
+            return $this->parseAssistantEventStream($body, $onTextDelta);
+        }
+
+        $payload = json_decode((string) $body, true);
 
         if (! is_array($payload)) {
             throw new \RuntimeException('AI-API lieferte kein gueltiges JSON.');
         }
 
+        $content = data_get($payload, 'choices.0.message.content');
+        $toolCalls = data_get($payload, 'choices.0.message.tool_calls', []);
+
+        if (is_callable($onTextDelta) && is_string($content) && $content !== '' && $toolCalls === []) {
+            $onTextDelta($content);
+        }
+
         return $payload;
+    }
+
+    protected function parseAssistantEventStream(StreamInterface $body, ?callable $onTextDelta = null): array
+    {
+        $content = '';
+        $toolCalls = [];
+        $finishReason = null;
+
+        while (! $body->eof()) {
+            $line = trim(Utils::readLine($body));
+
+            if ($line === '' || str_starts_with($line, ':') || ! str_starts_with($line, 'data:')) {
+                continue;
+            }
+
+            $data = trim(substr($line, 5));
+
+            if ($data === '[DONE]') {
+                break;
+            }
+
+            $event = json_decode($data, true);
+
+            if (! is_array($event)) {
+                continue;
+            }
+
+            $providerError = data_get($event, 'error.message');
+
+            if (is_string($providerError) && $providerError !== '') {
+                throw new \RuntimeException('AI-API Streamingfehler: '.$providerError);
+            }
+
+            $choice = data_get($event, 'choices.0', []);
+
+            if (! is_array($choice)) {
+                continue;
+            }
+
+            $delta = $choice['delta'] ?? $choice['message'] ?? [];
+            $textDelta = is_array($delta) ? ($delta['content'] ?? '') : '';
+
+            if (is_string($textDelta) && $textDelta !== '') {
+                $content .= $textDelta;
+
+                if (is_callable($onTextDelta)) {
+                    $onTextDelta($textDelta);
+                }
+            }
+
+            foreach (is_array($delta) ? ($delta['tool_calls'] ?? []) : [] as $toolCallDelta) {
+                if (! is_array($toolCallDelta)) {
+                    continue;
+                }
+
+                $index = max(0, (int) ($toolCallDelta['index'] ?? 0));
+                $toolCalls[$index] ??= [
+                    'id' => '',
+                    'type' => 'function',
+                    'function' => [
+                        'name' => '',
+                        'arguments' => '',
+                    ],
+                ];
+
+                $idDelta = (string) ($toolCallDelta['id'] ?? '');
+                $typeDelta = (string) ($toolCallDelta['type'] ?? '');
+                $nameDelta = (string) data_get($toolCallDelta, 'function.name', '');
+                $argumentsDelta = (string) data_get($toolCallDelta, 'function.arguments', '');
+
+                if ($idDelta !== '') {
+                    $toolCalls[$index]['id'] = $idDelta;
+                }
+
+                if ($typeDelta !== '') {
+                    $toolCalls[$index]['type'] = $typeDelta;
+                }
+
+                if ($nameDelta !== '') {
+                    $currentName = (string) $toolCalls[$index]['function']['name'];
+
+                    if ($currentName === '' || str_starts_with($nameDelta, $currentName)) {
+                        $toolCalls[$index]['function']['name'] = $nameDelta;
+                    } elseif (! str_ends_with($currentName, $nameDelta)) {
+                        $toolCalls[$index]['function']['name'] .= $nameDelta;
+                    }
+                }
+
+                if ($argumentsDelta !== '') {
+                    $toolCalls[$index]['function']['arguments'] .= $argumentsDelta;
+                }
+            }
+
+            if (is_string($choice['finish_reason'] ?? null)) {
+                $finishReason = $choice['finish_reason'];
+            }
+        }
+
+        $message = [
+            'role' => 'assistant',
+            'content' => $content,
+        ];
+
+        if ($toolCalls !== []) {
+            ksort($toolCalls);
+            $message['tool_calls'] = array_values($toolCalls);
+        }
+
+        return [
+            'choices' => [[
+                'message' => $message,
+                'finish_reason' => $finishReason,
+            ]],
+        ];
     }
 
     private function normalizeToolCalls(mixed $toolCalls): array
@@ -465,12 +631,17 @@ class Chatbot extends Component
         }
     }
 
-    private function appendDisplayMessage(string $role, string $content, string $level = 'neutral'): void
-    {
+    private function appendDisplayMessage(
+        string $role,
+        string $content,
+        string $level = 'neutral',
+        ?array $chatOptions = null,
+    ): void {
         $content = $this->sanitizeAssistantText($content);
         $profileReferences = $role === 'assistant'
             ? app(InvestigationAssistantToolService::class)->profileReferences(Auth::user(), $content)
             : [];
+        $chatOptions = $role === 'assistant' ? $this->normalizeChatOptions($chatOptions) : null;
 
         $this->chatHistory[] = [
             'role' => $role,
@@ -478,6 +649,8 @@ class Chatbot extends Component
             'level' => $level,
             'time' => now()->format('H:i'),
             'profiles' => $profileReferences,
+            'options_prompt' => $chatOptions['prompt'] ?? null,
+            'options' => $chatOptions['options'] ?? [],
         ];
 
         $this->chatHistory = array_slice($this->chatHistory, -30);
@@ -486,12 +659,14 @@ class Chatbot extends Component
 
     private function appendToolEvent(string $toolName, array $arguments, array $result): void
     {
-        $this->appendTransientToolAlert(
-            $toolName,
-            (string) ($result['message'] ?? data_get($result, 'error.message', 'Tool ausgefuehrt.')),
-            (bool) ($result['ok'] ?? false),
-            $arguments,
-        );
+        if (! ($result['silent'] ?? false)) {
+            $this->appendTransientToolAlert(
+                $toolName,
+                (string) ($result['message'] ?? data_get($result, 'error.message', 'Tool ausgefuehrt.')),
+                (bool) ($result['ok'] ?? false),
+                $arguments,
+            );
+        }
 
         $tracking = $result['scan_tracking'] ?? null;
 
@@ -546,6 +721,8 @@ class Chatbot extends Component
             $this->appendDisplayMessage(
                 'assistant',
                 $assistantMessage ?: 'Der Scan ist abgeschlossen. Die neuen Ergebnisse konnten jedoch nicht automatisch zusammengefasst werden.',
+                'neutral',
+                $assistantResponse['chat_options'] ?? null,
             );
 
             if (is_array($assistantResponse['ui_action'] ?? null)) {
@@ -586,13 +763,68 @@ class Chatbot extends Component
 
     private function sanitizeAssistantText(string $text): string
     {
-        $text = preg_replace('/[\p{Han}\p{Hiragana}\p{Katakana}\p{Thai}]/u', '', $text) ?? $text;
+        $text = $this->sanitizeAssistantChunk($text);
 
         return trim($text);
     }
 
+    private function sanitizeAssistantChunk(string $text): string
+    {
+        return preg_replace('/[\p{Han}\p{Hiragana}\p{Katakana}\p{Thai}]/u', '', $text) ?? $text;
+    }
+
+    private function normalizeChatOptions(mixed $chatOptions): ?array
+    {
+        if (! is_array($chatOptions)) {
+            return null;
+        }
+
+        $prompt = mb_substr(trim((string) ($chatOptions['prompt'] ?? '')), 0, 220);
+        $options = collect($chatOptions['options'] ?? [])
+            ->filter(fn ($option): bool => is_array($option))
+            ->map(function (array $option): ?array {
+                $label = mb_substr(trim((string) ($option['label'] ?? '')), 0, 80);
+                $selectionPrompt = mb_substr(trim((string) ($option['prompt'] ?? '')), 0, 500);
+
+                if ($label === '' || $selectionPrompt === '') {
+                    return null;
+                }
+
+                return [
+                    'label' => $label,
+                    'description' => mb_substr(trim((string) ($option['description'] ?? '')), 0, 160),
+                    'prompt' => $selectionPrompt,
+                ];
+            })
+            ->filter()
+            ->take(6)
+            ->values()
+            ->all();
+
+        if (count($options) < 2) {
+            return null;
+        }
+
+        return [
+            'prompt' => $prompt,
+            'options' => $options,
+        ];
+    }
+
     private function displayMessageForUserPrompt(string $prompt): string
     {
+        if (str_starts_with($prompt, '[SCAN_TYPE_CONFIRMED]')) {
+            preg_match('/f[uü]r @([a-zA-Z0-9._]{1,30})/u', $prompt, $usernameMatch);
+            preg_match('/Ausgew[aä]hlte Aktion:\s*([^\r\n.]+)/u', $prompt, $actionMatch);
+
+            $username = $usernameMatch[1] ?? null;
+            $action = trim((string) ($actionMatch[1] ?? 'Scan'));
+
+            return $username
+                ? $action.' für @'.$username.' starten.'
+                : $action.' starten.';
+        }
+
         if (! str_starts_with($prompt, '[SCAN_TARGET_SELECTED]')) {
             return $prompt;
         }

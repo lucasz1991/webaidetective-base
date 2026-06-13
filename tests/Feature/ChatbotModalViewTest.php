@@ -14,6 +14,9 @@ class ChatbotModalViewTest extends TestCase
         $this->assertStringContainsString('pendingLabel:', $view);
         $this->assertStringContainsString('$wire.sendMessage(outgoingMessage)', $view);
         $this->assertStringContainsString('x-show="busy()"', $view);
+        $this->assertStringContainsString('wire:stream="assistant-response-stream"', $view);
+        $this->assertStringContainsString('Array.isArray(item.options)', $view);
+        $this->assertStringContainsString('quick(option.prompt)', $view);
         $this->assertStringContainsString('Copilot analysiert deine Anfrage', $view);
         $this->assertStringContainsString('from-sky-600 via-cyan-600 to-emerald-600', $view);
         $this->assertStringContainsString('Scans priorisieren', $view);

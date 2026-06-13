@@ -32,8 +32,10 @@ class InvestigationAssistantToolService
             'Speichere neue Kontaktkandidaten nur, wenn der Nutzer das beauftragt oder eine Datei/Nachricht eindeutig Kontakte zur Speicherung enthaelt.',
             'Wenn ein Tool ausgefuehrt wurde, fasse das Ergebnis und den naechsten sinnvollen Schritt zusammen.',
             'Nutze fuer Profilreferenzen immer den Instagram-Handle im Format @username, damit die Oberflaeche ein Profil-Badge anzeigen kann.',
+            'Wenn du dem Nutzer zwei oder mehr konkrete Auswahlmoeglichkeiten anbietest oder nach einem Scan-Typ fragst, nutze immer present_chat_options. Dadurch werden anklickbare Buttons angezeigt.',
             'Eine Nutzernachricht mit [SCAN_TARGET_SELECTED] bedeutet: Der Nutzer hat ein Profil-Badge als moegliches Scan-Ziel angeklickt. Das ist noch keine Freigabe fuer einen bestimmten Scan.',
             'Pruefe bei [SCAN_TARGET_SELECTED] zuerst Profiltyp, Sichtbarkeit, vorhandene Daten und Scan-Historie. Wenn der Nutzer keinen konkreten Scan-Typ bestaetigt hat, frage nach und nenne kurz die passenden Scan-Optionen. Starte bis zur eindeutigen Auswahl kein Scan-Tool.',
+            'Eine Nutzernachricht mit [SCAN_TYPE_CONFIRMED] ist die ausdrueckliche Freigabe fuer den darin genannten Scan-Typ. Nutze fuer tracked_person dispatch_instagram_scan. Nutze fuer instagram_profile bei Vollanalyse dispatch_network_profile_scan und ersetze den bestaetigten Typ nicht eigenmaechtig.',
             'Navigiere nur, wenn der Nutzer dich ausdruecklich darum bittet. Nutze dafuer navigate_app_page oder open_profile.',
         ]));
     }
@@ -132,6 +134,31 @@ class InvestigationAssistantToolService
                     'reason' => ['type' => 'string'],
                 ],
             ]),
+            $this->tool('present_chat_options', 'Zeige dem Nutzer anklickbare Antwortoptionen. Nutze dieses Tool immer bei Auswahlfragen, insbesondere fuer Scan-Typen.', [
+                'type' => 'object',
+                'properties' => [
+                    'prompt' => [
+                        'type' => 'string',
+                        'description' => 'Kurze Frage oder Einleitung oberhalb der Optionen.',
+                    ],
+                    'options' => [
+                        'type' => 'array',
+                        'minItems' => 2,
+                        'maxItems' => 6,
+                        'items' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'label' => ['type' => 'string', 'description' => 'Kurze Button-Beschriftung.'],
+                                'description' => ['type' => 'string', 'description' => 'Optionaler kurzer Hinweis zum Unterschied.'],
+                                'prompt' => ['type' => 'string', 'description' => 'Eindeutige Nutzernachricht, die beim Klick gesendet wird.'],
+                            ],
+                            'required' => ['label', 'prompt'],
+                            'additionalProperties' => false,
+                        ],
+                    ],
+                ],
+                'required' => ['prompt', 'options'],
+            ]),
             $this->tool('navigate_app_page', 'Navigiere auf ausdruecklichen Wunsch des Nutzers zu einer bekannten Seite der Anwendung.', [
                 'type' => 'object',
                 'properties' => [
@@ -169,6 +196,7 @@ class InvestigationAssistantToolService
             'dispatch_instagram_scan' => $this->dispatchInstagramScan($user, $arguments),
             'dispatch_network_profile_scan' => $this->dispatchNetworkProfileScan($user, $arguments),
             'stop_active_scan' => $this->stopActiveScan($user, $arguments),
+            'present_chat_options' => $this->presentChatOptions($arguments),
             'navigate_app_page' => $this->navigateAppPage($arguments),
             'open_profile' => $this->openProfile($user, $arguments),
             default => $this->error('UNKNOWN_TOOL', 'Unbekanntes Tool: '.$name),
@@ -693,6 +721,45 @@ class InvestigationAssistantToolService
                 ? 'Stop wurde angefordert. Der aktuelle Zwischestand wird gespeichert.'
                 : 'Fuer diese Person laeuft aktuell kein registrierter Instagram-Scan.',
             'profile' => $this->trackedPersonSummary($person->fresh('latestInstagramSnapshot')),
+        ];
+    }
+
+    private function presentChatOptions(array $arguments): array
+    {
+        $prompt = mb_substr(trim((string) ($arguments['prompt'] ?? 'Bitte waehle eine Option.')), 0, 220);
+        $options = collect($arguments['options'] ?? [])
+            ->filter(fn ($option): bool => is_array($option))
+            ->map(function (array $option): ?array {
+                $label = mb_substr(trim((string) ($option['label'] ?? '')), 0, 80);
+                $selectionPrompt = mb_substr(trim((string) ($option['prompt'] ?? '')), 0, 500);
+
+                if ($label === '' || $selectionPrompt === '') {
+                    return null;
+                }
+
+                return [
+                    'label' => $label,
+                    'description' => mb_substr(trim((string) ($option['description'] ?? '')), 0, 160),
+                    'prompt' => $selectionPrompt,
+                ];
+            })
+            ->filter()
+            ->take(6)
+            ->values()
+            ->all();
+
+        if (count($options) < 2) {
+            return $this->error('INSUFFICIENT_CHAT_OPTIONS', 'Fuer Auswahlbuttons werden mindestens zwei gueltige Optionen benoetigt.');
+        }
+
+        return [
+            'ok' => true,
+            'silent' => true,
+            'message' => $prompt,
+            'chat_options' => [
+                'prompt' => $prompt,
+                'options' => $options,
+            ],
         ];
     }
 
