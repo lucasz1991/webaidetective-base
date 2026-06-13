@@ -3,6 +3,7 @@
 namespace App\Livewire\User;
 
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
+use App\Jobs\RunTrackedPersonInstagramToolScan;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScan;
 use App\Models\TrackedPerson;
@@ -297,25 +298,27 @@ class TrackedPersonDetail extends Component
 
     public function resumeSavedInstagramScan(string $scanType): void
     {
-        switch ($scanType) {
-            case 'followers':
-                $this->scanInstagramFollowersList();
-                break;
-            case 'following':
-                $this->scanInstagramFollowingList();
-                break;
-            case 'suggestions':
-                $this->scanInstagramSuggestions();
-                break;
-            case 'suggestion_deepsearch':
-                $this->scanInstagramSuggestionDeepSearch();
-                break;
-            case 'public_connections':
-                $this->scanPublicProfileConnections();
-                break;
-            default:
-                $this->setDetailStatus('Dieser Scan-Typ kann nicht fortgesetzt werden.', 'error');
+        if (! in_array($scanType, ['followers', 'following', 'suggestions', 'suggestion_deepsearch', 'public_connections'], true)) {
+            $this->setDetailStatus('Dieser Scan-Typ kann nicht fortgesetzt werden.', 'error');
+
+            return;
         }
+
+        $trackedPerson = $this->resolveTrackedPerson();
+
+        if (config('queue.default') === 'sync') {
+            RunTrackedPersonInstagramToolScan::dispatchAfterResponse(
+                (int) $trackedPerson->id,
+                $scanType,
+            );
+        } else {
+            RunTrackedPersonInstagramToolScan::dispatch(
+                (int) $trackedPerson->id,
+                $scanType,
+            );
+        }
+
+        $this->setDetailStatus('Scan wird ab dem gespeicherten Datenstand fortgesetzt.', 'partial');
     }
 
     public function dismissSavedInstagramScan(string $source, int $scanId): void

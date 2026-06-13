@@ -309,7 +309,7 @@ class Chatbot extends Component
         $this->persistScanActivities();
     }
 
-    public function resumeAssistantScan(string $token): void
+    public function resumeAssistantScan(string $token): array
     {
         $user = Auth::user();
         $statusStore = app(InvestigationAssistantScanStatusStore::class);
@@ -325,7 +325,10 @@ class Chatbot extends Component
             || ($status['status'] ?? null) !== 'paused'
             || ! in_array($scanType, $supportedTypes, true)
         ) {
-            return;
+            return [
+                'ok' => false,
+                'message' => 'Dieser Scan kann nicht mehr fortgesetzt werden.',
+            ];
         }
 
         $trackedPerson = TrackedPerson::query()
@@ -334,7 +337,10 @@ class Chatbot extends Component
             ->first();
 
         if (! $trackedPerson || ! $trackedPerson->instagram_username) {
-            return;
+            return [
+                'ok' => false,
+                'message' => 'Das zu scannende Instagram-Profil wurde nicht gefunden.',
+            ];
         }
 
         $newToken = (string) Str::uuid();
@@ -349,8 +355,22 @@ class Chatbot extends Component
             'resumed_from_token' => $token,
         ]);
 
+        try {
+            $this->dispatchTrackedPersonScan(
+                (int) $trackedPerson->id,
+                $scanType,
+                $newToken,
+            );
+        } catch (\Throwable $exception) {
+            $statusStore->fail($newToken, 'Fortsetzen konnte nicht gestartet werden: '.$exception->getMessage());
+
+            return [
+                'ok' => false,
+                'message' => 'Der Scan konnte nicht gestartet werden: '.$exception->getMessage(),
+            ];
+        }
+
         $statusStore->dismiss($token, 'Scan wurde in einem neuen Lauf fortgesetzt.');
-        RunTrackedPersonInstagramToolScan::dispatch((int) $trackedPerson->id, $scanType, false, $newToken);
 
         $this->scanActivities = collect($this->scanActivities)
             ->reject(fn (array $activity): bool => ($activity['token'] ?? null) === $token)
@@ -362,6 +382,12 @@ class Chatbot extends Component
             ->values()
             ->all();
         $this->persistScanActivities();
+
+        return [
+            'ok' => true,
+            'message' => $label.' wird fortgesetzt.',
+            'token' => $newToken,
+        ];
     }
 
     public function dismissAssistantScan(string $token): void
@@ -917,6 +943,27 @@ class Chatbot extends Component
     private function persistScanActivities(): void
     {
         Session::put(self::SCAN_ACTIVITIES_KEY, array_slice($this->scanActivities, -4));
+    }
+
+    private function dispatchTrackedPersonScan(int $trackedPersonId, string $scanType, string $token): void
+    {
+        if (config('queue.default') === 'sync') {
+            RunTrackedPersonInstagramToolScan::dispatchAfterResponse(
+                $trackedPersonId,
+                $scanType,
+                false,
+                $token,
+            );
+
+            return;
+        }
+
+        RunTrackedPersonInstagramToolScan::dispatch(
+            $trackedPersonId,
+            $scanType,
+            false,
+            $token,
+        );
     }
 
     private function assistantScanLooksInterrupted(array $status, int $staleAfterSeconds = 30): bool

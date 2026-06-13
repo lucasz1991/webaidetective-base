@@ -11,6 +11,7 @@
         submitting: false,
         pendingLabel: '',
         selectedChatOptions: {},
+        resumingScanToken: null,
         voiceSupported: false,
         listening: false,
         recognition: null,
@@ -364,6 +365,25 @@
         pausedScans() {
             return (Array.isArray(this.scanActivities) ? this.scanActivities : [])
                 .filter((scan) => scan?.status === 'paused');
+        },
+        async resumePausedScan(scan) {
+            const token = String(scan?.token || '');
+            if (!token || this.resumingScanToken) return;
+
+            this.resumingScanToken = token;
+            this.pendingLabel = `${scan?.label || 'Instagram-Scan'} wird fortgesetzt.`;
+
+            try {
+                const result = await $wire.resumeAssistantScan(token);
+
+                if (!result?.ok) {
+                    window.alert(result?.message || 'Der Scan konnte nicht fortgesetzt werden.');
+                }
+            } finally {
+                this.resumingScanToken = null;
+                this.pendingLabel = '';
+                this.scrollMessages();
+            }
         },
         scanPercent(scan) {
             return Math.max(0, Math.min(100, Number(scan?.percent || 0)));
@@ -959,11 +979,12 @@
                                         <div class="mt-3 flex flex-wrap gap-2">
                                             <button
                                                 type="button"
-                                                x-on:click="$wire.resumeAssistantScan(scan.token)"
-                                                x-bind:disabled="busy()"
+                                                x-on:click="resumePausedScan(scan)"
+                                                x-bind:disabled="busy() || resumingScanToken !== null"
                                                 class="inline-flex items-center justify-center rounded-lg bg-emerald-600 px-3 py-2 text-xs font-black text-white transition hover:bg-emerald-700 disabled:cursor-wait disabled:opacity-60"
                                             >
-                                                Scan fortsetzen
+                                                <span x-show="resumingScanToken !== scan.token">Scan fortsetzen</span>
+                                                <span x-show="resumingScanToken === scan.token">Wird gestartet...</span>
                                             </button>
                                             <button
                                                 type="button"
