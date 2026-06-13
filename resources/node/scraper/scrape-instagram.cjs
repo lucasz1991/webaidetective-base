@@ -191,6 +191,7 @@ const scriptWatchdog = {
   intentionalBrowserClose: false,
   browserDisconnectAbort: true,
 };
+let technicalHeartbeatInterval = null;
 
 function markScriptActivity(reason = 'activity') {
   scriptWatchdog.lastActivityAt = Date.now();
@@ -290,6 +291,32 @@ function stopScriptWatchdog() {
   if (scriptWatchdog.interval) {
     clearInterval(scriptWatchdog.interval);
     scriptWatchdog.interval = null;
+  }
+}
+
+function startTechnicalHeartbeat() {
+  if (technicalHeartbeatInterval) {
+    clearInterval(technicalHeartbeatInterval);
+  }
+
+  technicalHeartbeatInterval = setInterval(() => {
+    process.stderr.write(`[SCRAPER PROGRESS] ${JSON.stringify({
+      at: new Date().toISOString(),
+      mode: operationMode,
+      stage: 'technical-heartbeat',
+      heartbeat: true,
+      lastActivityReason: scriptWatchdog.lastActivityReason,
+      idleMs: Date.now() - scriptWatchdog.lastActivityAt,
+    })}\n`);
+  }, 10000);
+
+  technicalHeartbeatInterval.unref?.();
+}
+
+function stopTechnicalHeartbeat() {
+  if (technicalHeartbeatInterval) {
+    clearInterval(technicalHeartbeatInterval);
+    technicalHeartbeatInterval = null;
   }
 }
 
@@ -8139,6 +8166,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
   setActiveScraperProfile(runtimeConfig);
   setGracefulStopFilePath(runtimeConfig);
   configureScriptWatchdog(runtimeConfig);
+  startTechnicalHeartbeat();
   const debugLogPath = initializeRunDebug(operationMode, username, runtimeConfig);
   const profileUrl = isLoginSessionMode
     ? 'https://www.instagram.com/'
@@ -8211,6 +8239,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
     ]);
 
     stopScriptWatchdog();
+    stopTechnicalHeartbeat();
 
     if (cleanupBrowserProfileOnExit) {
       cleanupDirectory(activeBrowserUserDataDir);
@@ -8837,6 +8866,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
     }
 
     stopScriptWatchdog();
+    stopTechnicalHeartbeat();
 
     if (cleanupBrowserProfileOnExit) {
       cleanupDirectory(activeBrowserUserDataDir);

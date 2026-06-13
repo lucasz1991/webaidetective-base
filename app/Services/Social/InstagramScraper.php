@@ -249,6 +249,10 @@ class InstagramScraper
                             continue;
                         }
 
+                        if (($event['stage'] ?? null) === 'technical-heartbeat') {
+                            continue;
+                        }
+
                         $this->recordScraperProfileRateLimitIfNeeded($event);
 
                         $relationship = (string) ($event['relationship'] ?? '');
@@ -549,12 +553,14 @@ class InstagramScraper
 
                 if ($stdoutChunk !== '') {
                     $lastOutputAt = microtime(true);
+                    $coordinator?->recordProcessOutput($trackedPersonId, $generation);
                     $stdout .= $stdoutChunk;
                     $onOutput(SymfonyProcess::OUT, $stdoutChunk);
                 }
 
                 if ($stderrChunk !== '') {
                     $lastOutputAt = microtime(true);
+                    $coordinator?->recordProcessOutput($trackedPersonId, $generation);
                     $stderr .= $stderrChunk;
                     $onOutput(SymfonyProcess::ERR, $stderrChunk);
                 }
@@ -636,6 +642,10 @@ class InstagramScraper
             $event = $this->parseProgressLine($line);
 
             if (! $event) {
+                continue;
+            }
+
+            if (($event['stage'] ?? null) === 'technical-heartbeat') {
                 continue;
             }
 

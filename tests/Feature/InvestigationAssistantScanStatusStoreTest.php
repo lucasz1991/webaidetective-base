@@ -76,4 +76,26 @@ class InvestigationAssistantScanStatusStoreTest extends TestCase
         $this->assertSame('saving', $stopping['phase']);
         $this->assertTrue($stopping['stop_requested']);
     }
+
+    public function test_late_worker_updates_do_not_reactivate_a_paused_scan(): void
+    {
+        $token = (string) Str::uuid();
+        $store = app(InvestigationAssistantScanStatusStore::class);
+        $store->start($token, [
+            'user_id' => 42,
+            'tracked_person_id' => 7,
+        ]);
+        $store->pause($token, 'Scan reagiert nicht mehr.');
+
+        $status = $store->progress($token, [
+            'phase' => 'followers',
+            'percent' => 70,
+            'message' => 'Verspaetete Fortschrittsmeldung.',
+        ]);
+        $status = $store->fail($token, 'Verspaeteter Prozessfehler.');
+
+        $this->assertSame('paused', $status['status']);
+        $this->assertTrue($status['resumable']);
+        $this->assertSame('Scan reagiert nicht mehr.', $status['message']);
+    }
 }

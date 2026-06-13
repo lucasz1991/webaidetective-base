@@ -223,8 +223,21 @@ class Chatbot extends Component
             $stopRequested = (bool) ($scanState['gracefulStopRequested'] ?? false)
                 || (bool) ($status['stop_requested'] ?? false);
             $scanIsActive = $scanCoordinator->hasActiveScan((int) ($status['tracked_person_id'] ?? 0));
+            $scanIsResponsive = $scanCoordinator->isResponsive((int) ($status['tracked_person_id'] ?? 0));
 
-            if ($stopRequested && $scanIsActive) {
+            if (
+                ($status['status'] ?? null) === 'running'
+                && $scanIsActive
+                && ! $scanIsResponsive
+                && $this->assistantScanLooksInterrupted($status, 35)
+            ) {
+                $scanCoordinator->terminateUnresponsiveScan((int) ($status['tracked_person_id'] ?? 0));
+                $status = $statusStore->pause(
+                    $token,
+                    'Der Scan reagiert nicht mehr und wurde angehalten. Der bisher gespeicherte Datenstand kann fortgesetzt oder abgeschlossen werden.',
+                    is_array($status['result'] ?? null) ? $status['result'] : [],
+                );
+            } elseif ($stopRequested && $scanIsActive) {
                 $status = $statusStore->stopping(
                     $token,
                     'Stop wurde erkannt. Der aktuelle Zwischenstand wird gespeichert.',

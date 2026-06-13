@@ -28,6 +28,12 @@ class InvestigationAssistantScanStatusStore
 
     public function progress(string $token, array $progress): array
     {
+        $current = $this->get($token);
+
+        if (in_array($current['status'] ?? null, ['paused', 'dismissed', 'completed'], true)) {
+            return $current;
+        }
+
         return $this->update($token, [
             'status' => 'running',
             'percent' => max(1, min(99, (int) ($progress['percent'] ?? 1))),
@@ -85,6 +91,12 @@ class InvestigationAssistantScanStatusStore
 
     public function fail(string $token, string $message, array $result = []): array
     {
+        $current = $this->get($token);
+
+        if (in_array($current['status'] ?? null, ['paused', 'dismissed', 'completed'], true)) {
+            return $current;
+        }
+
         return $this->update($token, [
             'status' => 'error',
             'phase' => 'error',

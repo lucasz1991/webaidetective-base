@@ -115,6 +115,49 @@ class TrackedPersonInstagramScanCoordinator
         return $this->active($trackedPersonId);
     }
 
+    public function isResponsive(int $trackedPersonId, int $staleAfterSeconds = 35): bool
+    {
+        $active = $this->active($trackedPersonId);
+        $heartbeatAt = $active['lastProcessOutputAt'] ?? $active['updatedAt'] ?? null;
+
+        if (! is_string($heartbeatAt) || $heartbeatAt === '') {
+            return false;
+        }
+
+        try {
+            return now()->diffInSeconds(Carbon::parse($heartbeatAt)) < max(15, $staleAfterSeconds);
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    public function recordProcessOutput(int $trackedPersonId, int $generation): void
+    {
+        $active = $this->active($trackedPersonId);
+
+        if ((int) ($active['generation'] ?? 0) !== $generation) {
+            return;
+        }
+
+        $active['lastProcessOutputAt'] = now()->toIso8601String();
+        $active['updatedAt'] = now()->toIso8601String();
+        Cache::put($this->activeKey($trackedPersonId), $active, now()->addHours(12));
+    }
+
+    public function terminateUnresponsiveScan(int $trackedPersonId): void
+    {
+        $active = $this->active($trackedPersonId);
+
+        foreach (($active['processes'] ?? []) as $process) {
+            $this->terminateProcessTree((int) ($process['pid'] ?? 0));
+        }
+
+        $active['processes'] = [];
+        $active['unresponsiveAt'] = now()->toIso8601String();
+        $active['updatedAt'] = now()->toIso8601String();
+        Cache::put($this->activeKey($trackedPersonId), $active, now()->addHours(12));
+    }
+
     public function touchActiveScan(int $trackedPersonId): void
     {
         $active = $this->active($trackedPersonId);
@@ -180,6 +223,7 @@ class TrackedPersonInstagramScanCoordinator
             ->all();
 
         $active['processes'] = $processes;
+        $active['lastProcessOutputAt'] = now()->toIso8601String();
         $active['updatedAt'] = now()->toIso8601String();
         Cache::put($this->activeKey($trackedPersonId), $active, now()->addHours(12));
     }
