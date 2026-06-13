@@ -1,4 +1,4 @@
-<div class="container mx-auto space-y-5 px-5 py-6" x-data="{ actionsOpen: false, scansOpen: false }">
+<div class="container mx-auto space-y-4" x-data="{ actionsOpen: false, scansOpen: false }">
     @php
         $visibility = $profile->profile_visibility ?: 'unknown';
         $visibilityLabel = match ($visibility) {
@@ -10,6 +10,16 @@
             'public' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
             'private' => 'bg-slate-100 text-slate-700 ring-slate-200',
             default => 'bg-amber-50 text-amber-800 ring-amber-200',
+        };
+        $profileImageFrameClass = match ($visibility) {
+            'public' => 'border-emerald-400 ring-2 ring-emerald-200',
+            'private' => 'border-slate-400 ring-2 ring-slate-200',
+            default => 'border-amber-400 ring-2 ring-amber-200',
+        };
+        $profileStatusDotClass = match ($visibility) {
+            'public' => 'bg-emerald-500',
+            'private' => 'bg-slate-500',
+            default => 'bg-amber-500',
         };
         $scanStatusLevel = $lastScanStatus['level'] ?: 'unknown';
         $scanStatusLabel = match ($scanStatusLevel) {
@@ -38,10 +48,11 @@
         </div>
     </div>
 
-    <div class="flex items-center justify-between gap-3">
+    <x-profile.detail-hero>
+        <x-slot:toolbar>
         <a
             href="{{ url()->previous() }}"
-            class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50"
+            class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/80 bg-white/85 px-4 text-xs font-semibold text-slate-950 shadow-sm backdrop-blur hover:bg-white"
         >
             Zurueck
         </a>
@@ -51,7 +62,7 @@
             <button
                 type="button"
                 @click="scansOpen = ! scansOpen; actionsOpen = false"
-                class="inline-flex items-center justify-center rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800"
+                class="inline-flex h-9 items-center justify-center rounded-3xl bg-slate-950 px-4 text-xs font-semibold text-white shadow-sm hover:bg-slate-800"
             >
                 Scans
                 <span class="ml-2 text-slate-300">▾</span>
@@ -155,7 +166,7 @@
             <button
                 type="button"
                 @click="actionsOpen = ! actionsOpen; scansOpen = false"
-                class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm hover:bg-slate-50"
+                class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/80 bg-white/85 px-4 text-xs font-semibold text-slate-950 shadow-sm backdrop-blur hover:bg-white"
             >
                 Aktionen
                 <span class="ml-2 text-slate-500">▾</span>
@@ -219,109 +230,133 @@
             </div>
             </div>
         </div>
-    </div>
+        </x-slot:toolbar>
 
-    @if($detailStatus)
-        <div @class([
-            'rounded-lg border p-3 text-sm',
-            'border-emerald-200 bg-emerald-50 text-emerald-900' => $detailStatusLevel === 'success',
-            'border-amber-200 bg-amber-50 text-amber-950' => $detailStatusLevel === 'partial',
-            'border-rose-200 bg-rose-50 text-rose-900' => $detailStatusLevel === 'error',
-        ])>
-            {{ $detailStatus }}
-        </div>
-    @endif
+        <x-slot:identity>
+            <x-profile.detail-identity
+                :src="$profile->profile_image_storage_url"
+                :alt="$profile->display_handle"
+                :initial="$profile->username ?: '?'"
+                :title="$profile->display_handle"
+                :subtitle="$profile->display_name ?: $profile->full_name"
+                :frame-class="$profileImageFrameClass"
+                :status-dot-class="$profileStatusDotClass"
+                :status-label="$visibilityLabel"
+                :muted-image="$visibility === 'private'"
+            />
+        </x-slot:identity>
 
-    <section class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div class="flex flex-col gap-5 p-5 lg:flex-row lg:items-start lg:justify-between">
-            <div class="flex min-w-0 gap-4">
-                <div class="h-24 w-24 shrink-0 overflow-hidden rounded-full border border-slate-200 bg-slate-100">
-                    @if($profile->profile_image_storage_url)
-                        <img src="{{ $profile->profile_image_storage_url }}" alt="{{ $profile->display_handle }}" class="h-full w-full object-cover">
-                    @else
-                        <div class="flex h-full w-full items-center justify-center text-2xl font-bold text-slate-500">
-                            {{ strtoupper(substr($profile->username ?: '?', 0, 1)) }}
-                        </div>
-                    @endif
-                </div>
-                <div class="min-w-0">
-                    <div class="flex flex-wrap items-center gap-2">
-                        <h1 class="break-words text-2xl font-bold text-slate-950">
-                            {{ $profile->display_name ?: $profile->full_name ?: $profile->display_handle }}
-                        </h1>
-                        <span class="rounded-lg px-2.5 py-1 text-xs font-semibold ring-1 {{ $visibilityClass }}">{{ $visibilityLabel }}</span>
-                        <span class="rounded-lg px-2.5 py-1 text-xs font-semibold {{ $trackedPerson ? 'bg-sky-100 text-sky-800' : 'bg-slate-100 text-slate-600' }}">
-                            {{ $trackedPerson ? 'Beobachtetes Profil' : 'Nicht beobachtet' }}
-                        </span>
-                    </div>
-                    <div class="mt-1 text-sm font-semibold text-slate-500">{{ $profile->display_handle }}</div>
-                    @if($profile->biography)
-                        <p class="mt-3 max-w-3xl whitespace-pre-line text-sm leading-6 text-slate-600">{{ $profile->biography }}</p>
-                    @endif
-                    @if($lastScanStatus['message'])
-                        <p class="mt-3 text-sm text-slate-500">
-                            <span class="font-semibold {{ $scanStatusClass }}">{{ $lastScanStatus['type'] }}:</span>
-                            {{ $lastScanStatus['message'] }}
-                        </p>
-                    @endif
-                </div>
-            </div>
-
-        </div> 
-
-        <div class="grid grid-cols-2 gap-px bg-slate-200 sm:grid-cols-3 xl:grid-cols-5">
-            <button
-                type="button"
+        <x-slot:metrics>
+            <x-profile.detail-metric
+                as="button"
+                label="Follower"
+                :value="is_numeric($profile->followers_count) ? number_format($profile->followers_count) : '-'"
+                tone="pink"
                 wire:click="openListModal('followers')"
-                class="bg-white px-5 py-4 text-left transition hover:bg-pink-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-pink-500"
                 title="Followerliste oeffnen"
             >
-                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Follower</div>
-                <div class="mt-1 text-lg font-bold text-slate-950">{{ is_numeric($profile->followers_count) ? number_format($profile->followers_count) : '-' }}</div>
-                <div class="mt-1 text-xs font-semibold text-pink-700">Liste oeffnen</div>
-            </button>
-            <button
-                type="button"
+                Liste oeffnen
+            </x-profile.detail-metric>
+            <x-profile.detail-metric
+                as="button"
+                label="Gefolgt"
+                :value="is_numeric($profile->following_count) ? number_format($profile->following_count) : '-'"
+                tone="sky"
                 wire:click="openListModal('following')"
-                class="bg-white px-5 py-4 text-left transition hover:bg-pink-50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-pink-500"
                 title="Gefolgt-Liste oeffnen"
             >
-                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Gefolgt</div>
-                <div class="mt-1 text-lg font-bold text-slate-950">{{ is_numeric($profile->following_count) ? number_format($profile->following_count) : '-' }}</div>
-                <div class="mt-1 text-xs font-semibold text-pink-700">Liste oeffnen</div>
-            </button>
-            <div class="bg-white px-5 py-4">
-                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Beitraege</div>
-                <div class="mt-1 text-lg font-bold text-slate-950">{{ is_numeric($profile->posts_count) ? number_format($profile->posts_count) : '-' }}</div>
-            </div>
-            <div class="bg-white px-5 py-4">
-                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Letzter Scan</div>
-                <div class="mt-1 text-lg font-bold text-slate-950">
-                    {{ $lastScanStatus['scannedAt']?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
-                </div>
-                <div class="mt-1 text-xs text-slate-500">{{ $lastScanStatus['type'] }}</div>
-            </div>
-            <div class="bg-white px-5 py-4">
-                <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Scanstatus</div>
-                <div class="mt-1 text-lg font-bold {{ $scanStatusClass }}">{{ $scanStatusLabel }}</div>
-                <div class="mt-1 truncate text-xs text-slate-500" title="{{ $lastScanStatus['message'] }}">{{ $lastScanStatus['message'] ?: 'Noch kein Scanstatus gespeichert.' }}</div>
-            </div>
-        </div>
-    </section>
+                Liste oeffnen
+            </x-profile.detail-metric>
+            <x-profile.detail-metric
+                label="Beitraege"
+                :value="is_numeric($profile->posts_count) ? number_format($profile->posts_count) : '-'"
+                tone="violet"
+            >
+                Profilmetriken
+            </x-profile.detail-metric>
+        </x-slot:metrics>
 
-    <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>
-                <h2 class="text-base font-bold text-slate-950">Scans und gespeicherte Listen</h2>
-                <p class="mt-1 text-sm text-slate-500">Alle Scan- und Listenaktionen findest du jetzt gesammelt oben rechts im Aktionsmenue.</p>
+        <x-slot:badges>
+            <span class="rounded-2xl px-3 py-1 text-xs font-semibold ring-1 {{ $visibilityClass }}">{{ $visibilityLabel }}</span>
+            <span class="rounded-2xl px-3 py-1 text-xs font-semibold {{ $trackedPerson ? 'bg-sky-100 text-sky-800' : 'bg-slate-100 text-slate-600' }}">
+                {{ $trackedPerson ? 'Beobachtetes Profil' : 'Nicht beobachtet' }}
+            </span>
+            <span class="rounded-2xl bg-white/80 px-3 py-1 text-xs font-semibold {{ $scanStatusClass }} ring-1 ring-white">
+                Scan: {{ $scanStatusLabel }}
+            </span>
+        </x-slot:badges>
+
+        <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+            <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                @if($profile->biography)
+                    <p class="whitespace-pre-line text-sm leading-6 text-slate-600">{{ $profile->biography }}</p>
+                @else
+                    <p class="text-sm leading-6 text-slate-500">Keine Biografie gespeichert.</p>
+                @endif
+
+                @if($lastScanStatus['message'])
+                    <p class="mt-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-600">
+                        <span class="font-semibold {{ $scanStatusClass }}">{{ $lastScanStatus['type'] }}:</span>
+                        {{ $lastScanStatus['message'] }}
+                    </p>
+                @endif
+
+                <div class="mt-4 flex flex-wrap gap-2 text-xs">
+                    <span class="rounded-2xl bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                        Letzter Scan: {{ $lastScanStatus['scannedAt']?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+                    </span>
+                    @if(! $trackedPerson)
+                        <span class="rounded-2xl bg-amber-50 px-3 py-1 font-semibold text-amber-800 ring-1 ring-amber-200">
+                            Tracking wird nur bewusst aktiviert
+                        </span>
+                    @endif
+                </div>
             </div>
-            @if(! $trackedPerson)
-                <span class="rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800 ring-1 ring-amber-200">
-                    Scans legen keine beobachtete Person an. Das Tracking muss ueber Aktionen bewusst aktiviert werden.
-                </span>
-            @endif
+
+            <div class="grid gap-2">
+                <button
+                    type="button"
+                    wire:click="analyzeInstagram"
+                    wire:loading.attr="disabled"
+                    wire:target="analyzeInstagram"
+                    class="inline-flex h-11 items-center justify-center rounded-3xl bg-gradient-to-r from-rose-500 to-fuchsia-600 px-4 text-sm font-semibold text-white shadow-sm hover:from-rose-600 hover:to-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <span wire:loading.remove wire:target="analyzeInstagram">Vollanalyse</span>
+                    <span wire:loading wire:target="analyzeInstagram">Laeuft...</span>
+                </button>
+                @if($trackedPerson)
+                    <a
+                        href="{{ route('tracked-people.show', $trackedPerson->id) }}"
+                        wire:navigate
+                        class="inline-flex h-11 items-center justify-center rounded-3xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+                    >
+                        Beobachtete Person oeffnen
+                    </a>
+                @else
+                    <button
+                        type="button"
+                        wire:click="addAsTrackedPerson"
+                        wire:loading.attr="disabled"
+                        wire:target="addAsTrackedPerson"
+                        class="inline-flex h-11 items-center justify-center rounded-3xl border border-sky-200 bg-sky-50 px-4 text-sm font-semibold text-sky-700 hover:bg-sky-100 disabled:opacity-50"
+                    >
+                        Tracking aktivieren
+                    </button>
+                @endif
+            </div>
         </div>
-    </section>
+
+        @if($detailStatus)
+            <div @class([
+                'mt-4 rounded-3xl border px-4 py-3 text-sm',
+                'border-emerald-200 bg-emerald-50 text-emerald-900' => $detailStatusLevel === 'success',
+                'border-amber-200 bg-amber-50 text-amber-950' => $detailStatusLevel === 'partial',
+                'border-rose-200 bg-rose-50 text-rose-900' => $detailStatusLevel === 'error',
+            ])>
+                {{ $detailStatus }}
+            </div>
+        @endif
+    </x-profile.detail-hero>
 
     <div class="grid gap-5 xl:grid-cols-2">
         <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">

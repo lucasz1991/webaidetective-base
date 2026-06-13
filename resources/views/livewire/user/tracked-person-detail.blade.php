@@ -69,9 +69,8 @@
         </div>
     </div>
 
-    <section id="profil" class="scroll-mt-4 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <div class="bg-gradient-to-r from-rose-50 via-slate-50 to-slate-100 px-4 py-4 text-slate-950 sm:px-5">
-            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <x-profile.detail-hero id="profil">
+        <x-slot:toolbar>
                 <a
                     href="{{ route('dashboard') }}"
                     wire:navigate
@@ -153,125 +152,96 @@
                         </div>
                     </div>
                 </div>
-            </div>
+        </x-slot:toolbar>
 
-            <div class="flex items-start justify-between gap-3">
-                <div class="flex min-w-0 flex-1 items-center gap-4">
-                    <div class="relative h-20 w-20 shrink-0">
-                        <div class="h-20 w-20 overflow-hidden rounded-full border-2 bg-slate-100 shadow-sm {{ $profileImageFrameClass }}" title="{{ $latestProfileVisibilityLabel }}">
-                            @if($trackedPerson->profile_image_url)
-                                <img src="{{ $trackedPerson->profile_image_url }}" alt="{{ $trackedPerson->display_name }}" @class([
-                                    'h-full w-full object-cover',
-                                    'grayscale-[50%]' => $latestProfileIsPrivate,
-                                ])>
-                            @else
-                                <div class="flex h-full w-full items-center justify-center text-sm font-semibold text-slate-500">
-                                    IG
-                                </div>
-                            @endif
-                        </div>
-                        <span class="absolute bottom-0 right-0 h-5 w-5 rounded-full border-2 border-white {{ $profileStatusDotClass }}" title="{{ $latestProfileVisibilityLabel }}"></span>
-                    </div>
-                    <div class="min-w-0">
-                        <p class="text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">Instagram-Profil</p>
-                        <h2 class="mt-2 text-2xl font-semibold tracking-tight text-slate-950 break-words">
-                            {{ $trackedPerson->instagram_username ? '@'.$trackedPerson->instagram_username : $trackedPerson->display_name }}
-                        </h2>
-                    </div>
-                </div>
+        <x-slot:identity>
+            <x-profile.detail-identity
+                :src="$trackedPerson->profile_image_url"
+                :alt="$trackedPerson->display_name"
+                initial="IG"
+                :title="$trackedPerson->instagram_username ? '@'.$trackedPerson->instagram_username : $trackedPerson->display_name"
+                :frame-class="$profileImageFrameClass"
+                :status-dot-class="$profileStatusDotClass"
+                :status-label="$latestProfileVisibilityLabel"
+                :muted-image="$latestProfileIsPrivate"
+            />
+        </x-slot:identity>
 
-                <div class="w-[min(58vw,24rem)] shrink-0 overflow-hidden rounded-3xl border border-white/80 bg-white/90 shadow-sm backdrop-blur">
-                    <div class="grid grid-cols-3 divide-x divide-slate-200">
+        <x-slot:metrics>
                         @if($latestFollowerListAvailable || $latestProfileIsPublic)
-                            <button
-                                type="button"
+                            <x-profile.detail-metric
+                                as="button"
+                                label="Follower"
+                                :value="$trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-'"
+                                tone="emerald"
+                                :muted="! $latestFollowerListAvailable"
                                 wire:click="$set('showFollowersModal', true)"
-                                @class([
-                                    'px-3 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-inset',
-                                    'hover:bg-emerald-50 focus:ring-emerald-300' => $latestFollowerListAvailable,
-                                    'opacity-60 grayscale-[50%] hover:bg-slate-50 focus:ring-slate-300' => ! $latestFollowerListAvailable,
-                                ])
                                 title="{{ $latestFollowerListAvailable ? 'Followerliste oeffnen' : 'Followerliste scannen' }}"
                             >
-                                <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Follower</div>
-                                <div class="mt-1 text-base font-bold text-slate-950 sm:text-xl">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
-                                <div @class([
-                                    'mt-1 text-[10px] font-semibold',
-                                    'text-emerald-700' => $latestFollowerListAvailable,
-                                    'text-slate-500' => ! $latestFollowerListAvailable,
-                                ])>{{ $latestFollowerListAvailable ? 'Liste' : 'Keine Liste' }}</div>
-                            </button>
+                                {{ $latestFollowerListAvailable ? 'Liste' : 'Keine Liste' }}
+                            </x-profile.detail-metric>
                         @else
-                            <div class="px-3 py-3 opacity-60 grayscale-[50%]">
-                                <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Follower</div>
-                                <div class="mt-1 text-base font-bold text-slate-950 sm:text-xl">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
-                                <div class="mt-1 text-[10px] font-semibold text-slate-500">Keine Liste</div>
-                            </div>
+                            <x-profile.detail-metric
+                                label="Follower"
+                                :value="$trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-'"
+                                :muted="true"
+                            >
+                                Keine Liste
+                            </x-profile.detail-metric>
                         @endif
 
                         @if($latestFollowingListAvailable || $latestProfileIsPublic)
-                            <button
-                                type="button"
+                            <x-profile.detail-metric
+                                as="button"
+                                label="Gefolgt"
+                                :value="$trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-'"
+                                tone="sky"
+                                :muted="! $latestFollowingListAvailable"
                                 wire:click="$set('showFollowingModal', true)"
-                                @class([
-                                    'px-3 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-inset',
-                                    'hover:bg-sky-50 focus:ring-sky-300' => $latestFollowingListAvailable,
-                                    'opacity-60 grayscale-[50%] hover:bg-slate-50 focus:ring-slate-300' => ! $latestFollowingListAvailable,
-                                ])
                                 title="{{ $latestFollowingListAvailable ? 'Gefolgt-Liste oeffnen' : 'Gefolgt-Liste scannen' }}"
                             >
-                                <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Gefolgt</div>
-                                <div class="mt-1 text-base font-bold text-slate-950 sm:text-xl">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
-                                <div @class([
-                                    'mt-1 text-[10px] font-semibold',
-                                    'text-sky-700' => $latestFollowingListAvailable,
-                                    'text-slate-500' => ! $latestFollowingListAvailable,
-                                ])>{{ $latestFollowingListAvailable ? 'Liste' : 'Keine Liste' }}</div>
-                            </button>
+                                {{ $latestFollowingListAvailable ? 'Liste' : 'Keine Liste' }}
+                            </x-profile.detail-metric>
                         @else
-                            <div class="px-3 py-3 opacity-60 grayscale-[50%]">
-                                <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Gefolgt</div>
-                                <div class="mt-1 text-base font-bold text-slate-950 sm:text-xl">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
-                                <div class="mt-1 text-[10px] font-semibold text-slate-500">Keine Liste</div>
-                            </div>
+                            <x-profile.detail-metric
+                                label="Gefolgt"
+                                :value="$trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-'"
+                                :muted="true"
+                            >
+                                Keine Liste
+                            </x-profile.detail-metric>
                         @endif
 
-                        <div class="px-3 py-3 text-left">
-                            <div class="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">Beitraege</div>
-                            <div class="mt-1 text-base font-bold text-slate-950 sm:text-xl">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-' }}</div>
-                            <div class="mt-1 text-[10px] font-semibold text-violet-700">
-                                @if($latestProfileIsPublic)
-                                    <button
-                                        type="button"
-                                        wire:click="scanInstagramPosts"
-                                        wire:loading.attr="disabled"
-                                        wire:target="scanInstagramPosts"
-                                        @disabled(! $trackedPerson->instagram_username)
-                                        class="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] text-violet-700 ring-1 ring-violet-200 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                    >
-                                        Scan
-                                    </button>
-                                @else
-                                    Profilmetriken
-                                @endif
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                        <x-profile.detail-metric
+                            label="Beitraege"
+                            :value="$trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-'"
+                            tone="violet"
+                        >
+                            @if($latestProfileIsPublic)
+                                <button
+                                    type="button"
+                                    wire:click="scanInstagramPosts"
+                                    wire:loading.attr="disabled"
+                                    wire:target="scanInstagramPosts"
+                                    @disabled(! $trackedPerson->instagram_username)
+                                    class="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] text-violet-700 ring-1 ring-violet-200 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Scan
+                                </button>
+                            @else
+                                Profilmetriken
+                            @endif
+                        </x-profile.detail-metric>
+        </x-slot:metrics>
 
-            </div>
+        <x-slot:badges>
+            <span class="rounded-2xl px-3 py-1 text-xs font-semibold ring-1 {{ $instagramStatusBadgeClass }}">{{ $instagramStatusLabel }}</span>
+            <span class="rounded-2xl px-3 py-1 text-xs font-semibold ring-1 {{ $latestProfileVisibilityBadgeClass }}">{{ $latestProfileVisibilityLabel }}</span>
+            @if($trackedPerson->monitoring_enabled)
+                <span class="rounded-2xl bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Live</span>
+            @endif
+        </x-slot:badges>
 
-            <div class="mt-4 flex flex-wrap items-center gap-2">
-                <span class="rounded-2xl px-3 py-1 text-xs font-semibold ring-1 {{ $instagramStatusBadgeClass }}">{{ $instagramStatusLabel }}</span>
-                <span class="rounded-2xl px-3 py-1 text-xs font-semibold ring-1 {{ $latestProfileVisibilityBadgeClass }}">{{ $latestProfileVisibilityLabel }}</span>
-                @if($trackedPerson->monitoring_enabled)
-                    <span class="rounded-2xl bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Live</span>
-                @endif
-            </div>
-
-        </div>
-
-        <div class="px-4 py-4 sm:px-5 sm:py-5">
             <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
                 <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4">
                     @if($trackedPerson->last_instagram_status_message)
@@ -322,8 +292,7 @@
                     {{ $detailStatus }}
                 </div>
             @endif
-        </div>
-    </section>
+    </x-profile.detail-hero>
 
 
     <x-modal wire:model="showFollowersModal" maxWidth="3xl">
