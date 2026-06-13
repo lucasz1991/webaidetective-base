@@ -63,6 +63,12 @@ class InstagramScraper
         }
 
         $nodeScript = $this->resolveNodeScriptForOperationMode($operationMode);
+        // Override: use dedicated suggestion entrypoints that emit JSON
+        if ($operationMode === 'suggestions') {
+            $nodeScript = base_path('resources/node/scraper/scrape-instagram-suggestions-basic.cjs');
+        } elseif ($operationMode === 'suggestion-connections') {
+            $nodeScript = base_path('resources/node/scraper/scrape-instagram-suggestions-deepsearch.cjs');
+        }
 
         if (! File::exists($nodeScript)) {
             throw new \RuntimeException('Node-Skript fuer Instagram-'.$operationMode.' nicht gefunden.');
