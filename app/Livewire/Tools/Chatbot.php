@@ -91,6 +91,26 @@ class Chatbot extends Component
         $this->sendMessage();
     }
 
+    public function sendChatOption(int $messageIndex, int $optionIndex): void
+    {
+        $message = $this->chatHistory[$messageIndex] ?? null;
+        $option = is_array($message) ? data_get($message, "options.{$optionIndex}") : null;
+
+        if (
+            ! is_array($message)
+            || ($message['role'] ?? null) !== 'assistant'
+            || (array_key_exists('selected_option_index', $message) && $message['selected_option_index'] !== null)
+            || ! is_array($option)
+            || blank($option['prompt'] ?? null)
+        ) {
+            return;
+        }
+
+        $this->chatHistory[$messageIndex]['selected_option_index'] = $optionIndex;
+        Session::put(self::DISPLAY_HISTORY_KEY, $this->chatHistory);
+        $this->sendMessage((string) $option['prompt']);
+    }
+
     public function sendMessage(?string $clientMessage = null): void
     {
         if ($clientMessage !== null) {
@@ -651,6 +671,7 @@ class Chatbot extends Component
             'profiles' => $profileReferences,
             'options_prompt' => $chatOptions['prompt'] ?? null,
             'options' => $chatOptions['options'] ?? [],
+            'selected_option_index' => null,
         ];
 
         $this->chatHistory = array_slice($this->chatHistory, -30);

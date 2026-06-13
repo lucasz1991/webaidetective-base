@@ -10,6 +10,7 @@
         pageContext: @js($pageContext),
         submitting: false,
         pendingLabel: '',
+        selectedChatOptions: {},
         voiceSupported: false,
         listening: false,
         recognition: null,
@@ -105,6 +106,44 @@
                 this.draft = '';
                 await $wire.sendMessage(prompt);
             } finally {
+                this.submitting = false;
+                this.pendingLabel = '';
+                this.$nextTick(() => this.resizeComposer());
+                this.scrollMessages();
+            }
+        },
+        selectedChatOptionIndex(item, messageIndex) {
+            if (Object.prototype.hasOwnProperty.call(this.selectedChatOptions, messageIndex)) {
+                return this.selectedChatOptions[messageIndex];
+            }
+
+            if (item?.selected_option_index === null || item?.selected_option_index === undefined) {
+                return null;
+            }
+
+            const storedIndex = Number(item?.selected_option_index);
+
+            return Number.isInteger(storedIndex) && storedIndex >= 0 ? storedIndex : null;
+        },
+        async chooseChatOption(item, messageIndex, option, optionIndex) {
+            if (this.busy() || this.selectedChatOptionIndex(item, messageIndex) !== null) return;
+
+            this.selectedChatOptions = {
+                ...this.selectedChatOptions,
+                [messageIndex]: optionIndex,
+            };
+            this.submitting = true;
+            this.pendingLabel = option.prompt;
+            this.scrollMessages();
+
+            try {
+                await this.syncContext();
+                this.draft = '';
+                await $wire.sendChatOption(messageIndex, optionIndex);
+            } finally {
+                const remainingSelections = { ...this.selectedChatOptions };
+                delete remainingSelections[messageIndex];
+                this.selectedChatOptions = remainingSelections;
                 this.submitting = false;
                 this.pendingLabel = '';
                 this.$nextTick(() => this.resizeComposer());
@@ -526,7 +565,7 @@
                         <button
                             type="button"
                             wire:click="clearChat"
-                            x-on:click="stopSpeaking()"
+                            x-on:click="stopSpeaking(); selectedChatOptions = {}"
                             class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/25 bg-white/10 text-white transition hover:bg-white/20"
                             title="Chat leeren"
                         >
@@ -728,13 +767,25 @@
                                         <template x-for="(option, optionIndex) in (item.options || [])" :key="'option-' + index + '-' + optionIndex">
                                             <button
                                                 type="button"
-                                                x-on:click="quick(option.prompt)"
-                                                x-bind:disabled="busy()"
-                                                class="group flex w-full items-center gap-3 rounded-xl border border-cyan-200 bg-gradient-to-r from-cyan-50 to-emerald-50/70 px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-cyan-400 hover:shadow-sm disabled:cursor-wait disabled:opacity-50"
+                                                x-show="selectedChatOptionIndex(item, index) === null || selectedChatOptionIndex(item, index) === optionIndex"
+                                                x-on:click="chooseChatOption(item, index, option, optionIndex)"
+                                                x-bind:disabled="busy() || selectedChatOptionIndex(item, index) !== null"
+                                                x-bind:class="selectedChatOptionIndex(item, index) === optionIndex
+                                                    ? 'cursor-default border-emerald-500 bg-emerald-100 shadow-sm'
+                                                    : 'border-cyan-200 bg-gradient-to-r from-cyan-50 to-emerald-50/70 hover:-translate-y-0.5 hover:border-cyan-400 hover:shadow-sm disabled:cursor-wait disabled:opacity-50'"
+                                                class="group flex w-full items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition"
                                             >
-                                                <span class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white text-cyan-700 shadow-sm ring-1 ring-cyan-100 transition group-hover:bg-cyan-600 group-hover:text-white">
-                                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                <span
+                                                    class="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm ring-1 transition"
+                                                    x-bind:class="selectedChatOptionIndex(item, index) === optionIndex
+                                                        ? 'text-emerald-700 ring-emerald-200'
+                                                        : 'text-cyan-700 ring-cyan-100 group-hover:bg-cyan-600 group-hover:text-white'"
+                                                >
+                                                    <svg x-show="selectedChatOptionIndex(item, index) !== optionIndex" class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                                         <path d="m9 6 6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                                    </svg>
+                                                    <svg x-show="selectedChatOptionIndex(item, index) === optionIndex" class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                        <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
                                                     </svg>
                                                 </span>
                                                 <span class="min-w-0 flex-1">

@@ -92,4 +92,45 @@ class InvestigationAssistantProfileScanSelectionTest extends TestCase
         $this->assertStringContainsString('group-hover/profile:opacity-100', $view);
         $this->assertStringNotContainsString('x-on:click="navigateTo(profile.url)"', $view);
     }
+
+    public function test_chat_option_can_only_be_selected_once(): void
+    {
+        $component = new class extends Chatbot
+        {
+            public ?string $sentPrompt = null;
+
+            public function sendMessage(?string $clientMessage = null): void
+            {
+                $this->sentPrompt = $clientMessage;
+            }
+        };
+        $component->chatHistory = [[
+            'role' => 'assistant',
+            'options' => [
+                ['prompt' => 'Option eins'],
+                ['prompt' => 'Option zwei'],
+            ],
+            'selected_option_index' => null,
+        ]];
+
+        $component->sendChatOption(0, 1);
+
+        $this->assertSame(1, $component->chatHistory[0]['selected_option_index']);
+        $this->assertSame('Option zwei', $component->sentPrompt);
+
+        $component->sendChatOption(0, 0);
+
+        $this->assertSame(1, $component->chatHistory[0]['selected_option_index']);
+        $this->assertSame('Option zwei', $component->sentPrompt);
+    }
+
+    public function test_selected_chat_option_is_highlighted_and_other_options_are_hidden(): void
+    {
+        $view = file_get_contents(resource_path('views/livewire/tools/chatbot.blade.php'));
+
+        $this->assertStringContainsString('chooseChatOption(item, index, option, optionIndex)', $view);
+        $this->assertStringContainsString('selectedChatOptionIndex(item, index) === optionIndex', $view);
+        $this->assertStringContainsString('border-emerald-500 bg-emerald-100', $view);
+        $this->assertStringContainsString('busy() || selectedChatOptionIndex(item, index) !== null', $view);
+    }
 }
