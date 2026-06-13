@@ -98,6 +98,21 @@ class NetworkMapGraphLimitsTest extends TestCase
         ));
     }
 
+    public function test_suggestion_connections_are_not_emitted_as_confirmed_list_edges(): void
+    {
+        $edge = $this->invokePrivate(
+            new NetworkMap,
+            'suggestionConnectionEdge',
+            [17, 'profile-source', 'person-1', '@source', '@source enthaelt @focus als Vorschlag.', false],
+        );
+
+        $this->assertSame('inferred', $edge['type']);
+        $this->assertSame('Vorschlag-Verbindung', $edge['label']);
+        $this->assertStringContainsString('suggestion_connection', $edge['id']);
+        $this->assertFalse($edge['ownUserEvidence']);
+        $this->assertTrue($edge['otherUserEvidence']);
+    }
+
     private function graphWithProfiles(int $profileCount): array
     {
         $nodes = [

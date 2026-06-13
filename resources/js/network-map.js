@@ -2,7 +2,7 @@ const instances = new WeakMap();
 const activeRoots = new Set();
 const DEFAULT_LAYOUT_MODE = 'clusters';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
-const LAYOUT_STORAGE_PREFIX = 'network-map-render:v6';
+const LAYOUT_STORAGE_PREFIX = 'network-map-render:v7';
 let cytoscapeLoader;
 
 function loadCytoscape() {
@@ -304,12 +304,12 @@ function edgeEvidenceKind(edge) {
     const id = String(edge.id || '').toLowerCase();
     const label = String(edge.label || '').toLowerCase();
 
-    if (type === 'tracked-list' || type === 'tracked-profile-rel' || type === 'public-profile') {
-        return 'actual';
+    if (id.includes('suggestion_connection') || label.includes('vorschlag')) {
+        return 'suggestion';
     }
 
-    if (type === 'inferred' && (id.includes('suggestion_connection') || label.includes('vorschlag'))) {
-        return 'suggestion';
+    if (type === 'tracked-list' || type === 'tracked-profile-rel' || type === 'public-profile') {
+        return 'actual';
     }
 
     if (type === 'inferred') {

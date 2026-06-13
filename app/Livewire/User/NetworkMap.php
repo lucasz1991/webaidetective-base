@@ -145,7 +145,7 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 9;
+        $data['graph_version'] = 10;
         $data['graph_node_limit'] = self::MAX_GRAPH_NODES;
         $data['contact_image_limit'] = self::MAX_CONTACT_IMAGES;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
@@ -1464,9 +1464,12 @@ class NetworkMap extends Component
 
         foreach ($suggestionConnections as $connection) {
             $sourceUsername = $this->normalizeUsername($connection->source_public_username);
-            $sourceProfile = $targetUsernames->contains($sourceUsername)
-                ? null
-                : $fallbackSourceProfiles->get($sourceUsername);
+
+            if ($sourceUsername !== '' && $targetUsernames->contains($sourceUsername)) {
+                continue;
+            }
+
+            $sourceProfile = $fallbackSourceProfiles->get($sourceUsername);
             $sourceProfile ??= $connection->trackedPerson?->currentInstagramProfile
                 ?: $fallbackSourceProfiles->get($this->normalizeUsername($connection->trackedPerson?->instagram_username));
 
@@ -1491,25 +1494,44 @@ class NetworkMap extends Component
             }
 
             $ownEvidence = (int) $connection->user_id === (int) Auth::id();
-            $this->mergeTrackedRelationshipEdge(
-                $edges,
+            $edge = $this->suggestionConnectionEdge(
+                (int) $connection->id,
                 $sourceId,
                 $primaryId,
-                'Vorschlag-Verbindung',
+                $this->displayUsernameForInstagramProfile($sourceProfile),
                 sprintf(
                     '%s hat %s in gespeicherten Instagram-Vorschlaegen enthalten.',
                     $this->displayUsernameForInstagramProfile($sourceProfile),
                     $this->displayUsernameForPerson($primaryPerson),
                 ),
-                [
-                    'systemWideEvidence' => true,
-                    'ownUserEvidence' => $ownEvidence,
-                    'otherUserEvidence' => ! $ownEvidence,
-                    'systemEvidenceScanCount' => 1,
-                    'systemEvidenceUserCount' => 1,
-                ],
+                $ownEvidence,
             );
+            $edges[$edge['id']] = $edge;
         }
+    }
+
+    private function suggestionConnectionEdge(
+        int $connectionId,
+        string $sourceId,
+        string $targetId,
+        string $sourceHandle,
+        string $detail,
+        bool $ownEvidence,
+    ): array {
+        return [
+            'id' => 'inferred-suggestion_connection-'.$connectionId.'-'.$sourceId.'-'.$targetId,
+            'from' => $sourceId,
+            'to' => $targetId,
+            'type' => 'inferred',
+            'label' => 'Vorschlag-Verbindung',
+            'sourceHandle' => $sourceHandle,
+            'evidence' => [$detail],
+            'systemWideEvidence' => true,
+            'ownUserEvidence' => $ownEvidence,
+            'otherUserEvidence' => ! $ownEvidence,
+            'systemEvidenceScanCount' => 1,
+            'systemEvidenceUserCount' => 1,
+        ];
     }
 
     private function focusedObservedTargetUsernames(TrackedPerson $primaryPerson): Collection
