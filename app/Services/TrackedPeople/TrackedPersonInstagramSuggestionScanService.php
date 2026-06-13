@@ -992,7 +992,7 @@ class TrackedPersonInstagramSuggestionScanService
             $sourceLists[] = 'public_profile_following';
         }
 
-        return array_values(array_unique($sourceLists ?: ['profile_suggestions'])));
+        return array_values(array_unique($sourceLists ?: ['profile_suggestions']));
     }
 
     private function mergeSuggestionConnections(array ...$connectionGroups): array
