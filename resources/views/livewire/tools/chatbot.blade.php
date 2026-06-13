@@ -109,17 +109,6 @@
                 selected_profile_open: Boolean(detail.open),
             });
         },
-        contextLabel() {
-            if (this.pageContext.selected_profile_name || this.pageContext.selected_profile_username) {
-                return `Kontext: ${this.pageContext.selected_profile_name || '@' + this.pageContext.selected_profile_username}`;
-            }
-
-            if (this.pageContext.network_map_open) {
-                return this.pageContext.network_map_fullscreen ? 'Kontext: Networkmap im Vollbild' : 'Kontext: Networkmap';
-            }
-
-            return `Kontext: ${this.pageContext.page_title || this.pageContext.path || 'aktuelle Seite'}`;
-        },
         hasUploads() {
             return (Array.isArray(this.attachedFiles) && this.attachedFiles.length > 0)
                 || Boolean(this.$refs.fileInput?.files?.length);
@@ -268,6 +257,7 @@
     x-on:assistant-network-context.window="updateNetworkContext($event)"
     x-on:assistant-context-profile-preview.window="updateProfilePreview($event)"
     x-on:assistant-ui-action.window="handleUiAction($event)"
+    x-on:keydown.escape.window="if (showChat) { stopSpeaking(); showChat = false }"
     x-on:livewire:navigated.window="syncContext({
         selected_node_id: null,
         selected_node_type: null,
@@ -296,6 +286,20 @@
             </svg>
         </button>
 
+        <div
+            x-show="showChat"
+            x-cloak
+            x-transition:enter="transition-opacity ease-out duration-200"
+            x-transition:enter-start="opacity-0"
+            x-transition:enter-end="opacity-100"
+            x-transition:leave="transition-opacity ease-in duration-150"
+            x-transition:leave-start="opacity-100"
+            x-transition:leave-end="opacity-0"
+            x-on:click="stopSpeaking(); showChat = false"
+            class="fixed inset-0 z-[60] bg-slate-950/55 backdrop-blur-[2px]"
+            aria-hidden="true"
+        ></div>
+
         <aside
             x-show="showChat"
             x-cloak
@@ -305,16 +309,13 @@
             x-transition:leave="transition ease-in duration-150"
             x-transition:leave-start="translate-y-0 scale-100 opacity-100"
             x-transition:leave-end="translate-y-3 scale-95 opacity-0"
-            class="fixed bottom-4 right-4 z-50 flex h-[min(680px,calc(100vh-2rem))] w-[min(430px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-950/25"
+            class="fixed bottom-4 right-4 z-[70] flex h-[min(680px,calc(100vh-2rem))] w-[min(430px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-950/25"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Investigation Copilot"
         >
-            <header class="border-b border-slate-200 bg-slate-950 px-4 py-3 text-white">
-                <div class="flex items-start justify-between gap-4">
-                    <div class="min-w-0">
-                        <p class="text-xs font-black uppercase tracking-[.18em] text-emerald-300">AI Tool</p>
-                        <h2 class="mt-0.5 truncate text-lg font-black">{{ $assistantName ?: 'Investigation Copilot' }}</h2>
-                        <p class="mt-1 truncate text-[11px] text-slate-300" x-text="contextLabel()"></p>
-                    </div>
-                    <div class="flex items-center gap-2">
+            <header class="border-b border-white/10 bg-slate-950 px-3 py-2 text-white">
+                <div class="flex items-center justify-end gap-1.5">
                         <x-ui.dropdown.anchor-dropdown
                             align="right"
                             width="auto"
@@ -326,7 +327,7 @@
                                 <button
                                     type="button"
                                     x-bind:aria-expanded="open"
-                                    class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
+                                    class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
                                     title="Sprach-Einstellungen"
                                 >
                                     <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -394,7 +395,7 @@
                             type="button"
                             wire:click="clearChat"
                             x-on:click="stopSpeaking()"
-                            class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
+                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
                             title="Chat leeren"
                         >
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -404,14 +405,13 @@
                         <button
                             type="button"
                             x-on:click="stopSpeaking(); showChat = false"
-                            class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
+                            class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-white/15 text-slate-200 transition hover:bg-white/10"
                             title="Schließen"
                         >
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                 <path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                             </svg>
                         </button>
-                    </div>
                 </div>
             </header>
 
