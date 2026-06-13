@@ -140,7 +140,7 @@ class Chatbot extends Component
 
     private function runAssistantConversation(string $userMessage): string
     {
-        $apiKey = Setting::getDecryptedValue('ai_assistant', 'api_key') ?? '';
+        $apiKey = trim((string) (Setting::getValue('ai_assistant', 'api_key') ?? ''));
 
         if (! $this->assistantIsConfigured($apiKey)) {
             return 'Der AI-Assistent ist noch nicht vollstaendig konfiguriert. Bitte API-URL, API-Key und Modell im Adminbereich hinterlegen.';
