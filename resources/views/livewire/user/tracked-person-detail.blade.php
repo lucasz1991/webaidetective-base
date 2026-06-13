@@ -69,92 +69,92 @@
         </div>
     </div>
 
-    <div class="flex items-center justify-between gap-3 px-4 sm:px-0">
-        <a
-            href="{{ route('dashboard') }}"
-            wire:navigate
-            class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-4 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50"
-        >
-            Zurueck
-        </a>
-        <div class="flex items-center gap-3">
-            <x-profile.profile-monitoring-dropdown
-                :tracked-person="$trackedPerson"
-                :on-detail-page="true"
-            />
-            <div x-data="{ menuOpen: false }" class="relative">
-                <button
-                    type="button"
-                    @click="menuOpen = ! menuOpen"
-                    class="inline-flex h-9 items-center justify-center rounded-3xl border border-slate-300 bg-white px-4 text-xs font-semibold text-slate-950 shadow-sm hover:bg-slate-50"
+    <section id="profil" class="scroll-mt-4 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+        <div class="bg-gradient-to-r from-rose-50 via-slate-50 to-slate-100 px-4 py-4 text-slate-950 sm:px-5">
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <a
+                    href="{{ route('dashboard') }}"
+                    wire:navigate
+                    class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/80 bg-white/85 px-4 text-xs font-semibold text-slate-950 shadow-sm backdrop-blur hover:bg-white"
                 >
-                    Aktionen
-                    <span class="ml-2 text-slate-500">▾</span>
-                </button>
-                <div
-                    x-show="menuOpen"
-                    x-cloak
-                    @click.outside="menuOpen = false"
-                    class="absolute right-0 top-full z-20 mt-2 w-64 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl"
-                >
-                    <div class="flex flex-col p-2">
+                    Zurueck
+                </a>
+                <div class="flex items-center gap-3">
+                    <x-profile.profile-monitoring-dropdown
+                        :tracked-person="$trackedPerson"
+                        :on-detail-page="true"
+                    />
+                    <div x-data="{ menuOpen: false }" class="relative">
                         <button
                             type="button"
-                            @click="menuOpen = false"
-                            wire:click="confirmTrackedPersonDeletion"
-                            class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-rose-700 hover:bg-rose-50"
+                            @click="menuOpen = ! menuOpen"
+                            class="inline-flex h-9 items-center justify-center rounded-3xl border border-white/80 bg-white/85 px-4 text-xs font-semibold text-slate-950 shadow-sm backdrop-blur hover:bg-white"
                         >
-                            Person löschen
+                            Aktionen
+                            <span class="ml-2 text-slate-500">▾</span>
                         </button>
-                        <button
-                            type="button"
-                            @click="menuOpen = false"
-                            wire:click="analyzeInstagramMini"
-                            wire:loading.attr="disabled"
-                            wire:target="analyzeInstagramMini"
-                            @disabled(! $trackedPerson->instagram_username)
-                            class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        <div
+                            x-show="menuOpen"
+                            x-cloak
+                            @click.outside="menuOpen = false"
+                            class="absolute right-0 top-full z-20 mt-2 w-64 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl"
                         >
-                            Mini-Scan
-                        </button>
-                        <button
-                            type="button"
-                            @click="menuOpen = false"
-                            wire:click="$set('showSettingsModal', true)"
-                            class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
-                        >
-                            Einstellungen
-                        </button>
-                        <button
-                            type="button"
-                            @click="menuOpen = false"
-                            wire:click="scanInstagramSuggestions"
-                            wire:loading.attr="disabled"
-                            wire:target="scanInstagramSuggestions"
-                            @disabled(! $trackedPerson->instagram_username)
-                            class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            Vorschlaege scannen
-                        </button>
-                        <button
-                            type="button"
-                            @click="menuOpen = false"
-                            wire:click="scanInstagramSuggestionDeepSearch"
-                            wire:loading.attr="disabled"
-                            wire:target="scanInstagramSuggestionDeepSearch"
-                            @disabled(! $trackedPerson->instagram_username)
-                            class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                            Vorschlaege DeepSearch
-                        </button>
+                            <div class="flex flex-col p-2">
+                                <button
+                                    type="button"
+                                    @click="menuOpen = false"
+                                    wire:click="confirmTrackedPersonDeletion"
+                                    class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-rose-700 hover:bg-rose-50"
+                                >
+                                    Person löschen
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="menuOpen = false"
+                                    wire:click="analyzeInstagramMini"
+                                    wire:loading.attr="disabled"
+                                    wire:target="analyzeInstagramMini"
+                                    @disabled(! $trackedPerson->instagram_username)
+                                    class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Mini-Scan
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="menuOpen = false"
+                                    wire:click="$set('showSettingsModal', true)"
+                                    class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                                >
+                                    Einstellungen
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="menuOpen = false"
+                                    wire:click="scanInstagramSuggestions"
+                                    wire:loading.attr="disabled"
+                                    wire:target="scanInstagramSuggestions"
+                                    @disabled(! $trackedPerson->instagram_username)
+                                    class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Vorschlaege scannen
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="menuOpen = false"
+                                    wire:click="scanInstagramSuggestionDeepSearch"
+                                    wire:loading.attr="disabled"
+                                    wire:target="scanInstagramSuggestionDeepSearch"
+                                    @disabled(! $trackedPerson->instagram_username)
+                                    class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Vorschlaege DeepSearch
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <section id="profil" class="scroll-mt-4 overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
-        <div class="bg-gradient-to-r from-rose-50 via-slate-50 to-slate-100 px-4 py-4 text-slate-950 sm:px-5">
             <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <div class="flex items-center gap-4">
                     <div class="relative h-20 w-20 shrink-0">
