@@ -2,8 +2,11 @@
 
 namespace App\Livewire\User;
 
+use App\Models\CreditTransaction;
 use App\Models\InstagramProfile;
+use App\Models\Setting;
 use App\Models\TrackedPerson;
+use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\InstagramProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPostScanService;
@@ -36,6 +39,14 @@ class InstagramProfileDetail extends Component
         $profile = $this->resolveProfile();
         $userId = (int) Auth::id();
         $profile->load([
+            'profileScans' => fn ($query) => $query
+                ->where('user_id', $userId)
+                ->latest('scanned_at')
+                ->limit(10),
+            'suggestionScans' => fn ($query) => $query
+                ->where('user_id', $userId)
+                ->latest('analyzed_at')
+                ->limit(10),
             'listScans' => fn ($query) => $query
                 ->where('user_id', $userId)
                 ->latest('scanned_at')
@@ -77,14 +88,26 @@ class InstagramProfileDetail extends Component
             ->first();
 
         $trackedPerson = $this->findTrackedPerson($profile);
-        $latestSuggestionScan = $trackedPerson?->instagramSuggestionScans()
+        $latestSuggestionScan = $profile->suggestionScans->first();
+        $latestTrackedSuggestionScan = $trackedPerson?->instagramSuggestionScans()
             ->latest('analyzed_at')
             ->first();
+
+        if (
+            $latestTrackedSuggestionScan?->analyzed_at
+            && (
+                ! $latestSuggestionScan?->analyzed_at
+                || $latestTrackedSuggestionScan->analyzed_at->isAfter($latestSuggestionScan->analyzed_at)
+            )
+        ) {
+            $latestSuggestionScan = $latestTrackedSuggestionScan;
+        }
         $latestPostScan = $profile->postScans->first();
+        $latestProfileScan = $profile->profileScans->first();
         $lastScanStatus = [
-            'level' => $profile->last_status_level,
-            'message' => $profile->last_status_message,
-            'scannedAt' => $profile->last_scanned_at,
+            'level' => $latestProfileScan?->status_level ?: $profile->last_status_level,
+            'message' => $latestProfileScan?->status_message ?: $profile->last_status_message,
+            'scannedAt' => $latestProfileScan?->scanned_at ?: $profile->last_scanned_at,
             'type' => 'Instagram-Scan',
         ];
 
@@ -124,6 +147,15 @@ class InstagramProfileDetail extends Component
             'latestFollowersScan' => $latestFollowersScan,
             'latestFollowingScan' => $latestFollowingScan,
             'lastScanStatus' => $lastScanStatus,
+            'scanCostSummary' => $this->scanCostSummary(),
+            'creditWallet' => Auth::user()->creditWallet()->first(),
+            'recentScanTransactions' => CreditTransaction::query()
+                ->where('user_id', $userId)
+                ->where('type', CreditTransaction::TYPE_SCAN)
+                ->where('description', 'like', '%@'.$profile->username.'%')
+                ->latest()
+                ->limit(10)
+                ->get(),
         ])->layout('layouts.app');
     }
 
@@ -179,33 +211,36 @@ class InstagramProfileDetail extends Component
         $profile = $this->resolveProfile();
         $trackedPerson = $this->findTrackedPerson($profile);
         $scanLabel = $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan';
-
-        if (! $trackedPerson) {
-            $this->setStatus(
-                $scanLabel.' ist zielpersonenbezogen. Lege das Profil zuerst ausdruecklich als beobachtetes Profil an.',
-                'partial',
-            );
-
-            return;
-        }
+        $usedCreditsBefore = $this->usedCredits();
 
         try {
-            $workflow = app(TrackedPersonInstagramWorkflowService::class);
-            $scan = $deepSearch
-                ? $workflow->runSuggestionDeepSearch($trackedPerson)
-                : $workflow->runSuggestionScan($trackedPerson);
+            if ($trackedPerson) {
+                $workflow = app(TrackedPersonInstagramWorkflowService::class);
+                $scan = $deepSearch
+                    ? $workflow->runSuggestionDeepSearch($trackedPerson)
+                    : $workflow->runSuggestionScan($trackedPerson);
+            } else {
+                $service = app(TrackedPersonInstagramSuggestionScanService::class);
+                $scan = $deepSearch
+                    ? $service->scanProfileDeepSearch($profile, (int) Auth::id())
+                    : $service->scanProfile($profile, (int) Auth::id());
+            }
             $this->setStatus(
-                $deepSearch
+                ($deepSearch
                     ? 'Vorschlaege DeepSearch abgeschlossen: '
                         .number_format($scan->suggestions_checked_count).' von '
                         .number_format($scan->suggestions_observed_count).' Vorschlaegen geprueft, '
                         .number_format($scan->suggestion_matches_count).' Verbindungen gefunden.'
                     : 'Vorschlaege-Scan abgeschlossen: '
-                        .number_format($scan->suggestions_observed_count).' Vorschlaege gefunden.',
+                        .number_format($scan->suggestions_observed_count).' Vorschlaege gefunden.')
+                    .$this->costSuffix($usedCreditsBefore),
                 $scan->status_level === 'success' ? 'success' : 'partial',
             );
         } catch (\Throwable $exception) {
-            $this->setStatus($scanLabel.' fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setStatus(
+                $scanLabel.' fehlgeschlagen: '.$exception->getMessage().$this->costSuffix($usedCreditsBefore),
+                'error',
+            );
         }
     }
 
@@ -214,6 +249,7 @@ class InstagramProfileDetail extends Component
         @set_time_limit(0);
 
         $profile = $this->resolveProfile();
+        $usedCreditsBefore = $this->usedCredits();
 
         try {
             $scan = app(TrackedPersonInstagramPostScanService::class)
@@ -222,11 +258,15 @@ class InstagramProfileDetail extends Component
                 'Beitragsscan abgeschlossen: '
                     .number_format($scan->observed_count).' geprueft, '
                     .number_format($scan->new_count).' neu und '
-                    .number_format($scan->updated_count).' aktualisiert.',
+                    .number_format($scan->updated_count).' aktualisiert.'
+                    .$this->costSuffix($usedCreditsBefore),
                 $scan->status_level === 'success' ? 'success' : 'partial',
             );
         } catch (\Throwable $exception) {
-            $this->setStatus('Beitragsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setStatus(
+                'Beitragsscan fehlgeschlagen: '.$exception->getMessage().$this->costSuffix($usedCreditsBefore),
+                'error',
+            );
         }
     }
 
@@ -235,14 +275,20 @@ class InstagramProfileDetail extends Component
         @set_time_limit(0);
 
         $profile = $this->resolveProfile();
+        $usedCreditsBefore = $this->usedCredits();
 
         try {
             $result = app(InstagramProfileScanService::class)
                 ->scan($profile, (int) Auth::id(), $fullScan);
-            $this->setStatus($result['statusMessage'], $result['statusLevel']);
+            $this->setStatus(
+                $result['statusMessage'].$this->costSuffix($usedCreditsBefore),
+                $result['statusLevel'],
+            );
         } catch (\Throwable $exception) {
             $this->setStatus(
-                ($fullScan ? 'Vollanalyse' : 'Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
+                ($fullScan ? 'Vollanalyse' : 'Mini-Scan').' fehlgeschlagen: '
+                    .$exception->getMessage()
+                    .$this->costSuffix($usedCreditsBefore),
                 'error',
             );
         }
@@ -254,17 +300,23 @@ class InstagramProfileDetail extends Component
 
         $profile = $this->resolveProfile();
         $label = $relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste';
+        $usedCreditsBefore = $this->usedCredits();
 
         try {
             $scan = app(TrackedPersonInstagramProfileListScanService::class)
                 ->scan(null, $profile, null, [$relationship], (int) Auth::id())
                 ->first();
             $this->setStatus(
-                $label.' gescannt: '.number_format((int) ($scan?->active_count ?? 0)).' aktive Eintraege.',
+                $label.' gescannt: '.number_format((int) ($scan?->active_count ?? 0))
+                    .' aktive Eintraege.'
+                    .$this->costSuffix($usedCreditsBefore),
                 $scan?->status_level === 'success' ? 'success' : 'partial',
             );
         } catch (\Throwable $exception) {
-            $this->setStatus($label.'-Scan fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setStatus(
+                $label.'-Scan fehlgeschlagen: '.$exception->getMessage().$this->costSuffix($usedCreditsBefore),
+                'error',
+            );
         }
     }
 
@@ -332,6 +384,8 @@ class InstagramProfileDetail extends Component
                     ->whereHas('trackedPersonLinks', fn ($links) => $links->where('user_id', $userId))
                     ->orWhereHas('publicProfileLinks', fn ($links) => $links->where('user_id', $userId))
                     ->orWhereHas('listScans', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas('profileScans', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas('suggestionScans', fn ($scans) => $scans->where('user_id', $userId))
                     ->orWhereHas('sourceRelationships.scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
                     ->orWhereHas('relatedRelationships.scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
                     ->orWhereHas(
@@ -344,5 +398,37 @@ class InstagramProfileDetail extends Component
                     );
             })
             ->firstOrFail();
+    }
+
+    private function usedCredits(): int
+    {
+        return (int) (Auth::user()->creditWallet()->value('used_credits') ?? 0);
+    }
+
+    private function costSuffix(int $usedCreditsBefore): string
+    {
+        $chargedCredits = max(0, $this->usedCredits() - $usedCreditsBefore);
+
+        return ' Kosten: '.number_format($chargedCredits, 0, ',', '.').' Credits.';
+    }
+
+    private function scanCostSummary(): array
+    {
+        $settings = Setting::getValue('billing', 'credit_costs');
+        $settings = is_array($settings) ? $settings : [];
+        $base = max(0, (int) ($settings['scan_base_credit'] ?? 1));
+        $profile = max(0, (int) ($settings['profile_scan'] ?? 1));
+        $post = max(0, (int) ($settings['post_scan'] ?? 3));
+        $minimum = max(0, (int) ($settings['scan_minimum_credits'] ?? 1));
+        $perMinute = max(0, (int) ($settings['scan_credit_per_minute'] ?? 2));
+
+        return [
+            'base' => $base,
+            'per_minute' => $perMinute,
+            'max_minutes' => max(1, (int) ($settings['scan_max_billable_minutes'] ?? 30)),
+            'profile' => max($minimum, $base + $profile),
+            'post' => max($minimum, $base + $profile + $post),
+            'media_download' => max(0, (int) ($settings['media_download_per_file'] ?? 5)),
+        ];
     }
 }

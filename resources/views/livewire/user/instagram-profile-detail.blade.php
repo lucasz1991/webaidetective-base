@@ -88,7 +88,9 @@
                         class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50 disabled:opacity-50"
                     >
                         Mini-Scan
-                        <span class="mt-0.5 block text-xs font-normal text-slate-500">Profilwerte schnell aktualisieren</span>
+                        <span class="mt-0.5 block text-xs font-normal text-slate-500">
+                            Profilwerte aktualisieren · ab {{ number_format($scanCostSummary['profile'], 0, ',', '.') }} Credits
+                        </span>
                     </button>
                     <button
                         type="button"
@@ -99,42 +101,45 @@
                         class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-pink-700 hover:bg-pink-50 disabled:opacity-50"
                     >
                         Vollanalyse
-                        <span class="mt-0.5 block text-xs font-normal text-pink-500">Profil und passende Folge-Scans</span>
+                        <span class="mt-0.5 block text-xs font-normal text-pink-500">
+                            Ab {{ number_format($scanCostSummary['profile'], 0, ',', '.') }} Credits plus ausgefuehrte Folge-Scans
+                        </span>
                     </button>
 
-                    @if($visibility === 'public')
-                        <div class="my-1 border-t border-slate-100"></div>
-                        <button
-                            type="button"
-                            @click="scansOpen = false"
-                            wire:click="scanInstagramFollowersList"
-                            wire:loading.attr="disabled"
-                            wire:target="scanInstagramFollowersList"
-                            class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
-                        >
-                            Followerliste scannen
-                        </button>
-                        <button
-                            type="button"
-                            @click="scansOpen = false"
-                            wire:click="scanInstagramFollowingList"
-                            wire:loading.attr="disabled"
-                            wire:target="scanInstagramFollowingList"
-                            class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
-                        >
-                            Gefolgt-Liste scannen
-                        </button>
-                        <button
-                            type="button"
-                            @click="scansOpen = false"
-                            wire:click="scanInstagramPosts"
-                            wire:loading.attr="disabled"
-                            wire:target="scanInstagramPosts"
-                            class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
-                        >
-                            Beitraege scannen
-                        </button>
-                    @endif
+                    <div class="my-1 border-t border-slate-100"></div>
+                    <button
+                        type="button"
+                        @click="scansOpen = false"
+                        wire:click="scanInstagramFollowersList"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramFollowersList"
+                        class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                    >
+                        Followerliste scannen
+                        <span class="mt-0.5 block text-xs font-normal text-sky-500">Ab {{ number_format($scanCostSummary['profile'], 0, ',', '.') }} Credits</span>
+                    </button>
+                    <button
+                        type="button"
+                        @click="scansOpen = false"
+                        wire:click="scanInstagramFollowingList"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramFollowingList"
+                        class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                    >
+                        Gefolgt-Liste scannen
+                        <span class="mt-0.5 block text-xs font-normal text-sky-500">Ab {{ number_format($scanCostSummary['profile'], 0, ',', '.') }} Credits</span>
+                    </button>
+                    <button
+                        type="button"
+                        @click="scansOpen = false"
+                        wire:click="scanInstagramPosts"
+                        wire:loading.attr="disabled"
+                        wire:target="scanInstagramPosts"
+                        class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-violet-700 hover:bg-violet-50 disabled:opacity-50"
+                    >
+                        Beitraege scannen
+                        <span class="mt-0.5 block text-xs font-normal text-violet-500">Ab {{ number_format($scanCostSummary['post'], 0, ',', '.') }} Credits</span>
+                    </button>
                     <div class="my-1 border-t border-slate-100"></div>
                     <button
                         type="button"
@@ -145,7 +150,9 @@
                         class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:opacity-50"
                     >
                         Vorschlaege-Scan
-                        <span class="mt-0.5 block text-xs font-normal text-fuchsia-500">Direkte Profilvorschlaege erfassen</span>
+                        <span class="mt-0.5 block text-xs font-normal text-fuchsia-500">
+                            Direkte Vorschlaege · ab {{ number_format($scanCostSummary['profile'], 0, ',', '.') }} Credits
+                        </span>
                     </button>
                     <button
                         type="button"
@@ -156,7 +163,9 @@
                         class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-fuchsia-700 hover:bg-fuchsia-50 disabled:opacity-50"
                     >
                         Vorschlaege DeepSearch
-                        <span class="mt-0.5 block text-xs font-normal text-fuchsia-500">Vorschlaege der Vorschlaege und oeffentliche Listen pruefen</span>
+                        <span class="mt-0.5 block text-xs font-normal text-fuchsia-500">
+                            Vorschlaege und Listen · ab {{ number_format($scanCostSummary['profile'], 0, ',', '.') }} Credits
+                        </span>
                     </button>
                 </div>
             </div>
@@ -324,6 +333,9 @@
                     <span wire:loading.remove wire:target="analyzeInstagram">Vollanalyse</span>
                     <span wire:loading wire:target="analyzeInstagram">Laeuft...</span>
                 </button>
+                <p class="text-center text-[11px] font-semibold text-slate-500">
+                    Ab {{ number_format($scanCostSummary['profile'], 0, ',', '.') }} Credits plus Folge-Scans
+                </p>
                 @if($trackedPerson)
                     <a
                         href="{{ route('tracked-people.show', $trackedPerson->id) }}"
@@ -357,6 +369,66 @@
             </div>
         @endif
     </x-profile.detail-hero>
+
+    <section class="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+                <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Scan-Kosten</p>
+                <h2 class="mt-1 text-lg font-bold text-slate-950">Credits werden fuer jeden Lauf gespeichert</h2>
+                <p class="mt-1 text-sm text-slate-500">
+                    Basis {{ number_format($scanCostSummary['base'], 0, ',', '.') }} +
+                    {{ number_format($scanCostSummary['per_minute'], 0, ',', '.') }} Credits je angefangener Minute,
+                    maximal {{ number_format($scanCostSummary['max_minutes'], 0, ',', '.') }} Minuten.
+                    Downloads kosten zusaetzlich {{ number_format($scanCostSummary['media_download'], 0, ',', '.') }} Credits je Datei.
+                </p>
+            </div>
+            <div class="rounded-2xl bg-slate-950 px-4 py-3 text-white">
+                <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-300">Verfuegbar</div>
+                <div class="mt-1 text-xl font-bold">
+                    {{ number_format((int) (($creditWallet?->available_credits ?? 0) + ($creditWallet?->bonus_credits ?? 0)), 0, ',', '.') }}
+                </div>
+                <div class="text-xs text-slate-300">Credits</div>
+            </div>
+        </div>
+
+        <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <div class="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
+                <div class="text-xs font-semibold text-slate-500">Mini / Listen / Vorschlaege</div>
+                <div class="mt-1 font-bold text-slate-950">ab {{ number_format($scanCostSummary['profile'], 0, ',', '.') }} Credits</div>
+            </div>
+            <div class="rounded-2xl border border-violet-200 bg-violet-50 px-3 py-3">
+                <div class="text-xs font-semibold text-violet-600">Beitragsscan</div>
+                <div class="mt-1 font-bold text-violet-950">ab {{ number_format($scanCostSummary['post'], 0, ',', '.') }} Credits</div>
+            </div>
+            <div class="rounded-2xl border border-pink-200 bg-pink-50 px-3 py-3">
+                <div class="text-xs font-semibold text-pink-600">Vollanalyse</div>
+                <div class="mt-1 font-bold text-pink-950">Profil plus Folge-Scans</div>
+            </div>
+            <div class="rounded-2xl border border-slate-200 bg-white px-3 py-3">
+                <div class="text-xs font-semibold text-slate-500">Bisher verbraucht</div>
+                <div class="mt-1 font-bold text-slate-950">{{ number_format((int) ($creditWallet?->used_credits ?? 0), 0, ',', '.') }} Credits</div>
+            </div>
+        </div>
+
+        <div class="mt-5 border-t border-slate-200 pt-4">
+            <h3 class="text-sm font-bold text-slate-950">Letzte Kosten fuer {{ $profile->display_handle }}</h3>
+            <div class="mt-3 space-y-2">
+                @forelse($recentScanTransactions as $transaction)
+                    <div class="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 px-3 py-2 text-sm">
+                        <div class="min-w-0">
+                            <div class="truncate font-semibold text-slate-800">{{ $transaction->description }}</div>
+                            <div class="text-xs text-slate-500">{{ $transaction->created_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') }}</div>
+                        </div>
+                        <div class="shrink-0 font-bold text-rose-700">
+                            {{ number_format(abs((int) $transaction->amount), 0, ',', '.') }} Credits
+                        </div>
+                    </div>
+                @empty
+                    <p class="text-sm text-slate-500">Fuer dieses Profil wurden noch keine Scan-Kosten gebucht.</p>
+                @endforelse
+            </div>
+        </div>
+    </section>
 
     <div class="grid gap-5 xl:grid-cols-2">
         <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">

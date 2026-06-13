@@ -3,6 +3,8 @@
 namespace App\Services\TrackedPeople;
 
 use App\Models\InstagramProfile;
+use App\Models\InstagramProfileScan;
+use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
 use Illuminate\Support\Facades\Cache;
@@ -15,6 +17,7 @@ class InstagramProfileScanService
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly TrackedPersonInstagramProfileListScanService $listScanService,
         private readonly TrackedPersonInstagramPostScanService $postScanService,
+        private readonly ScanCreditService $scanCreditService,
     ) {}
 
     public function scan(
@@ -102,9 +105,26 @@ class InstagramProfileScanService
                 'last_status_message' => $statusMessage,
                 'last_scanned_at' => now('UTC'),
             ])->save();
+            $profileScan = InstagramProfileScan::create([
+                'instagram_profile_id' => $profile->id,
+                'user_id' => $userId,
+                'scan_mode' => $fullScan ? 'profile' : 'mini',
+                'status_level' => $statusLevel,
+                'status_message' => $statusMessage,
+                'raw_payload' => $payload,
+                'scanned_at' => now('UTC'),
+            ]);
+
+            $this->scanCreditService->charge(
+                $userId,
+                $profileScan,
+                $payload,
+                ($fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' @'.$username,
+            );
 
             return [
                 'profile' => $profile->fresh() ?: $profile,
+                'scan' => $profileScan,
                 'payload' => $payload,
                 'listScans' => $listScans,
                 'postScan' => $postScan,
