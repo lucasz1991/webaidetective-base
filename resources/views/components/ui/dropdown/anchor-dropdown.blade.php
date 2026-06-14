@@ -5,6 +5,7 @@
   'dropdownClasses'   => 'mx-4',
   'offset'            => 0,
   'overlay'           => false,
+  'overlayClasses'    => 'fixed inset-0 z-40 bg-black/40',
   'trap'              => false,
   'scrollOnOpen'      => false,
   'scrollOnTrigger'   => false,  
@@ -25,6 +26,7 @@
     scrollOnTrigger: @js((bool)$scrollOnTrigger),
     headerOffset: @js((int)$headerOffset),
     matchTriggerWidth: @js((bool)$matchTriggerWidth),
+    dropdownId: 'anchor-' + Math.random().toString(36).slice(2),
 
     setPanelWidth(){
       if (!this.matchTriggerWidth) return;
@@ -78,6 +80,7 @@
   x-cloak
   @keydown.escape.window="open=false"
   @close.window.stop="open=false"
+  @dropdown-open.window="if ($event.detail?.id !== dropdownId) open=false"
 >
 
 
@@ -87,7 +90,7 @@
     if (open) {
       $nextTick(() => {
         setPanelWidth();
-        $dispatch('dropdown-open');
+        $dispatch('dropdown-open', { id: dropdownId });
       });
     }
   "
@@ -97,7 +100,7 @@
 
   {{-- Overlay --}}
   @if($overlay)
-    <div x-show="open" x-transition.opacity class="fixed inset-0 z-40 bg-black/40" @click="open=false" style="display:none;"></div>
+    <div x-show="open" x-transition.opacity class="{{ $overlayClasses }}" @click="open=false" style="display:none;"></div>
   @endif
 
   {{-- Panel --}}

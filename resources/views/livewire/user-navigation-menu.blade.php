@@ -148,9 +148,18 @@
                              <!-- Inbox Buttons -->
                              <div class="flex items-center space-x-6 mr-2">
                                  @if (Auth::check() && $currentUrl !== url('/messages'))
-                                 <div class="relative" x-data="{ open: false, modalOpen: false, selectedMessage: null  }">
-                                     <!-- Button zum Öffnen des Popups -->
-                                     <button @click="open = !open" class="block">
+                                 <div x-data="{ modalOpen: false, selectedMessage: null }">
+                                     <x-ui.dropdown.anchor-dropdown
+                                         align="right"
+                                         width="auto"
+                                         :offset="8"
+                                         :overlay="true"
+                                         overlay-classes="fixed inset-0 z-40 bg-black/40 md:hidden"
+                                         content-classes="w-[min(24.5rem,calc(100vw-2rem))] divide-y divide-slate-200 rounded-xl bg-white text-[0.8125rem]/5 text-slate-900"
+                                         dropdown-classes="max-md:z-[60]"
+                                     >
+                                         <x-slot name="trigger">
+                                     <button type="button" class="block rounded-full p-1 transition hover:bg-slate-100" aria-label="Nachrichten öffnen">
                                          <span class="relative">
                                              <svg xmlns="http://www.w3.org/2000/svg" width="30px" class="fill-[#333] hover:fill-[#077bff] stroke-2 inline" viewBox="0 0 512 512" stroke-width="106">
                                                  <g>
@@ -180,23 +189,20 @@
                                              @endif
                                          </span>
                                      </button>
-                                     <!-- Popup -->
-                                     <div 
-                                         x-show="open" 
-                                         x-cloak
-                                         class="absolute md:p-4 right-0 md:mt-2 md:w-[24.5rem] max-md:fixed max-md:inset-0 max-md:w-full max-md:top-0 max-md:flex max-md:items-center max-md:justify-center max-md:bg-black max-md:bg-opacity-50 max-md:z-50"
-                                         x-transition>
-                                        <div x-on:click.outside="open = false" class="relative max-w-full max-md:pt-10 divide-y divide-slate-400/20 rounded-lg bg-white text-[0.8125rem]/5 text-slate-900 ring-1 shadow-xl shadow-black/5 ring-slate-700/10 z-50">
-                                                     <button type="button" @click="open = false; selectedMessage = null;" class="md:hidden absolute top-2 right-2 text-gray-400 hover:text-gray-600">
+                                         </x-slot>
+                                         <x-slot name="content">
+                                        <div class="relative max-w-full">
+                                                     <button type="button" @click="open = false; selectedMessage = null;" class="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-slate-100 hover:text-gray-600" aria-label="Nachrichten schließen">
                                                          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                                                          </svg>
                                                      </button>
                                              <!-- Nachrichtenliste -->
                                              @forelse($receivedMessages as $message)
-                                             <div 
-                                                 @click="modalOpen = true; open = false; selectedMessage = { subject: '{{ $message->subject }}', body: '{!! addslashes($message->message) !!}', createdAt: '{{ $message->created_at->diffForHumans() }}' }; $wire.setMessageStatus({{ $message->id }}); " 
-                                                 class="flex items-center p-4 hover:bg-slate-50 cursor-pointer @if($message->status == 1) bg-blue-200 @endif">
+                                             <button
+                                                 type="button"
+                                                 @click="modalOpen = true; open = false; selectedMessage = @js(['subject' => $message->subject, 'body' => $message->message, 'createdAt' => $message->created_at->diffForHumans()]); $wire.setMessageStatus({{ $message->id }})"
+                                                 class="flex w-full items-center p-4 text-left transition hover:bg-slate-50 @if($message->status == 1) bg-blue-50 @endif">
                                                  <div class="block h-10 w-10 size-4 flex-none rounded-full">
                                                      <x-application-mark class="h-10 w-10" />
                                                  </div>
@@ -206,7 +212,7 @@
                                                          {{ Str::limit(strip_tags($message->message), 40) }}
                                                      </div>
                                                  </div>
-                                             </div>
+                                             </button>
                                              @empty
                                              <div class="p-4 text-center text-slate-700">
                                                  Keine  Nachrichten
@@ -220,7 +226,8 @@
                                                  </a>
                                              </div>
                                          </div>
-                                     </div>
+                                         </x-slot>
+                                     </x-ui.dropdown.anchor-dropdown>
                                      <!-- Modal -->
                                      <div 
                                          x-show="modalOpen" 
@@ -260,35 +267,29 @@
                                 </div>
                                 @endif
 
-                                @if (Auth::check())
-                                <div
-                                    class="relative hidden md:block"
-                                    x-data="{ open: false, closeTimer: null }"
-                                    @mouseenter="if (closeTimer) clearTimeout(closeTimer); open = true"
-                                    @mouseleave="closeTimer = setTimeout(() => open = false, 120)"
-                                >
-                                    <button
-                                        type="button"
-                                        class="block rounded-full p-1 transition hover:bg-slate-100"
-                                        @focus="open = true"
-                                        @blur="closeTimer = setTimeout(() => open = false, 120)"
+                                 @if (Auth::check())
+                                <div class="hidden md:block">
+                                    <x-ui.dropdown.anchor-dropdown
+                                        align="right"
+                                        width="auto"
+                                        :offset="8"
+                                        content-classes="w-80 overflow-hidden rounded-xl border border-slate-200 bg-white"
+                                        dropdown-classes=""
                                     >
-                                        <span class="relative flex items-center justify-center">
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" class="{{ $subscriptionSummary['icon_classes'] ?? 'text-slate-400' }}">
-                                                <path d="M12 3l2.35 4.76 5.25.76-3.8 3.7.9 5.23L12 15.9l-4.7 2.55.9-5.23-3.8-3.7 5.25-.76L12 3Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
-                                            </svg>
-                                            <span class="absolute -bottom-1 -right-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 {{ $subscriptionSummary['status_classes'] ?? 'bg-slate-100 text-slate-600 ring-slate-200' }}">
-                                                {{ $subscriptionSummary['has_subscription'] ? 'Pro' : 'Free' }}
-                                            </span>
-                                        </span>
-                                    </button>
+                                        <x-slot name="trigger">
+                                            <button type="button" class="block rounded-full p-1 transition hover:bg-slate-100" aria-label="Abo und Credits anzeigen">
+                                                <span class="relative flex items-center justify-center">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" class="{{ $subscriptionSummary['icon_classes'] ?? 'text-slate-400' }}">
+                                                        <path d="M12 3l2.35 4.76 5.25.76-3.8 3.7.9 5.23L12 15.9l-4.7 2.55.9-5.23-3.8-3.7 5.25-.76L12 3Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                                                    </svg>
+                                                    <span class="absolute -bottom-1 -right-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ring-1 {{ $subscriptionSummary['status_classes'] ?? 'bg-slate-100 text-slate-600 ring-slate-200' }}">
+                                                        {{ $subscriptionSummary['has_subscription'] ? 'Pro' : 'Free' }}
+                                                    </span>
+                                                </span>
+                                            </button>
+                                        </x-slot>
 
-                                    <div
-                                        x-show="open"
-                                        x-cloak
-                                        x-transition
-                                        class="absolute right-0 mt-2 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
-                                    >
+                                        <x-slot name="content">
                                         <div class="border-b border-slate-100 bg-slate-50 px-4 py-3">
                                             <div class="flex items-center justify-between gap-3">
                                                 <div>
@@ -350,9 +351,10 @@
                                                 @endif
                                             </div>
                                         </div>
-                                    </div>
+                                        </x-slot>
+                                    </x-ui.dropdown.anchor-dropdown>
                                 </div>
-                                @endif
+                                 @endif
                             </div>
 
 
@@ -362,10 +364,18 @@
                                  @auth
                                      <!-- Settings Dropdown -->
                                      <div class="ms-3 relative">
-                                         <x-dropdown align="" width="48">
+                                         <x-ui.dropdown.anchor-dropdown
+                                             align="right"
+                                             width="48"
+                                             :offset="8"
+                                             content-classes="w-48 rounded-xl bg-white py-1"
+                                             dropdown-classes=""
+                                         >
                                              <x-slot name="trigger">
                                                  <button
-                                                     class="flex text-sm border-2 border-transparent rounded-full focus:outline-none focus:border-gray-300 transition">
+                                                     type="button"
+                                                     class="flex rounded-full border-2 border-transparent text-sm transition focus:border-gray-300 focus:outline-none"
+                                                     aria-label="Kontomenü öffnen">
                                                      <img class="h-8 w-8 rounded-full object-cover"
                                                          src="{{ Auth::user()->profile_photo_url }}" alt="{{ Auth::user()->name }}" />
                                                  </button>
@@ -394,15 +404,23 @@
                                                      </x-dropdown-link>
                                                  </form>
                                              </x-slot>
-                                         </x-dropdown>
+                                         </x-ui.dropdown.anchor-dropdown>
                                      </div>
                                  @else
                                      <!-- Guest Dropdown -->
                                      <div class="ms-3 relative">
-                                         <x-dropdown align="" width="48">
+                                         <x-ui.dropdown.anchor-dropdown
+                                             align="right"
+                                             width="48"
+                                             :offset="8"
+                                             content-classes="w-48 rounded-xl bg-white py-1"
+                                             dropdown-classes=""
+                                         >
                                              <x-slot name="trigger">
                                                  <button
-                                                     class="flex items-center justify-center w-10 h-10 bg-gray-100 text-gray-700 rounded-full hover:bg-gray-400">
+                                                     type="button"
+                                                     class="flex h-10 w-10 items-center justify-center rounded-full bg-gray-100 text-gray-700 hover:bg-gray-400"
+                                                     aria-label="Anmeldung öffnen">
                                                      <svg xmlns="http://www.w3.org/2000/svg" fill="currentColor" class="w-5 h-5" viewBox="0 0 512 512">
                                                          <path
                                                          d="M337.711 241.3a16 16 0 0 0-11.461 3.988c-18.739 16.561-43.688 25.682-70.25 25.682s-51.511-9.121-70.25-25.683a16.007 16.007 0 0 0-11.461-3.988c-78.926 4.274-140.752 63.672-140.752 135.224v107.152C33.537 499.293 46.9 512 63.332 512h385.336c16.429 0 29.8-12.707 29.8-28.325V376.523c-.005-71.552-61.831-130.95-140.757-135.223zM446.463 480H65.537V376.523c0-52.739 45.359-96.888 104.351-102.8C193.75 292.63 224.055 302.97 256 302.97s62.25-10.34 86.112-29.245c58.992 5.91 104.351 50.059 104.351 102.8zM256 234.375a117.188 117.188 0 1 0-117.188-117.187A117.32 117.32 0 0 0 256 234.375zM256 32a85.188 85.188 0 1 1-85.188 85.188A85.284 85.284 0 0 1 256 32z"
@@ -426,7 +444,7 @@
                                                      {{ __('Registrieren') }}
                                                  </x-dropdown-link>
                                              </x-slot>
-                                         </x-dropdown>
+                                         </x-ui.dropdown.anchor-dropdown>
                                      </div>
                                  @endauth
                              </div>
