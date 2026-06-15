@@ -70,14 +70,14 @@ class AssistantAudioOutputStreamController extends Controller
             ], 422);
         }
 
-        if (! $this->isOpenRouterUrl($apiUrl)) {
+        if (! $this->isOpenRouterSpeechUrl($apiUrl)) {
             $connectionLogger->write('warning', 'OpenRouter TTS URL is invalid.', [
                 'connection_id' => $connectionId,
                 'api_url' => $apiUrl,
             ]);
 
             return response()->json([
-                'message' => 'Die Audioausgabe ist auf OpenRouter festgelegt. Bitte als Audio-Endpoint eine OpenRouter-URL verwenden.',
+                'message' => 'Der konfigurierte Audio-Endpoint ist kein OpenRouter Speech-Endpoint.',
                 'configured_url' => $apiUrl,
                 'expected_default' => self::OPENROUTER_AUDIO_SPEECH_URL,
             ], 422);
@@ -179,7 +179,7 @@ class AssistantAudioOutputStreamController extends Controller
         if (! $providerResponse->successful()) {
             return response()->json([
                 'message' => 'OpenRouter Audio/TTS antwortet mit HTTP '.$providerResponse->status().'.',
-                'detail' => mb_substr((string) $errorBody, 0, 1000),
+                'detail' => $this->providerErrorMessage((string) $errorBody),
             ], 502);
         }
 
@@ -241,6 +241,30 @@ class AssistantAudioOutputStreamController extends Controller
         $host = Str::lower((string) parse_url($url, PHP_URL_HOST));
 
         return $host === 'openrouter.ai' || Str::endsWith($host, '.openrouter.ai');
+    }
+
+    private function isOpenRouterSpeechUrl(string $url): bool
+    {
+        $path = '/'.trim((string) parse_url($url, PHP_URL_PATH), '/');
+
+        return $this->isOpenRouterUrl($url) && $path === '/api/v1/audio/speech';
+    }
+
+    private function providerErrorMessage(string $body): string
+    {
+        $payload = json_decode($body, true);
+        $message = is_array($payload) ? data_get($payload, 'error.message') : null;
+
+        if (is_string($message) && str_contains($message, 'specify "prompt" or "messages"')) {
+            return 'Der konfigurierte Audio-Endpoint ist kein TTS-Endpoint und erwartet Chat-Nachrichten. '
+                .'Verwende https://openrouter.ai/api/v1/audio/speech und ein Speech/TTS-Modell.';
+        }
+
+        if (is_string($message) && $message !== '') {
+            return mb_substr($message, 0, 1000);
+        }
+
+        return mb_substr($body, 0, 1000);
     }
 
     private function setting(string $key, ?string $default = ''): string
