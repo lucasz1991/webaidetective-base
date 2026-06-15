@@ -15,6 +15,18 @@
         voiceSupported: false,
         listening: false,
         recognition: null,
+        ttsEndpoint: @js(route('assistant.audio-output.stream')),
+        csrfToken: @js(csrf_token()),
+        ttsAudio: null,
+        ttsQueue: [],
+        ttsPlaying: false,
+        ttsAbortController: null,
+        ttsObjectUrls: [],
+        ttsStreamBuffer: '',
+        ttsStreamLastText: '',
+        ttsStreamObserver: null,
+        ttsStreamFallbackTimer: null,
+        ttsCurrentGeneration: 0,
         speechSupported: false,
         speaking: false,
         speakingIndex: null,
@@ -24,9 +36,23 @@
         toolAlertTimers: {},
         init() {
             this.voiceSupported = ('SpeechRecognition' in window) || ('webkitSpeechRecognition' in window);
-            this.speechSupported = 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
+            this.speechSupported = 'fetch' in window && 'Audio' in window && 'URL' in window;
             this.lastAssistantMessageKey = this.latestAssistantMessageKey(this.chatHistory);
             this.$watch('chatHistory', (history) => this.handleNewAssistantMessage(history));
+            this.$watch('isLoading', (loading) => {
+                if (loading) {
+                    this.beginTtsStream();
+                } else {
+                    this.finishTtsStream();
+                }
+            });
+            this.$watch('autoRead', (enabled) => {
+                if (!enabled) {
+                    this.stopSpeaking();
+                } else if (this.isLoading) {
+                    this.beginTtsStream();
+                }
+            });
             this.$watch('toolEvents', (events) => this.scheduleToolAlerts(events));
             this.scheduleToolAlerts(this.toolEvents);
             this.syncContext();
@@ -295,35 +321,307 @@
             if (key === this.lastAssistantMessageKey) return;
 
             this.lastAssistantMessageKey = key;
-            if (this.autoRead && item.content) {
+            if (this.autoRead && item.content && !this.ttsStreamLastText.trim()) {
                 this.speak(item.content, index);
             }
         },
         speak(text, index = null) {
             if (!this.speechSupported || !text) return;
 
-            window.speechSynthesis.cancel();
-            const utterance = new SpeechSynthesisUtterance(String(text));
-            utterance.lang = 'de-DE';
-            utterance.rate = Number(this.speechRate || 1);
-            utterance.pitch = 1;
-            utterance.onstart = () => {
-                this.speaking = true;
-                this.speakingIndex = index;
+            this.stopSpeaking();
+            this.queueTtsSentence(String(text), index);
+        },
+        beginTtsStream() {
+            if (!this.autoRead || !this.speechSupported) return;
+
+            this.stopSpeaking();
+            this.ttsStreamBuffer = '';
+            this.ttsStreamLastText = '';
+            this.ttsCurrentGeneration++;
+            this.observeTtsStream();
+        },
+        observeTtsStream() {
+            this.$nextTick(() => {
+                const el = this.$refs.assistantResponseStream;
+                if (!el) return;
+
+                if (this.ttsStreamObserver) {
+                    this.ttsStreamObserver.disconnect();
+                    this.ttsStreamObserver = null;
+                }
+
+                this.ttsStreamLastText = el.textContent || '';
+                this.ttsStreamObserver = new MutationObserver(() => this.consumeTtsStreamText());
+                this.ttsStreamObserver.observe(el, {
+                    childList: true,
+                    characterData: true,
+                    subtree: true,
+                });
+
+                this.consumeTtsStreamText();
+            });
+        },
+        consumeTtsStreamText() {
+            if (!this.autoRead || !this.speechSupported) return;
+
+            const el = this.$refs.assistantResponseStream;
+            if (!el) return;
+
+            const fullText = el.textContent || '';
+            let delta = '';
+
+            if (fullText.startsWith(this.ttsStreamLastText)) {
+                delta = fullText.slice(this.ttsStreamLastText.length);
+            } else {
+                delta = fullText;
+            }
+
+            this.ttsStreamLastText = fullText;
+
+            if (delta) {
+                this.enqueueTtsText(delta);
+            }
+        },
+        enqueueTtsText(delta) {
+            this.ttsStreamBuffer += String(delta || '').replace(/\s+/g, ' ');
+
+            const sentencePattern = /^([\s\S]*?[.!?…](?:\s+|$))/u;
+            let match = this.ttsStreamBuffer.match(sentencePattern);
+
+            while (match) {
+                const sentence = match[1].trim();
+                this.ttsStreamBuffer = this.ttsStreamBuffer.slice(match[1].length);
+
+                if (sentence.length >= 3) {
+                    this.queueTtsSentence(sentence);
+                }
+
+                match = this.ttsStreamBuffer.match(sentencePattern);
+            }
+        },
+        finishTtsStream() {
+            if (this.ttsStreamFallbackTimer) {
+                window.clearTimeout(this.ttsStreamFallbackTimer);
+            }
+
+            this.ttsStreamFallbackTimer = window.setTimeout(() => {
+                if (this.ttsStreamObserver) {
+                    this.ttsStreamObserver.disconnect();
+                    this.ttsStreamObserver = null;
+                }
+
+                const rest = this.ttsStreamBuffer.trim();
+                this.ttsStreamBuffer = '';
+
+                if (this.autoRead && rest.length >= 3) {
+                    this.queueTtsSentence(rest);
+                }
+            }, 350);
+        },
+        queueTtsSentence(text, index = null) {
+            const cleanText = String(text || '').trim();
+            if (!cleanText) return;
+
+            this.ttsQueue.push({
+                text: cleanText,
+                index,
+                generation: this.ttsCurrentGeneration,
+            });
+
+            this.playNextTts();
+        },
+        async playNextTts() {
+            if (this.ttsPlaying || !this.ttsQueue.length) return;
+
+            const item = this.ttsQueue.shift();
+
+            if (!item || item.generation !== this.ttsCurrentGeneration) {
+                this.playNextTts();
+                return;
+            }
+
+            this.ttsPlaying = true;
+            this.speaking = true;
+            this.speakingIndex = item.index;
+
+            try {
+                if (window.MediaSource && MediaSource.isTypeSupported('audio/mpeg')) {
+                    await this.playTtsViaMediaSource(item.text);
+                } else {
+                    await this.playTtsViaBlob(item.text);
+                }
+            } catch (error) {
+                if (error?.name !== 'AbortError') {
+                    console.warn('AI-Audioausgabe fehlgeschlagen:', error);
+                }
+            } finally {
+                this.ttsPlaying = false;
+
+                if (this.ttsQueue.length) {
+                    this.playNextTts();
+                } else {
+                    this.speaking = false;
+                    this.speakingIndex = null;
+                }
+            }
+        },
+        ttsFetchOptions(text) {
+            this.ttsAbortController = new AbortController();
+
+            return {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'audio/mpeg',
+                    'X-CSRF-TOKEN': this.csrfToken,
+                    'X-Requested-With': 'XMLHttpRequest',
+                },
+                credentials: 'same-origin',
+                signal: this.ttsAbortController.signal,
+                body: JSON.stringify({
+                    text,
+                    format: 'mp3',
+                    speed: Number(this.speechRate || 1),
+                }),
             };
-            utterance.onend = () => {
-                this.speaking = false;
-                this.speakingIndex = null;
-            };
-            utterance.onerror = () => {
-                this.speaking = false;
-                this.speakingIndex = null;
-            };
-            window.speechSynthesis.speak(utterance);
+        },
+        async playTtsViaBlob(text) {
+            const response = await fetch(this.ttsEndpoint, this.ttsFetchOptions(text));
+
+            if (!response.ok) {
+                throw new Error(await response.text());
+            }
+
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            this.ttsObjectUrls.push(url);
+
+            await this.playAudioUrl(url);
+        },
+        async playTtsViaMediaSource(text) {
+            const mediaSource = new MediaSource();
+            const url = URL.createObjectURL(mediaSource);
+            this.ttsObjectUrls.push(url);
+
+            const audio = new Audio();
+            this.ttsAudio = audio;
+            audio.src = url;
+
+            await new Promise((resolve, reject) => {
+                let sourceBuffer = null;
+                let started = false;
+                let finished = false;
+
+                const cleanup = () => {
+                    audio.onended = null;
+                    audio.onerror = null;
+                };
+
+                audio.onended = () => {
+                    cleanup();
+                    resolve();
+                };
+                audio.onerror = () => {
+                    cleanup();
+                    reject(new Error('Audio konnte nicht abgespielt werden.'));
+                };
+
+                const appendBuffer = (chunk) => new Promise((appendResolve, appendReject) => {
+                    if (!sourceBuffer || mediaSource.readyState !== 'open') {
+                        appendResolve();
+                        return;
+                    }
+
+                    sourceBuffer.addEventListener('updateend', appendResolve, { once: true });
+                    sourceBuffer.addEventListener('error', appendReject, { once: true });
+                    sourceBuffer.appendBuffer(chunk);
+                });
+
+                mediaSource.addEventListener('sourceopen', async () => {
+                    try {
+                        sourceBuffer = mediaSource.addSourceBuffer('audio/mpeg');
+                        const response = await fetch(this.ttsEndpoint, this.ttsFetchOptions(text));
+
+                        if (!response.ok || !response.body) {
+                            throw new Error(await response.text());
+                        }
+
+                        const reader = response.body.getReader();
+
+                        while (true) {
+                            const { done, value } = await reader.read();
+
+                            if (done) break;
+                            if (!value || value.byteLength === 0) continue;
+
+                            await appendBuffer(value);
+
+                            if (!started) {
+                                started = true;
+                                audio.play().catch(() => {});
+                            }
+                        }
+
+                        const endStream = () => {
+                            if (finished || mediaSource.readyState !== 'open') return;
+                            finished = true;
+                            mediaSource.endOfStream();
+                        };
+
+                        if (sourceBuffer.updating) {
+                            sourceBuffer.addEventListener('updateend', endStream, { once: true });
+                        } else {
+                            endStream();
+                        }
+
+                        audio.play().catch(() => {});
+                    } catch (error) {
+                        cleanup();
+                        reject(error);
+                    }
+                }, { once: true });
+            });
+        },
+        playAudioUrl(url) {
+            return new Promise((resolve, reject) => {
+                const audio = new Audio(url);
+                this.ttsAudio = audio;
+
+                audio.onended = () => resolve();
+                audio.onerror = () => reject(new Error('Audio konnte nicht abgespielt werden.'));
+                audio.play().catch(reject);
+            });
         },
         stopSpeaking() {
-            if (!this.speechSupported) return;
-            window.speechSynthesis.cancel();
+            if (this.ttsStreamObserver) {
+                this.ttsStreamObserver.disconnect();
+                this.ttsStreamObserver = null;
+            }
+
+            if (this.ttsStreamFallbackTimer) {
+                window.clearTimeout(this.ttsStreamFallbackTimer);
+                this.ttsStreamFallbackTimer = null;
+            }
+
+            this.ttsCurrentGeneration++;
+            this.ttsQueue = [];
+            this.ttsStreamBuffer = '';
+            this.ttsStreamLastText = '';
+
+            if (this.ttsAbortController) {
+                this.ttsAbortController.abort();
+                this.ttsAbortController = null;
+            }
+
+            if (this.ttsAudio) {
+                this.ttsAudio.pause();
+                this.ttsAudio.src = '';
+                this.ttsAudio = null;
+            }
+
+            this.ttsObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+            this.ttsObjectUrls = [];
+            this.ttsPlaying = false;
             this.speaking = false;
             this.speakingIndex = null;
         },
@@ -546,13 +844,13 @@
                                 <div class="space-y-4 p-4 text-left">
                                     <div>
                                         <p class="text-xs font-black uppercase tracking-[.14em] text-slate-500">Sprachausgabe</p>
-                                        <p class="mt-1 text-xs leading-5 text-slate-500">Antworten einzeln oder automatisch mit der Browserstimme vorlesen.</p>
+                                        <p class="mt-1 text-xs leading-5 text-slate-500">Antworten einzeln oder automatisch per AI-TTS-Audiostream vorlesen.</p>
                                     </div>
 
                                     <div class="flex items-center justify-between gap-4">
                                         <div>
                                             <p class="text-sm font-bold text-slate-800">Automatisch vorlesen</p>
-                                            <p class="text-[11px] text-slate-500">Nur neue Copilot-Antworten</p>
+                                            <p class="text-[11px] text-slate-500">Während des Textstreams</p>
                                         </div>
                                         <x-ui.forms.toggle-button
                                             id="assistant-auto-read"
@@ -577,11 +875,11 @@
                                     <div class="flex gap-2">
                                         <button
                                             type="button"
-                                            x-on:click="speak('Die Sprachausgabe ist einsatzbereit.')"
+                                            x-on:click="speak('Die AI-Audioausgabe ist einsatzbereit.')"
                                             x-bind:disabled="!speechSupported"
                                             class="inline-flex flex-1 items-center justify-center rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
                                         >
-                                            Stimme testen
+                                            AI-Audio testen
                                         </button>
                                         <button
                                             type="button"
@@ -1059,7 +1357,8 @@
                             </div>
                             <p
                                 wire:stream="assistant-response-stream"
-                                class="mt-3 whitespace-pre-line border-t border-cyan-100 pt-3 text-sm leading-6 text-slate-700 [&:empty]:hidden"
+                            x-ref="assistantResponseStream"
+                            class="mt-3 whitespace-pre-line border-t border-cyan-100 pt-3 text-sm leading-6 text-slate-700 [&:empty]:hidden"
                             ></p>
                         </div>
                     </div>

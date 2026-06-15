@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Providers\RouteServiceProvider;
+use App\Http\Controllers\Ai\AssistantAudioOutputStreamController;
 use App\Livewire\Welcome;
 use App\Livewire\Packages;
 use App\Livewire\Auth\Login;
@@ -130,6 +131,8 @@ Route::middleware(['auth:sanctum', config('jetstream.auth_session'), 'verified']
                     : 'Fuer diese Person laeuft aktuell kein Instagram-Scan.',
             ]);
         })->name('tracked-people.instagram.stop-scan');
+        Route::post('/assistant/audio-output/stream', AssistantAudioOutputStreamController::class)
+            ->name('assistant.audio-output.stream');
         Route::get('/messages', MessageBox::class)->name('messages');
         Route::get('/contact', Contact::class)->name('contact');
         Route::get('/termsandconditions', TermsAndConditions::class)->name('terms');
