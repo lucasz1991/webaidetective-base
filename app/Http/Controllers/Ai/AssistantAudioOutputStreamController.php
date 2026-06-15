@@ -56,7 +56,7 @@ class AssistantAudioOutputStreamController extends Controller
         }
 
         $speed = (float) ($validated['speed'] ?? 1);
-        $voice = $voice !== '' ? $voice : $this->defaultVoiceForModel($model);
+        $voice = $this->providerVoice($model, $voice);
         $format = $this->providerAudioFormat($model, $format);
 
         if ($apiKey === '' || $model === '' || $apiUrl === '') {
@@ -97,7 +97,7 @@ class AssistantAudioOutputStreamController extends Controller
             'user_id' => $request->user()?->id,
             'api_url' => $apiUrl,
             'model' => $model,
-            'voice' => $voice !== '' ? $voice : 'alloy',
+            'voice' => $voice,
             'format' => $format,
             'speed' => $speed,
             'input_characters' => mb_strlen(trim((string) $validated['text'])),
@@ -112,16 +112,16 @@ class AssistantAudioOutputStreamController extends Controller
                     'X-Title' => $this->setting('model_title', config('app.name')),
                 ]))
                 ->withoutRedirecting()
-                ->connectTimeout(15)
-                ->timeout(120)
+                ->connectTimeout(10)
+                ->timeout(50)
                 ->withOptions([
-                    'stream' => true,
+                    'stream' => $format !== 'pcm',
                     'http_errors' => false,
                 ])
                 ->post($apiUrl, array_filter([
                     'model' => $model,
                     'input' => trim((string) $validated['text']),
-                    'voice' => $voice !== '' ? $voice : 'alloy',
+                    'voice' => $voice,
                     'response_format' => $format,
                     'speed' => $speed,
                 ], static fn ($value): bool => $value !== null && $value !== ''));
@@ -141,7 +141,10 @@ class AssistantAudioOutputStreamController extends Controller
 
             return response()->json([
                 'message' => 'Die OpenRouter-Audioausgabe konnte nicht gestartet werden: '.$exception->getMessage(),
-            ], 502);
+                'connection_id' => $connectionId,
+            ], 503, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
         }
 
         $connectionLogger->write(
@@ -180,14 +183,29 @@ class AssistantAudioOutputStreamController extends Controller
         }
 
         if (! $providerResponse->successful()) {
+            $providerError = $this->providerErrorMessage(
+                (string) $errorBody,
+                $providerResponse->status(),
+                $model,
+            );
+
+            Log::warning('Assistant OpenRouter TTS request rejected.', [
+                'connection_id' => $connectionId,
+                'provider_status' => $providerResponse->status(),
+                'model' => $model,
+                'voice' => $voice,
+                'format' => $format,
+                'error' => $connectionLogger->excerpt($providerError),
+            ]);
+
             return response()->json([
                 'message' => 'OpenRouter Audio/TTS antwortet mit HTTP '.$providerResponse->status().'.',
-                'detail' => $this->providerErrorMessage(
-                    (string) $errorBody,
-                    $providerResponse->status(),
-                    $model,
-                ),
-            ], 502);
+                'detail' => $providerError,
+                'provider_status' => $providerResponse->status(),
+                'connection_id' => $connectionId,
+            ], 424, [
+                'X-AI-Connection-ID' => $connectionId,
+            ]);
         }
 
         $body = $providerResponse->toPsrResponse()->getBody();
@@ -208,6 +226,7 @@ class AssistantAudioOutputStreamController extends Controller
                 'Content-Length' => (string) strlen($audio),
                 'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
                 'Pragma' => 'no-cache',
+                'X-AI-Connection-ID' => $connectionId,
             ]);
         }
 
@@ -238,6 +257,7 @@ class AssistantAudioOutputStreamController extends Controller
             'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
             'Pragma' => 'no-cache',
             'X-Accel-Buffering' => 'no',
+            'X-AI-Connection-ID' => $connectionId,
         ]);
     }
 
@@ -301,18 +321,49 @@ class AssistantAudioOutputStreamController extends Controller
 
     private function defaultVoiceForModel(string $model): string
     {
-        return Str::startsWith(Str::lower($model), 'x-ai/') ? 'Eve' : 'alloy';
+        $normalizedModel = Str::lower($model);
+
+        if ($this->isGeminiTtsModel($normalizedModel)) {
+            return 'Kore';
+        }
+
+        return Str::startsWith($normalizedModel, 'x-ai/') ? 'Eve' : 'alloy';
+    }
+
+    private function providerVoice(string $model, string $voice): string
+    {
+        $voice = trim($voice);
+
+        if ($voice === '') {
+            return $this->defaultVoiceForModel($model);
+        }
+
+        if (
+            $this->isGeminiTtsModel($model)
+            && in_array(Str::lower($voice), ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'], true)
+        ) {
+            return 'Kore';
+        }
+
+        return $voice;
     }
 
     private function providerAudioFormat(string $model, string $format): string
     {
         $normalizedModel = Str::lower($model);
 
-        if (Str::startsWith($normalizedModel, 'google/') && Str::contains($normalizedModel, 'tts')) {
+        if ($this->isGeminiTtsModel($normalizedModel)) {
             return 'pcm';
         }
 
         return $format;
+    }
+
+    private function isGeminiTtsModel(string $model): bool
+    {
+        $normalizedModel = Str::lower($model);
+
+        return Str::startsWith($normalizedModel, 'google/') && Str::contains($normalizedModel, 'tts');
     }
 
     private function pcmToWav(string $pcm, int $sampleRate = 24000, int $channels = 1, int $bitsPerSample = 16): string

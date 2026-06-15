@@ -594,12 +594,20 @@
         },
         async ttsResponseError(response) {
             const raw = await response.text();
+            const responseConnectionId = response.headers.get('X-AI-Connection-ID');
 
             try {
                 const payload = JSON.parse(raw);
-                return payload?.detail || payload?.message || `HTTP ${response.status}`;
+                const message = payload?.detail || payload?.message || `HTTP ${response.status}`;
+                const connectionId = payload?.connection_id || responseConnectionId;
+
+                return connectionId ? `${message} (Verbindungs-ID: ${connectionId})` : message;
             } catch {
-                return raw || `HTTP ${response.status}`;
+                const message = raw || `HTTP ${response.status}`;
+
+                return responseConnectionId
+                    ? `${message} (Verbindungs-ID: ${responseConnectionId})`
+                    : message;
             }
         },
         ttsErrorMessage(error) {

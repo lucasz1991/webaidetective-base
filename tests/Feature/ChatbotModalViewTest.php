@@ -21,6 +21,7 @@ class ChatbotModalViewTest extends TestCase
         $this->assertStringContainsString('Copilot denkt nach', $view);
         $this->assertStringContainsString("route('assistant.audio-output.stream', [], false)", $view);
         $this->assertStringContainsString('ttsErrorMessage(error)', $view);
+        $this->assertStringContainsString('X-AI-Connection-ID', $view);
         $this->assertStringContainsString('x-show="ttsError"', $view);
         $this->assertStringContainsString('streamBufferedAssistantText', file_get_contents(app_path('Livewire/Tools/Chatbot.php')));
         $this->assertStringContainsString('Array.isArray(item.options)', $view);

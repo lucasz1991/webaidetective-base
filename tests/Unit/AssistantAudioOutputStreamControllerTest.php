@@ -58,7 +58,18 @@ class AssistantAudioOutputStreamControllerTest extends TestCase
         $method = new ReflectionMethod($controller, 'defaultVoiceForModel');
 
         $this->assertSame('Eve', $method->invoke($controller, 'x-ai/grok-voice-tts-1.0'));
+        $this->assertSame('Kore', $method->invoke($controller, 'google/gemini-3.1-flash-tts-preview'));
         $this->assertSame('alloy', $method->invoke($controller, 'openai/tts-1'));
+    }
+
+    public function test_openai_voice_is_replaced_for_gemini_tts(): void
+    {
+        $controller = new AssistantAudioOutputStreamController;
+        $method = new ReflectionMethod($controller, 'providerVoice');
+
+        $this->assertSame('Kore', $method->invoke($controller, 'google/gemini-3.1-flash-tts-preview', 'alloy'));
+        $this->assertSame('Puck', $method->invoke($controller, 'google/gemini-3.1-flash-tts-preview', 'Puck'));
+        $this->assertSame('Eve', $method->invoke($controller, 'x-ai/grok-voice-tts-1.0', 'Eve'));
     }
 
     public function test_gemini_tts_is_forced_to_pcm(): void
