@@ -81,6 +81,16 @@ class InstagramPost extends Model
         return $this->hasMany(InstagramPostMetric::class)->latest('observed_at');
     }
 
+    public function likes(): HasMany
+    {
+        return $this->hasMany(InstagramPostLike::class);
+    }
+
+    public function comments(): HasMany
+    {
+        return $this->hasMany(InstagramPostComment::class);
+    }
+
     public function latestMetric(): HasOne
     {
         return $this->hasOne(InstagramPostMetric::class)->latestOfMany('observed_at');

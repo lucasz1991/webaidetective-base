@@ -171,6 +171,14 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
     ),
     postScanMaxItems: normalizeOptionalPositiveInteger(input?.postScanMaxItems, merged.postScanMaxItems || 100) || 100,
     postScanMaxScrollRounds: normalizeOptionalPositiveInteger(input?.postScanMaxScrollRounds, merged.postScanMaxScrollRounds || 40) || 40,
+    postScanMaxLikesPerPost: normalizeOptionalPositiveInteger(
+      input?.postScanMaxLikesPerPost || input?.post_scan_max_likes_per_post,
+      merged.postScanMaxLikesPerPost || 250,
+    ) || 250,
+    postScanMaxCommentsPerPost: normalizeOptionalPositiveInteger(
+      input?.postScanMaxCommentsPerPost || input?.post_scan_max_comments_per_post,
+      merged.postScanMaxCommentsPerPost || 250,
+    ) || 250,
     profileHoverCardsEnabled: input?.profileHoverCardsEnabled !== false
       && input?.profile_hover_cards_enabled !== false
       && merged.profileHoverCardsEnabled !== false,

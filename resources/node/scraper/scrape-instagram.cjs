@@ -137,6 +137,8 @@ const runtimeConfigDefaults = {
   suggestionMaxScraperProfileSwitches: 3,
   postScanMaxItems: 100,
   postScanMaxScrollRounds: 40,
+  postScanMaxLikesPerPost: 250,
+  postScanMaxCommentsPerPost: 250,
   profileHoverCardsEnabled: true,
   profileHoverCardWaitMs: 850,
   suggestionDismissChecked: false,
@@ -1468,6 +1470,326 @@ function normalizeInstagramTimelinePost(item, username) {
   };
 }
 
+function normalizeInstagramEngagementUser(user = {}) {
+  const username = normalizeInstagramUsername(user.username || '');
+  const instagramUserId = normalizeText(String(user.pk || user.id || '')) || null;
+
+  if (!username && !instagramUserId) {
+    return null;
+  }
+
+  return {
+    instagramUserId,
+    username,
+    fullName: normalizeText(String(user.full_name || user.fullName || '')) || null,
+    profileImageUrl: normalizeText(String(user.profile_pic_url || user.profileImageUrl || '')) || null,
+    isVerified: typeof user.is_verified === 'boolean' ? user.is_verified : null,
+  };
+}
+
+function normalizeInstagramComment(comment = {}, parentCommentId = null) {
+  const instagramCommentId = normalizeText(String(comment.pk || comment.id || ''));
+  const text = normalizeText(String(comment.text || ''));
+  const user = normalizeInstagramEngagementUser(comment.user || {});
+
+  if (!instagramCommentId || !text) {
+    return null;
+  }
+
+  return {
+    instagramCommentId,
+    parentInstagramCommentId: parentCommentId,
+    ...user,
+    text,
+    likesCount: hasFiniteNumericValue(comment.comment_like_count)
+      ? Number(comment.comment_like_count)
+      : (hasFiniteNumericValue(comment.like_count) ? Number(comment.like_count) : null),
+    publishedAt: normalizeInstagramPostTimestamp(comment.created_at_utc || comment.created_at),
+    rawComment: comment,
+  };
+}
+
+function flattenInstagramComments(comments = []) {
+  const flattened = [];
+
+  for (const comment of Array.isArray(comments) ? comments : []) {
+    const normalized = normalizeInstagramComment(comment);
+
+    if (!normalized) {
+      continue;
+    }
+
+    flattened.push(normalized);
+
+    const replies = comment.preview_child_comments
+      || comment.child_comments
+      || comment.threading_info?.child_comments
+      || [];
+
+    for (const reply of Array.isArray(replies) ? replies : []) {
+      const normalizedReply = normalizeInstagramComment(reply, normalized.instagramCommentId);
+
+      if (normalizedReply) {
+        flattened.push(normalizedReply);
+      }
+    }
+  }
+
+  return flattened;
+}
+
+async function fetchInstagramApiJson(page, endpoint) {
+  return page.evaluate(async (requestEndpoint) => {
+    try {
+      const response = await fetch(requestEndpoint, {
+        credentials: 'include',
+        headers: {
+          Accept: '*/*',
+          'X-IG-App-ID': '936619743392459',
+          'X-Requested-With': 'XMLHttpRequest',
+        },
+      });
+      const rawBody = await response.text();
+      const normalizedBody = rawBody.replace(/^for\s*\(\s*;\s*;\s*\)\s*;\s*/, '');
+      let payload = null;
+
+      try {
+        payload = normalizedBody ? JSON.parse(normalizedBody) : null;
+      } catch (error) {
+        return {
+          ok: false,
+          status: response.status,
+          error: `invalid-json: ${error.message}`,
+        };
+      }
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        payload,
+        error: response.ok ? null : (payload?.message || `HTTP ${response.status}`),
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        status: null,
+        payload: null,
+        error: error.message,
+      };
+    }
+  }, endpoint).catch((error) => ({
+    ok: false,
+    status: null,
+    payload: null,
+    error: error.message,
+  }));
+}
+
+async function resolveInstagramPostMediaPk(page, post = {}) {
+  if (normalizeText(String(post.mediaPk || ''))) {
+    return normalizeText(String(post.mediaPk));
+  }
+
+  if (!post.shortcode) {
+    return null;
+  }
+
+  const response = await fetchInstagramApiJson(
+    page,
+    `/api/v1/media/shortcode/${encodeURIComponent(post.shortcode)}/info/`,
+  );
+
+  return response.ok
+    ? normalizeText(String(response.payload?.items?.[0]?.pk || response.payload?.items?.[0]?.id || '')) || null
+    : null;
+}
+
+async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {}) {
+  const maxLikes = Math.max(1, Number(runtimeConfig.postScanMaxLikesPerPost || 250));
+  const maxComments = Math.max(1, Number(runtimeConfig.postScanMaxCommentsPerPost || 250));
+  const mediaPk = await resolveInstagramPostMediaPk(page, post);
+  const likesByKey = new Map();
+  const commentsById = new Map();
+  let likesComplete = false;
+  let commentsComplete = false;
+  let rateLimited = false;
+  let commentsTruncated = false;
+  let childCommentsComplete = true;
+  const errors = [];
+  const expectedComments = hasFiniteNumericValue(post.commentsCount)
+    ? Number(post.commentsCount)
+    : null;
+
+  if (!mediaPk) {
+    return {
+      mediaPk: null,
+      likes: [],
+      comments: [],
+      likesComplete,
+      commentsComplete,
+      rateLimited,
+      errors: ['media-pk-unavailable'],
+    };
+  }
+
+  const likesResponse = await fetchInstagramApiJson(
+    page,
+    `/api/v1/media/${encodeURIComponent(mediaPk)}/likers/`,
+  );
+
+  if (likesResponse.ok) {
+    const rawUsers = likesResponse.payload?.users || likesResponse.payload?.likers || [];
+
+    for (const rawUser of Array.isArray(rawUsers) ? rawUsers : []) {
+      const user = normalizeInstagramEngagementUser(rawUser);
+      const key = user?.instagramUserId || user?.username;
+
+      if (user && key && likesByKey.size < maxLikes) {
+        likesByKey.set(key, {
+          ...user,
+          rawLike: rawUser,
+        });
+      }
+    }
+
+    const expectedLikes = hasFiniteNumericValue(post.likesCount) ? Number(post.likesCount) : null;
+    likesComplete = rawUsers.length <= maxLikes
+      && (expectedLikes === null || rawUsers.length >= expectedLikes);
+  } else {
+    rateLimited = likesResponse.status === 429;
+    errors.push(`likes: ${likesResponse.error || 'unbekannter Fehler'}`);
+  }
+
+  let cursor = null;
+
+  for (let pageIndex = 0; pageIndex < 50 && commentsById.size < maxComments; pageIndex += 1) {
+    const query = new URLSearchParams({
+      can_support_threading: 'true',
+      permalink_enabled: 'false',
+    });
+
+    if (cursor) {
+      query.set('min_id', cursor);
+    }
+
+    const commentsResponse = await fetchInstagramApiJson(
+      page,
+      `/api/v1/media/${encodeURIComponent(mediaPk)}/comments/?${query.toString()}`,
+    );
+
+    if (!commentsResponse.ok) {
+      rateLimited = rateLimited || commentsResponse.status === 429;
+      errors.push(`comments: ${commentsResponse.error || 'unbekannter Fehler'}`);
+      break;
+    }
+
+    const rawComments = commentsResponse.payload?.comments || [];
+
+    for (const comment of flattenInstagramComments(rawComments)) {
+      if (commentsById.size >= maxComments) {
+        commentsTruncated = true;
+        break;
+      }
+
+      commentsById.set(comment.instagramCommentId, comment);
+    }
+
+    for (const rawComment of Array.isArray(rawComments) ? rawComments : []) {
+      const parentId = normalizeText(String(rawComment.pk || rawComment.id || ''));
+      const expectedChildren = Number(rawComment.child_comment_count || 0);
+      const previewChildren = rawComment.preview_child_comments
+        || rawComment.child_comments
+        || rawComment.threading_info?.child_comments
+        || [];
+
+      if (!parentId || expectedChildren <= previewChildren.length) {
+        continue;
+      }
+
+      let childCursor = null;
+      let observedChildren = previewChildren.length;
+
+      for (let childPage = 0; childPage < 20 && commentsById.size < maxComments; childPage += 1) {
+        const childQuery = new URLSearchParams();
+
+        if (childCursor) {
+          childQuery.set('max_id', childCursor);
+        }
+
+        const childResponse = await fetchInstagramApiJson(
+          page,
+          `/api/v1/media/${encodeURIComponent(mediaPk)}/comments/${encodeURIComponent(parentId)}/child_comments/?${childQuery.toString()}`,
+        );
+
+        if (!childResponse.ok) {
+          rateLimited = rateLimited || childResponse.status === 429;
+          childCommentsComplete = false;
+          errors.push(`comment-replies: ${childResponse.error || 'unbekannter Fehler'}`);
+          break;
+        }
+
+        const rawChildren = childResponse.payload?.child_comments || childResponse.payload?.comments || [];
+
+        for (const rawChild of Array.isArray(rawChildren) ? rawChildren : []) {
+          const child = normalizeInstagramComment(rawChild, parentId);
+
+          if (child && commentsById.size < maxComments) {
+            commentsById.set(child.instagramCommentId, child);
+          }
+        }
+
+        observedChildren += rawChildren.length;
+        const nextChildCursor = normalizeText(String(
+          childResponse.payload?.next_max_id
+            || childResponse.payload?.next_min_id
+            || '',
+        )) || null;
+
+        if (!nextChildCursor || nextChildCursor === childCursor || observedChildren >= expectedChildren) {
+          break;
+        }
+
+        childCursor = nextChildCursor;
+      }
+
+      if (observedChildren < expectedChildren) {
+        childCommentsComplete = false;
+      }
+
+      if (commentsById.size >= maxComments) {
+        commentsTruncated = true;
+        break;
+      }
+    }
+
+    const nextCursor = normalizeText(String(
+      commentsResponse.payload?.next_min_id
+        || commentsResponse.payload?.next_max_id
+        || '',
+    )) || null;
+
+    if (!nextCursor || nextCursor === cursor) {
+      commentsComplete = !commentsTruncated
+        && childCommentsComplete
+        && (expectedComments === null || commentsById.size >= expectedComments);
+      break;
+    }
+
+    cursor = nextCursor;
+    await sleep(150);
+  }
+
+  return {
+    mediaPk,
+    likes: Array.from(likesByKey.values()),
+    comments: Array.from(commentsById.values()),
+    likesComplete,
+    commentsComplete,
+    rateLimited,
+    errors,
+  };
+}
+
 async function fetchInstagramTimelinePage(page, username, cursor = null, count = 12) {
   return page.evaluate(async ({ profileUsername, maxId, pageSize }) => {
     const query = new URLSearchParams({
@@ -1823,11 +2145,23 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
       message: `Beitrag ${index + 1} von ${linkCollection.items.length} wird geprueft.`,
     });
 
-    if (link.source === 'timeline-api') {
+    const hasTimelineLikes = hasFiniteNumericValue(link.likesCount);
+    const hasTimelineComments = hasFiniteNumericValue(link.commentsCount);
+
+    if (link.source === 'timeline-api' && hasTimelineLikes && hasTimelineComments) {
+      const engagement = await collectInstagramPostEngagement(page, link, runtimeConfig);
+
       posts.push({
         ...link,
+        mediaPk: engagement.mediaPk || link.mediaPk || null,
+        likes: engagement.likes,
+        comments: engagement.comments,
+        likesComplete: engagement.likesComplete,
+        commentsComplete: engagement.commentsComplete,
+        engagementErrors: engagement.errors,
         ownerUsername: undefined,
       });
+      rateLimited = rateLimited || engagement.rateLimited;
 
       progressLog('posts-item-collected', {
         relationship: 'posts',
@@ -1836,16 +2170,30 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
         shortcode: link.shortcode,
         likesCount: link.likesCount,
         commentsCount: link.commentsCount,
+        storedLikesCount: engagement.likes.length,
+        storedCommentsCount: engagement.comments.length,
         source: link.source,
         message: `Beitrag ${index + 1} von ${linkCollection.items.length} aus der Timeline gespeichert.`,
         ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
       });
+
+      if (rateLimited) {
+        break;
+      }
+
       continue;
     }
 
     const navigation = await navigateWithSoftTimeout(page, link.postUrl, runtimeConfig);
 
     if (!navigation.ok) {
+      if (link.source === 'timeline-api') {
+        posts.push({
+          ...link,
+          ownerUsername: undefined,
+        });
+      }
+
       failedItems.push({
         ...link,
         error: navigation.error,
@@ -1881,7 +2229,10 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
       ownerSeen: false,
     }));
 
-    if (!details.ownerSeen) {
+    const ownerConfirmedByTimeline = link.source === 'timeline-api'
+      && normalizeInstagramUsername(link.ownerUsername) === normalizeInstagramUsername(username);
+
+    if (!details.ownerSeen && !ownerConfirmedByTimeline) {
       failedItems.push({
         ...link,
         error: 'post-owner-mismatch',
@@ -1907,14 +2258,25 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
       /view\s+all\s+([\d.,\s]+(?:k|m|mio|tsd)?)\s+comments?/iu,
       /([\d.,\s]+(?:k|m|mio|tsd)?)\s+comments?/iu,
     ]);
+    const engagement = await collectInstagramPostEngagement(page, {
+      ...link,
+      likesCount: hasTimelineLikes ? Number(link.likesCount) : likesCount,
+      commentsCount: hasTimelineComments ? Number(link.commentsCount) : commentsCount,
+    }, runtimeConfig);
 
     posts.push({
       ...link,
+      mediaPk: engagement.mediaPk || link.mediaPk || null,
       thumbnailUrl: details.thumbnailUrl || link.thumbnailUrl || null,
       caption: details.description || link.caption || link.thumbnailAlt || null,
       publishedAt: details.publishedAt || link.publishedAt || null,
-      likesCount: likesCount ?? link.likesCount ?? null,
-      commentsCount: commentsCount ?? link.commentsCount ?? null,
+      likesCount: hasTimelineLikes ? Number(link.likesCount) : likesCount,
+      commentsCount: hasTimelineComments ? Number(link.commentsCount) : commentsCount,
+      likes: engagement.likes,
+      comments: engagement.comments,
+      likesComplete: engagement.likesComplete,
+      commentsComplete: engagement.commentsComplete,
+      engagementErrors: engagement.errors,
       media: Array.isArray(link.media) && link.media.length > 0
         ? link.media
         : [{
@@ -1927,7 +2289,7 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
           durationSeconds: null,
         }].filter((media) => Boolean(media.sourceUrl)),
     });
-    rateLimited = rateLimited || Boolean(details.rateLimited);
+    rateLimited = rateLimited || Boolean(details.rateLimited) || engagement.rateLimited;
 
     progressLog('posts-item-collected', {
       relationship: 'posts',

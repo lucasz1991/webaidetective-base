@@ -3,6 +3,8 @@
 namespace App\Services\TrackedPeople;
 
 use App\Models\InstagramPost;
+use App\Models\InstagramPostComment;
+use App\Models\InstagramPostLike;
 use App\Models\InstagramPostMetric;
 use App\Models\InstagramPostScan;
 use App\Models\InstagramProfile;
@@ -108,6 +110,7 @@ class TrackedPersonInstagramPostScanService
 
         $postPayload = is_array($payload['postsScan'] ?? null) ? $payload['postsScan'] : [];
         $posts = $this->normalizePosts($postPayload['items'] ?? []);
+        $rawPayload = $this->withoutPostEngagementDetails($payload);
         $scannedAt = now('UTC');
 
         $stored = DB::transaction(function () use (
@@ -115,6 +118,7 @@ class TrackedPersonInstagramPostScanService
             $profile,
             $snapshot,
             $payload,
+            $rawPayload,
             $postPayload,
             $posts,
             $scannedAt,
@@ -136,15 +140,28 @@ class TrackedPersonInstagramPostScanService
                 'new_count' => 0,
                 'updated_count' => 0,
                 'unchanged_count' => 0,
-                'raw_payload' => $payload,
+                'raw_payload' => $rawPayload,
                 'scanned_at' => $scannedAt,
             ]);
             $counts = ['new' => 0, 'updated' => 0, 'unchanged' => 0];
             $mediaQueue = [];
+            $actorProfileIds = InstagramProfile::query()
+                ->whereIn('username', $this->engagementUsernames($posts))
+                ->pluck('id', 'username');
 
             foreach ($posts as $postData) {
                 $mediaItems = $postData['media_items'] ?? [];
-                unset($postData['media_items']);
+                $likes = $postData['likes'] ?? [];
+                $comments = $postData['comments'] ?? [];
+                $likesComplete = (bool) ($postData['likes_complete'] ?? false);
+                $commentsComplete = (bool) ($postData['comments_complete'] ?? false);
+                unset(
+                    $postData['media_items'],
+                    $postData['likes'],
+                    $postData['comments'],
+                    $postData['likes_complete'],
+                    $postData['comments_complete'],
+                );
                 $post = InstagramPost::withTrashed()
                     ->where('shortcode', $postData['shortcode'])
                     ->first();
@@ -198,6 +215,22 @@ class TrackedPersonInstagramPostScanService
                         'comments_count' => $postData['comments_count'] ?? null,
                         'observed_at' => $scannedAt,
                     ],
+                );
+                $this->storePostLikes(
+                    $post,
+                    $scan,
+                    $likes,
+                    $likesComplete,
+                    $actorProfileIds->all(),
+                    $scannedAt,
+                );
+                $this->storePostComments(
+                    $post,
+                    $scan,
+                    $comments,
+                    $commentsComplete,
+                    $actorProfileIds->all(),
+                    $scannedAt,
                 );
 
                 if ($mediaItems !== []) {
@@ -277,6 +310,14 @@ class TrackedPersonInstagramPostScanService
                 continue;
             }
 
+            $rawPost = $post;
+            unset(
+                $rawPost['likes'],
+                $rawPost['comments'],
+                $rawPost['likesComplete'],
+                $rawPost['commentsComplete'],
+            );
+
             $normalized[$shortcode] = [
                 'shortcode' => $shortcode,
                 'media_pk' => $this->nullableString($post['mediaPk'] ?? null),
@@ -290,12 +331,253 @@ class TrackedPersonInstagramPostScanService
                 'likes_count' => $this->nullableInteger($post['likesCount'] ?? null),
                 'comments_count' => $this->nullableInteger($post['commentsCount'] ?? null),
                 'published_at' => $this->parseTimestamp($post['publishedAt'] ?? null),
-                'raw_post' => $post,
+                'raw_post' => $rawPost,
                 'media_items' => $this->normalizeMediaItems($post),
+                'likes' => $this->normalizePostLikes($post['likes'] ?? []),
+                'comments' => $this->normalizePostComments($post['comments'] ?? []),
+                'likes_complete' => (bool) ($post['likesComplete'] ?? false),
+                'comments_complete' => (bool) ($post['commentsComplete'] ?? false),
             ];
         }
 
         return array_values($normalized);
+    }
+
+    private function withoutPostEngagementDetails(array $payload): array
+    {
+        $items = $payload['postsScan']['items'] ?? null;
+
+        if (! is_array($items)) {
+            return $payload;
+        }
+
+        $payload['postsScan']['items'] = array_map(function (mixed $post): mixed {
+            if (! is_array($post)) {
+                return $post;
+            }
+
+            unset($post['likes'], $post['comments']);
+
+            return $post;
+        }, $items);
+
+        return $payload;
+    }
+
+    private function normalizePostLikes(mixed $likes): array
+    {
+        if (! is_array($likes)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($likes as $like) {
+            if (! is_array($like)) {
+                continue;
+            }
+
+            $instagramUserId = $this->nullableString($like['instagramUserId'] ?? null);
+            $username = $this->normalizeUsername($like['username'] ?? null);
+            $likerKey = $instagramUserId ? 'id:'.$instagramUserId : ($username ? 'username:'.$username : null);
+
+            if (! $likerKey) {
+                continue;
+            }
+
+            $normalized[$likerKey] = [
+                'liker_key' => $likerKey,
+                'instagram_user_id' => $instagramUserId,
+                'username' => $username,
+                'full_name' => $this->nullableString($like['fullName'] ?? null),
+                'profile_image_url' => $this->nullableString($like['profileImageUrl'] ?? null),
+                'is_verified' => is_bool($like['isVerified'] ?? null) ? $like['isVerified'] : null,
+                'raw_like' => is_array($like['rawLike'] ?? null) ? $like['rawLike'] : $like,
+            ];
+        }
+
+        return array_values($normalized);
+    }
+
+    private function normalizePostComments(mixed $comments): array
+    {
+        if (! is_array($comments)) {
+            return [];
+        }
+
+        $normalized = [];
+
+        foreach ($comments as $comment) {
+            if (! is_array($comment)) {
+                continue;
+            }
+
+            $instagramCommentId = $this->nullableString($comment['instagramCommentId'] ?? null);
+            $text = $this->nullableString($comment['text'] ?? null);
+
+            if (! $instagramCommentId || ! $text) {
+                continue;
+            }
+
+            $normalized[$instagramCommentId] = [
+                'instagram_comment_id' => $instagramCommentId,
+                'parent_instagram_comment_id' => $this->nullableString($comment['parentInstagramCommentId'] ?? null),
+                'instagram_user_id' => $this->nullableString($comment['instagramUserId'] ?? null),
+                'username' => $this->normalizeUsername($comment['username'] ?? null),
+                'full_name' => $this->nullableString($comment['fullName'] ?? null),
+                'profile_image_url' => $this->nullableString($comment['profileImageUrl'] ?? null),
+                'comment_text' => $text,
+                'likes_count' => $this->nullableInteger($comment['likesCount'] ?? null),
+                'is_verified' => is_bool($comment['isVerified'] ?? null) ? $comment['isVerified'] : null,
+                'published_at' => $this->parseTimestamp($comment['publishedAt'] ?? null),
+                'raw_comment' => is_array($comment['rawComment'] ?? null) ? $comment['rawComment'] : $comment,
+            ];
+        }
+
+        return array_values($normalized);
+    }
+
+    private function engagementUsernames(array $posts): array
+    {
+        return collect($posts)
+            ->flatMap(fn (array $post): array => [
+                ...collect($post['likes'] ?? [])->pluck('username')->all(),
+                ...collect($post['comments'] ?? [])->pluck('username')->all(),
+            ])
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function storePostLikes(
+        InstagramPost $post,
+        InstagramPostScan $scan,
+        array $likes,
+        bool $complete,
+        array $actorProfileIds,
+        Carbon $scannedAt,
+    ): void {
+        $observedKeys = [];
+
+        foreach ($likes as $like) {
+            $observedKeys[] = $like['liker_key'];
+            $existing = InstagramPostLike::query()
+                ->where('instagram_post_id', $post->id)
+                ->where('liker_key', $like['liker_key'])
+                ->first();
+
+            InstagramPostLike::updateOrCreate(
+                [
+                    'instagram_post_id' => $post->id,
+                    'liker_key' => $like['liker_key'],
+                ],
+                [
+                    ...$like,
+                    'instagram_profile_id' => $actorProfileIds[$like['username'] ?? ''] ?? null,
+                    'first_seen_scan_id' => $existing?->first_seen_scan_id ?: $scan->id,
+                    'last_seen_scan_id' => $scan->id,
+                    'is_active' => true,
+                    'first_seen_at' => $existing?->first_seen_at ?: $scannedAt,
+                    'last_seen_at' => $scannedAt,
+                    'removed_at' => null,
+                ],
+            );
+        }
+
+        if ($complete) {
+            InstagramPostLike::query()
+                ->where('instagram_post_id', $post->id)
+                ->where('is_active', true)
+                ->when($observedKeys !== [], fn ($query) => $query->whereNotIn('liker_key', $observedKeys))
+                ->update([
+                    'is_active' => false,
+                    'removed_at' => $scannedAt,
+                ]);
+        }
+    }
+
+    private function storePostComments(
+        InstagramPost $post,
+        InstagramPostScan $scan,
+        array $comments,
+        bool $complete,
+        array $actorProfileIds,
+        Carbon $scannedAt,
+    ): void {
+        $observedIds = [];
+
+        foreach ($comments as $comment) {
+            $observedIds[] = $comment['instagram_comment_id'];
+            $existing = InstagramPostComment::query()
+                ->where('instagram_post_id', $post->id)
+                ->where('instagram_comment_id', $comment['instagram_comment_id'])
+                ->first();
+
+            InstagramPostComment::updateOrCreate(
+                [
+                    'instagram_post_id' => $post->id,
+                    'instagram_comment_id' => $comment['instagram_comment_id'],
+                ],
+                [
+                    ...$comment,
+                    'parent_comment_id' => null,
+                    'instagram_profile_id' => $actorProfileIds[$comment['username'] ?? ''] ?? null,
+                    'first_seen_scan_id' => $existing?->first_seen_scan_id ?: $scan->id,
+                    'last_seen_scan_id' => $scan->id,
+                    'is_active' => true,
+                    'first_seen_at' => $existing?->first_seen_at ?: $scannedAt,
+                    'last_seen_at' => $scannedAt,
+                    'removed_at' => null,
+                ],
+            );
+        }
+
+        $this->linkPostCommentReplies($post, $comments);
+
+        if ($complete) {
+            InstagramPostComment::query()
+                ->where('instagram_post_id', $post->id)
+                ->where('is_active', true)
+                ->when($observedIds !== [], fn ($query) => $query->whereNotIn('instagram_comment_id', $observedIds))
+                ->update([
+                    'is_active' => false,
+                    'removed_at' => $scannedAt,
+                ]);
+        }
+    }
+
+    private function linkPostCommentReplies(InstagramPost $post, array $comments): void
+    {
+        $parentInstagramIds = collect($comments)
+            ->pluck('parent_instagram_comment_id')
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($parentInstagramIds === []) {
+            return;
+        }
+
+        $parentIds = InstagramPostComment::query()
+            ->where('instagram_post_id', $post->id)
+            ->whereIn('instagram_comment_id', $parentInstagramIds)
+            ->pluck('id', 'instagram_comment_id');
+
+        foreach ($comments as $comment) {
+            $parentInstagramId = $comment['parent_instagram_comment_id'] ?? null;
+            $parentId = $parentInstagramId ? $parentIds->get($parentInstagramId) : null;
+
+            if (! $parentId) {
+                continue;
+            }
+
+            InstagramPostComment::query()
+                ->where('instagram_post_id', $post->id)
+                ->where('instagram_comment_id', $comment['instagram_comment_id'])
+                ->update(['parent_comment_id' => $parentId]);
+        }
     }
 
     private function normalizeMediaItems(array $post): array
@@ -386,6 +668,13 @@ class TrackedPersonInstagramPostScanService
         $value = trim((string) $value);
 
         return $value !== '' ? $value : null;
+    }
+
+    private function normalizeUsername(mixed $value): ?string
+    {
+        $username = $this->nullableString($value);
+
+        return $username ? strtolower(ltrim($username, '@')) : null;
     }
 
     private function nullableInteger(mixed $value): ?int

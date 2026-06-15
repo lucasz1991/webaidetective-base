@@ -3,6 +3,7 @@
 namespace App\Livewire\User;
 
 use App\Models\CreditTransaction;
+use App\Models\InstagramPost;
 use App\Models\InstagramProfile;
 use App\Models\Setting;
 use App\Models\TrackedPerson;
@@ -23,6 +24,12 @@ class InstagramProfileDetail extends Component
     public bool $showListModal = false;
 
     public string $activeListType = 'followers';
+
+    public bool $showPostEngagementModal = false;
+
+    public ?int $selectedPostId = null;
+
+    public string $activePostEngagementType = 'likes';
 
     public ?string $detailStatus = null;
 
@@ -57,7 +64,11 @@ class InstagramProfileDetail extends Component
                 ->limit(10),
             'posts' => fn ($query) => $query
                 ->with('media')
-                ->withCount('metrics')
+                ->withCount([
+                    'metrics',
+                    'likes as stored_likes_count' => fn ($likes) => $likes->where('is_active', true),
+                    'comments as stored_comments_count' => fn ($comments) => $comments->where('is_active', true),
+                ])
                 ->latest('published_at')
                 ->latest('last_seen_at')
                 ->limit(24),
@@ -86,6 +97,21 @@ class InstagramProfileDetail extends Component
             ->latest('scanned_at')
             ->with(['items.relatedInstagramProfile'])
             ->first();
+        $selectedPost = null;
+
+        if ($this->showPostEngagementModal && $this->selectedPostId) {
+            $selectedPost = $profile->posts()
+                ->whereKey($this->selectedPostId)
+                ->with([
+                    'likes' => fn ($query) => $query
+                        ->where('is_active', true)
+                        ->orderBy('username'),
+                    'comments' => fn ($query) => $query
+                        ->where('is_active', true)
+                        ->orderByDesc('published_at'),
+                ])
+                ->first();
+        }
 
         $trackedPerson = $this->findTrackedPerson($profile);
         $latestSuggestionScan = $profile->suggestionScans->first();
@@ -156,6 +182,7 @@ class InstagramProfileDetail extends Component
                 ->latest()
                 ->limit(10)
                 ->get(),
+            'selectedPost' => $selectedPost,
         ])->layout('layouts.app');
     }
 
@@ -187,6 +214,27 @@ class InstagramProfileDetail extends Component
 
         $this->activeListType = $listType;
         $this->showListModal = true;
+    }
+
+    public function openPostEngagementModal(int $postId, string $type): void
+    {
+        if (! in_array($type, ['likes', 'comments'], true)) {
+            return;
+        }
+
+        $profile = $this->resolveProfile();
+        $postExists = InstagramPost::query()
+            ->whereKey($postId)
+            ->where('instagram_profile_id', $profile->id)
+            ->exists();
+
+        if (! $postExists) {
+            return;
+        }
+
+        $this->selectedPostId = $postId;
+        $this->activePostEngagementType = $type;
+        $this->showPostEngagementModal = true;
     }
 
     public function scanInstagramSuggestions(): void
@@ -385,6 +433,7 @@ class InstagramProfileDetail extends Component
                     ->orWhereHas('publicProfileLinks', fn ($links) => $links->where('user_id', $userId))
                     ->orWhereHas('listScans', fn ($scans) => $scans->where('user_id', $userId))
                     ->orWhereHas('profileScans', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas('postScans', fn ($scans) => $scans->where('user_id', $userId))
                     ->orWhereHas('suggestionScans', fn ($scans) => $scans->where('user_id', $userId))
                     ->orWhereHas('sourceRelationships.scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
                     ->orWhereHas('relatedRelationships.scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))

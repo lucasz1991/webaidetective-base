@@ -79,4 +79,14 @@ class InstagramPostScan extends Model
     {
         return $this->hasMany(InstagramPostMetric::class, 'instagram_post_scan_id');
     }
+
+    public function firstSeenLikes(): HasMany
+    {
+        return $this->hasMany(InstagramPostLike::class, 'first_seen_scan_id');
+    }
+
+    public function firstSeenComments(): HasMany
+    {
+        return $this->hasMany(InstagramPostComment::class, 'first_seen_scan_id');
+    }
 }

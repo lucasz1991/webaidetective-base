@@ -492,9 +492,27 @@
                         @if($post->caption)
                             <p class="mt-2 line-clamp-2 text-sm text-slate-700">{{ $post->caption }}</p>
                         @endif
-                        <div class="mt-3 flex gap-4 text-sm font-semibold text-slate-800">
-                            <span>{{ $post->likes_count !== null ? number_format($post->likes_count) : '-' }} Likes</span>
-                            <span>{{ $post->comments_count !== null ? number_format($post->comments_count) : '-' }} Kommentare</span>
+                        <div class="mt-3 flex flex-wrap gap-2 text-sm font-semibold">
+                            <button
+                                type="button"
+                                wire:click="openPostEngagementModal({{ $post->id }}, 'likes')"
+                                class="rounded-lg border border-pink-200 bg-pink-50 px-2.5 py-1.5 text-pink-800 hover:bg-pink-100"
+                            >
+                                {{ $post->likes_count !== null ? number_format($post->likes_count) : '-' }} Likes
+                                <span class="ml-1 text-xs font-normal text-pink-600">
+                                    ({{ number_format($post->stored_likes_count ?? 0) }} gespeichert)
+                                </span>
+                            </button>
+                            <button
+                                type="button"
+                                wire:click="openPostEngagementModal({{ $post->id }}, 'comments')"
+                                class="rounded-lg border border-violet-200 bg-violet-50 px-2.5 py-1.5 text-violet-800 hover:bg-violet-100"
+                            >
+                                {{ $post->comments_count !== null ? number_format($post->comments_count) : '-' }} Kommentare
+                                <span class="ml-1 text-xs font-normal text-violet-600">
+                                    ({{ number_format($post->stored_comments_count ?? 0) }} gespeichert)
+                                </span>
+                            </button>
                         </div>
                         <div class="mt-1 text-xs text-slate-500">
                             {{ number_format($post->metrics_count ?? 0) }} gespeicherte Messpunkte
@@ -564,4 +582,145 @@
         :title="$activeListType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste'"
         :scan="$activeListType === 'followers' ? $latestFollowersScan : $latestFollowingScan"
     />
+
+    <x-modal wire:model="showPostEngagementModal" maxWidth="3xl">
+        <div
+            wire:key="post-engagement-{{ $selectedPostId ?: 'none' }}"
+            x-data="{ tab: @js($activePostEngagementType), search: '' }"
+            class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]"
+        >
+            <div class="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-start sm:justify-between sm:px-5 sm:py-4">
+                <div>
+                    <h3 class="text-lg font-bold text-slate-900">Beitragsreaktionen</h3>
+                    <p class="mt-1 text-sm text-slate-500">
+                        @if($selectedPost)
+                            Beitrag {{ $selectedPost->shortcode }}
+                            &middot; {{ number_format($selectedPost->likes->count()) }} Likes gespeichert
+                            &middot; {{ number_format($selectedPost->comments->count()) }} Kommentare gespeichert
+                        @else
+                            Kein Beitrag ausgewaehlt.
+                        @endif
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    x-on:click="$dispatch('close')"
+                    class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                    Schliessen
+                </button>
+            </div>
+
+            @if($selectedPost)
+                <div class="border-b border-slate-200 px-4 py-3 sm:px-5">
+                    <div class="flex flex-col gap-3 sm:flex-row">
+                        <div class="flex rounded-xl bg-slate-100 p-1">
+                            <button
+                                type="button"
+                                x-on:click="tab = 'likes'"
+                                x-bind:class="tab === 'likes' ? 'bg-white text-pink-700 shadow-sm' : 'text-slate-600'"
+                                class="rounded-lg px-3 py-2 text-sm font-semibold"
+                            >
+                                Likes {{ number_format($selectedPost->likes->count()) }}
+                            </button>
+                            <button
+                                type="button"
+                                x-on:click="tab = 'comments'"
+                                x-bind:class="tab === 'comments' ? 'bg-white text-violet-700 shadow-sm' : 'text-slate-600'"
+                                class="rounded-lg px-3 py-2 text-sm font-semibold"
+                            >
+                                Kommentare {{ number_format($selectedPost->comments->count()) }}
+                            </button>
+                        </div>
+                        <input
+                            type="search"
+                            x-model.debounce.150ms="search"
+                            class="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-violet-500 focus:outline-none focus:ring-1 focus:ring-violet-500"
+                            placeholder="Nutzer oder Kommentar durchsuchen..."
+                        >
+                    </div>
+                </div>
+
+                <div class="overflow-y-auto p-4 sm:p-5">
+                    <div x-show="tab === 'likes'" class="space-y-2">
+                        @forelse($selectedPost->likes as $like)
+                            @php($likeSearch = strtolower(trim(($like->username ?? '').' '.($like->full_name ?? ''))))
+                            <div
+                                x-show="search === '' || @js($likeSearch).includes(search.toLowerCase())"
+                                class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3"
+                            >
+                                @if($like->profile_image_url)
+                                    <img src="{{ $like->profile_image_url }}" alt="" class="h-10 w-10 rounded-full object-cover">
+                                @else
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-full bg-pink-100 font-bold text-pink-700">
+                                        {{ strtoupper(substr($like->username ?: '?', 0, 1)) }}
+                                    </div>
+                                @endif
+                                <div class="min-w-0 flex-1">
+                                    <a
+                                        href="https://www.instagram.com/{{ $like->username }}/"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        class="font-semibold text-slate-900 hover:text-pink-700"
+                                    >
+                                        {{ $like->username ? '@'.$like->username : $like->instagram_user_id }}
+                                    </a>
+                                    @if($like->full_name)
+                                        <div class="truncate text-sm text-slate-500">{{ $like->full_name }}</div>
+                                    @endif
+                                </div>
+                                <span class="text-xs text-slate-400">{{ $like->last_seen_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') }}</span>
+                            </div>
+                        @empty
+                            <p class="text-sm text-slate-500">Noch keine einzelnen Likes gespeichert.</p>
+                        @endforelse
+                    </div>
+
+                    <div x-show="tab === 'comments'" class="space-y-3">
+                        @forelse($selectedPost->comments as $comment)
+                            @php($commentSearch = strtolower(trim(($comment->username ?? '').' '.($comment->full_name ?? '').' '.$comment->comment_text)))
+                            <div
+                                x-show="search === '' || @js($commentSearch).includes(search.toLowerCase())"
+                                @class([
+                                    'rounded-xl border border-slate-200 bg-white p-3',
+                                    'ml-6 border-l-4 border-l-violet-300' => $comment->parent_comment_id,
+                                ])
+                            >
+                                <div class="flex items-start gap-3">
+                                    @if($comment->profile_image_url)
+                                        <img src="{{ $comment->profile_image_url }}" alt="" class="h-10 w-10 rounded-full object-cover">
+                                    @else
+                                        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-violet-100 font-bold text-violet-700">
+                                            {{ strtoupper(substr($comment->username ?: '?', 0, 1)) }}
+                                        </div>
+                                    @endif
+                                    <div class="min-w-0 flex-1">
+                                        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                            <a
+                                                href="https://www.instagram.com/{{ $comment->username }}/"
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                class="font-semibold text-slate-900 hover:text-violet-700"
+                                            >
+                                                {{ $comment->username ? '@'.$comment->username : $comment->instagram_user_id }}
+                                            </a>
+                                            @if($comment->published_at)
+                                                <span class="text-xs text-slate-400">{{ $comment->published_at->timezone(config('app.timezone'))->format('d.m.Y H:i') }}</span>
+                                            @endif
+                                        </div>
+                                        <p class="mt-1 whitespace-pre-line text-sm leading-6 text-slate-700">{{ $comment->comment_text }}</p>
+                                        @if($comment->likes_count !== null)
+                                            <div class="mt-1 text-xs font-semibold text-pink-700">{{ number_format($comment->likes_count) }} Likes</div>
+                                        @endif
+                                    </div>
+                                </div>
+                            </div>
+                        @empty
+                            <p class="text-sm text-slate-500">Noch keine einzelnen Kommentare gespeichert.</p>
+                        @endforelse
+                    </div>
+                </div>
+            @endif
+        </div>
+    </x-modal>
 </div>

@@ -83,6 +83,8 @@ class InstagramScanPolicyService
             $runtime += [
                 'postScanMaxItems' => max(1, (int) ($policy['max_items'] ?? 100)),
                 'postScanMaxScrollRounds' => max(1, (int) ($policy['max_scroll_rounds'] ?? 40)),
+                'postScanMaxLikesPerPost' => max(1, (int) ($policy['max_likes_per_post'] ?? 250)),
+                'postScanMaxCommentsPerPost' => max(1, (int) ($policy['max_comments_per_post'] ?? 250)),
             ];
         }
 
