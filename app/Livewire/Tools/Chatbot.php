@@ -11,6 +11,7 @@ use App\Services\Ai\InvestigationAssistantScanStatusStore;
 use App\Services\Ai\InvestigationAssistantToolService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use App\Services\TrackedPeople\TrackedPersonScanDispatcher;
+use App\Support\AiConnectionLogger;
 use GuzzleHttp\Psr7\Utils;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Auth;
@@ -628,29 +629,88 @@ class Chatbot extends Component
         ?callable $onTextDelta = null,
     ): array {
         $apiUrl = trim((string) $this->apiUrl);
+        $payload = [
+            'model' => $this->aiModel,
+            'messages' => $messages,
+            'tools' => $tools,
+            'tool_choice' => 'auto',
+            'temperature' => 0.2,
+            'stream' => true,
+        ];
+        $connectionLogger = app(AiConnectionLogger::class);
+        $connectionId = $connectionLogger->connectionId();
+        $startedAt = microtime(true);
 
-        $response = Http::acceptJson()
-            ->asJson()
-            ->withToken($apiKey)
-            ->withHeaders(array_filter([
-                'HTTP-Referer' => trim((string) $this->refererUrl),
-                'X-Title' => trim((string) $this->modelTitle),
-            ]))
-            ->withoutRedirecting()
-            ->connectTimeout(15)
-            ->timeout(90)
-            ->withOptions([
-                'stream' => true,
-                'http_errors' => false,
-            ])
-            ->post($apiUrl, [
-                'model' => $this->aiModel,
-                'messages' => $messages,
-                'tools' => $tools,
-                'tool_choice' => 'auto',
-                'temperature' => 0.2,
-                'stream' => true,
+        $connectionLogger->write('info', 'OpenRouter chat request started.', [
+            'connection_id' => $connectionId,
+            'user_id' => Auth::id(),
+            'api_url' => $apiUrl,
+            'model' => $this->aiModel,
+            'message_count' => count($messages),
+            'message_roles' => array_values(array_filter(array_map(
+                static fn (mixed $message): ?string => is_array($message)
+                    ? (is_string($message['role'] ?? null) ? $message['role'] : null)
+                    : null,
+                $messages,
+            ))),
+            'tool_count' => count($tools),
+            'payload_bytes' => strlen((string) json_encode($payload)),
+            'stream' => true,
+        ]);
+
+        try {
+            $response = Http::acceptJson()
+                ->asJson()
+                ->withToken($apiKey)
+                ->withHeaders(array_filter([
+                    'HTTP-Referer' => trim((string) $this->refererUrl),
+                    'X-Title' => trim((string) $this->modelTitle),
+                ]))
+                ->withoutRedirecting()
+                ->connectTimeout(15)
+                ->timeout(90)
+                ->withOptions([
+                    'stream' => true,
+                    'http_errors' => false,
+                ])
+                ->post($apiUrl, $payload);
+        } catch (\Throwable $exception) {
+            $connectionLogger->write('error', 'OpenRouter chat transport failed.', [
+                'connection_id' => $connectionId,
+                'duration_ms' => $connectionLogger->durationMs($startedAt),
+                'exception' => $exception::class,
+                'error' => $connectionLogger->excerpt($exception->getMessage()),
             ]);
+
+            throw $exception;
+        }
+
+        $connectionLogger->write(
+            $response->successful() ? 'info' : 'warning',
+            'OpenRouter chat response received.',
+            [
+                'connection_id' => $connectionId,
+                'duration_ms' => $connectionLogger->durationMs($startedAt),
+                'status' => $response->status(),
+                'content_type' => (string) $response->header('Content-Type'),
+                'location' => (string) $response->header('Location'),
+                'request_id' => (string) ($response->header('X-Request-ID')
+                    ?: $response->header('X-OpenRouter-Request-ID')),
+                'cf_ray' => (string) $response->header('CF-Ray'),
+            ],
+        );
+
+        $errorBody = null;
+
+        if (! $response->successful()) {
+            $errorBody = (string) $response->toPsrResponse()->getBody();
+            $connectionLogger->write('error', 'OpenRouter chat request rejected.', [
+                'connection_id' => $connectionId,
+                'duration_ms' => $connectionLogger->durationMs($startedAt),
+                'status' => $response->status(),
+                'response_excerpt' => $connectionLogger->excerpt($errorBody),
+            ]);
+        }
 
         if ($response->redirect()) {
             $location = (string) $response->header('Location');
@@ -672,29 +732,52 @@ class Chatbot extends Component
         if (! $response->successful()) {
             throw new \RuntimeException(
                 'AI-API antwortet mit HTTP '.$response->status().': '
-                .mb_substr((string) $response->toPsrResponse()->getBody(), 0, 500),
+                .mb_substr((string) $errorBody, 0, 500),
             );
         }
 
         $body = $response->toPsrResponse()->getBody();
         $contentType = Str::lower((string) $response->header('Content-Type'));
 
-        if (str_contains($contentType, 'text/event-stream')) {
-            return $this->parseAssistantEventStream($body, $onTextDelta);
+        try {
+            if (str_contains($contentType, 'text/event-stream')) {
+                $payload = $this->parseAssistantEventStream($body, $onTextDelta);
+            } else {
+                $payload = json_decode((string) $body, true);
+
+                if (! is_array($payload)) {
+                    throw new \RuntimeException('AI-API lieferte kein gueltiges JSON.');
+                }
+
+                $content = data_get($payload, 'choices.0.message.content');
+                $toolCalls = data_get($payload, 'choices.0.message.tool_calls', []);
+
+                if (is_callable($onTextDelta) && is_string($content) && $content !== '' && $toolCalls === []) {
+                    $this->streamBufferedAssistantText($content, $onTextDelta);
+                }
+            }
+        } catch (\Throwable $exception) {
+            $connectionLogger->write('error', 'OpenRouter chat response processing failed.', [
+                'connection_id' => $connectionId,
+                'duration_ms' => $connectionLogger->durationMs($startedAt),
+                'status' => $response->status(),
+                'exception' => $exception::class,
+                'error' => $connectionLogger->excerpt($exception->getMessage()),
+            ]);
+
+            throw $exception;
         }
 
-        $payload = json_decode((string) $body, true);
-
-        if (! is_array($payload)) {
-            throw new \RuntimeException('AI-API lieferte kein gueltiges JSON.');
-        }
-
-        $content = data_get($payload, 'choices.0.message.content');
-        $toolCalls = data_get($payload, 'choices.0.message.tool_calls', []);
-
-        if (is_callable($onTextDelta) && is_string($content) && $content !== '' && $toolCalls === []) {
-            $this->streamBufferedAssistantText($content, $onTextDelta);
-        }
+        $connectionLogger->write('info', 'OpenRouter chat request completed.', [
+            'connection_id' => $connectionId,
+            'duration_ms' => $connectionLogger->durationMs($startedAt),
+            'status' => $response->status(),
+            'response_model' => data_get($payload, 'model'),
+            'finish_reason' => data_get($payload, 'choices.0.finish_reason'),
+            'content_characters' => mb_strlen((string) data_get($payload, 'choices.0.message.content', '')),
+            'tool_call_count' => count((array) data_get($payload, 'choices.0.message.tool_calls', [])),
+            'usage' => data_get($payload, 'usage'),
+        ]);
 
         return $payload;
     }

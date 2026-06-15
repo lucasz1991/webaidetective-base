@@ -73,6 +73,14 @@ return [
             'replace_placeholders' => true,
         ],
 
+        'ai_connections' => [
+            'driver' => 'daily',
+            'path' => storage_path('logs/ai-connections.log'),
+            'level' => 'debug',
+            'days' => 14,
+            'replace_placeholders' => true,
+        ],
+
         'slack' => [
             'driver' => 'slack',
             'url' => env('LOG_SLACK_WEBHOOK_URL'),

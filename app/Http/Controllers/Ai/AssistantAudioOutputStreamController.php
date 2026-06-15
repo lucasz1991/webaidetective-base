@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Ai;
 
 use App\Http\Controllers\Controller;
 use App\Models\Setting;
+use App\Support\AiConnectionLogger;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -49,6 +50,20 @@ class AssistantAudioOutputStreamController extends Controller
             'pcm' => 'audio/pcm',
             default => 'audio/mpeg',
         };
+        $connectionLogger = app(AiConnectionLogger::class);
+        $connectionId = $connectionLogger->connectionId();
+        $startedAt = microtime(true);
+
+        $connectionLogger->write('info', 'OpenRouter TTS request started.', [
+            'connection_id' => $connectionId,
+            'user_id' => $request->user()?->id,
+            'api_url' => $apiUrl,
+            'model' => $model,
+            'voice' => $voice !== '' ? $voice : 'alloy',
+            'format' => $format,
+            'speed' => $speed,
+            'input_characters' => mb_strlen(trim((string) $validated['text'])),
+        ]);
 
         try {
             $providerResponse = Http::withToken($apiKey)
@@ -73,6 +88,13 @@ class AssistantAudioOutputStreamController extends Controller
                     'speed' => $speed,
                 ], static fn ($value): bool => $value !== null && $value !== ''));
         } catch (\Throwable $exception) {
+            $connectionLogger->write('error', 'OpenRouter TTS transport failed.', [
+                'connection_id' => $connectionId,
+                'duration_ms' => $connectionLogger->durationMs($startedAt),
+                'exception' => $exception::class,
+                'error' => $connectionLogger->excerpt($exception->getMessage()),
+            ]);
+
             Log::warning('Assistant OpenRouter TTS request failed.', [
                 'error' => $exception->getMessage(),
                 'api_url' => $apiUrl,
@@ -84,6 +106,34 @@ class AssistantAudioOutputStreamController extends Controller
             ], 502);
         }
 
+        $connectionLogger->write(
+            $providerResponse->successful() ? 'info' : 'warning',
+            'OpenRouter TTS response received.',
+            [
+                'connection_id' => $connectionId,
+                'duration_ms' => $connectionLogger->durationMs($startedAt),
+                'status' => $providerResponse->status(),
+                'content_type' => (string) $providerResponse->header('Content-Type'),
+                'content_length' => (string) $providerResponse->header('Content-Length'),
+                'location' => (string) $providerResponse->header('Location'),
+                'request_id' => (string) ($providerResponse->header('X-Request-ID')
+                    ?: $providerResponse->header('X-OpenRouter-Request-ID')),
+                'cf_ray' => (string) $providerResponse->header('CF-Ray'),
+            ],
+        );
+
+        $errorBody = null;
+
+        if (! $providerResponse->successful()) {
+            $errorBody = (string) $providerResponse->toPsrResponse()->getBody();
+            $connectionLogger->write('error', 'OpenRouter TTS request rejected.', [
+                'connection_id' => $connectionId,
+                'duration_ms' => $connectionLogger->durationMs($startedAt),
+                'status' => $providerResponse->status(),
+                'response_excerpt' => $connectionLogger->excerpt($errorBody),
+            ]);
+        }
+
         if ($providerResponse->redirect()) {
             return response()->json([
                 'message' => 'Der OpenRouter-Audio-Endpoint leitet weiter. Bitte die finale OpenRouter-TTS-URL direkt konfigurieren.',
@@ -92,25 +142,35 @@ class AssistantAudioOutputStreamController extends Controller
         }
 
         if (! $providerResponse->successful()) {
-            $body = (string) $providerResponse->toPsrResponse()->getBody();
-
             return response()->json([
                 'message' => 'OpenRouter Audio/TTS antwortet mit HTTP '.$providerResponse->status().'.',
-                'detail' => mb_substr($body, 0, 1000),
+                'detail' => mb_substr((string) $errorBody, 0, 1000),
             ], 502);
         }
 
         $body = $providerResponse->toPsrResponse()->getBody();
 
-        return response()->stream(function () use ($body): void {
-            while (! $body->eof()) {
-                echo $body->read(8192);
+        return response()->stream(function () use ($body, $connectionId, $connectionLogger, $startedAt): void {
+            $bytes = 0;
 
-                if (function_exists('ob_flush')) {
-                    @ob_flush();
+            try {
+                while (! $body->eof()) {
+                    $chunk = $body->read(8192);
+                    $bytes += strlen($chunk);
+                    echo $chunk;
+
+                    if (function_exists('ob_flush')) {
+                        @ob_flush();
+                    }
+
+                    flush();
                 }
-
-                flush();
+            } finally {
+                $connectionLogger->write('info', 'OpenRouter TTS stream completed.', [
+                    'connection_id' => $connectionId,
+                    'duration_ms' => $connectionLogger->durationMs($startedAt),
+                    'streamed_bytes' => $bytes,
+                ]);
             }
         }, 200, [
             'Content-Type' => $contentType,
