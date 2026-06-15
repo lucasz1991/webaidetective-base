@@ -11,6 +11,8 @@ use Illuminate\Support\Str;
 
 class AssistantAudioOutputStreamController extends Controller
 {
+    private const OPENROUTER_AUDIO_SPEECH_URL = 'https://openrouter.ai/api/v1/audio/speech';
+
     public function __invoke(Request $request)
     {
         $validated = $request->validate([
@@ -21,15 +23,23 @@ class AssistantAudioOutputStreamController extends Controller
         ]);
 
         $apiKey = $this->setting('api_key');
-        $model = $this->setting('audio_output_model', 'tts-1');
-        $apiUrl = $this->audioOutputApiUrl();
+        $model = $this->setting('audio_output_model');
+        $apiUrl = $this->openRouterAudioOutputApiUrl();
         $voice = trim((string) ($validated['voice'] ?? $this->setting('audio_output_voice', 'alloy')));
         $format = (string) ($validated['format'] ?? $this->setting('audio_output_format', 'mp3'));
         $speed = (float) ($validated['speed'] ?? 1);
 
         if ($apiKey === '' || $model === '' || $apiUrl === '') {
             return response()->json([
-                'message' => 'Audio-Ausgabe ist nicht konfiguriert. Bitte API-Key, TTS-Modell und Audio-Endpoint prüfen.',
+                'message' => 'OpenRouter-Audioausgabe ist nicht konfiguriert. Bitte API-Key, OpenRouter-TTS-Modell und OpenRouter-Audio-Endpoint prüfen.',
+            ], 422);
+        }
+
+        if (! $this->isOpenRouterUrl($apiUrl)) {
+            return response()->json([
+                'message' => 'Die Audioausgabe ist auf OpenRouter festgelegt. Bitte als Audio-Endpoint eine OpenRouter-URL verwenden.',
+                'configured_url' => $apiUrl,
+                'expected_default' => self::OPENROUTER_AUDIO_SPEECH_URL,
             ], 422);
         }
 
@@ -63,20 +73,20 @@ class AssistantAudioOutputStreamController extends Controller
                     'speed' => $speed,
                 ], static fn ($value): bool => $value !== null && $value !== ''));
         } catch (\Throwable $exception) {
-            Log::warning('Assistant TTS request failed.', [
+            Log::warning('Assistant OpenRouter TTS request failed.', [
                 'error' => $exception->getMessage(),
                 'api_url' => $apiUrl,
                 'model' => $model,
             ]);
 
             return response()->json([
-                'message' => 'Die Audio-Ausgabe konnte nicht gestartet werden: '.$exception->getMessage(),
+                'message' => 'Die OpenRouter-Audioausgabe konnte nicht gestartet werden: '.$exception->getMessage(),
             ], 502);
         }
 
         if ($providerResponse->redirect()) {
             return response()->json([
-                'message' => 'Der Audio-Endpoint leitet weiter. Bitte die finale TTS-URL direkt konfigurieren.',
+                'message' => 'Der OpenRouter-Audio-Endpoint leitet weiter. Bitte die finale OpenRouter-TTS-URL direkt konfigurieren.',
                 'location' => (string) $providerResponse->header('Location'),
             ], 422);
         }
@@ -85,7 +95,7 @@ class AssistantAudioOutputStreamController extends Controller
             $body = (string) $providerResponse->toPsrResponse()->getBody();
 
             return response()->json([
-                'message' => 'Die TTS-API antwortet mit HTTP '.$providerResponse->status().'.',
+                'message' => 'OpenRouter Audio/TTS antwortet mit HTTP '.$providerResponse->status().'.',
                 'detail' => mb_substr($body, 0, 1000),
             ], 502);
         }
@@ -110,7 +120,7 @@ class AssistantAudioOutputStreamController extends Controller
         ]);
     }
 
-    private function audioOutputApiUrl(): string
+    private function openRouterAudioOutputApiUrl(): string
     {
         $explicit = $this->setting('audio_output_api_url');
 
@@ -120,11 +130,22 @@ class AssistantAudioOutputStreamController extends Controller
 
         $chatApiUrl = $this->setting('api_url');
 
-        if ($chatApiUrl !== '' && Str::contains($chatApiUrl, '/chat/completions')) {
+        if (
+            $chatApiUrl !== ''
+            && $this->isOpenRouterUrl($chatApiUrl)
+            && Str::contains($chatApiUrl, '/chat/completions')
+        ) {
             return Str::replace('/chat/completions', '/audio/speech', $chatApiUrl);
         }
 
-        return 'https://api.openai.com/v1/audio/speech';
+        return self::OPENROUTER_AUDIO_SPEECH_URL;
+    }
+
+    private function isOpenRouterUrl(string $url): bool
+    {
+        $host = Str::lower((string) parse_url($url, PHP_URL_HOST));
+
+        return $host === 'openrouter.ai' || Str::endsWith($host, '.openrouter.ai');
     }
 
     private function setting(string $key, ?string $default = ''): string
