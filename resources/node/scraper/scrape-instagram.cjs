@@ -2093,7 +2093,15 @@ async function collectProfilePostLinks(page, username, expectedCount, runtimeCon
   return result;
 }
 
-async function collectInstagramPosts(page, profile, username, profileUrl, runtimeConfig = {}) {
+async function collectInstagramPosts(
+  page,
+  profile,
+  username,
+  profileUrl,
+  runtimeConfig = {},
+  runtimeState = null,
+  notes = [],
+) {
   const expectedCount = Math.max(0, Number(profile?.counts?.posts || 0));
 
   if (profile?.isPrivate) {
@@ -2203,12 +2211,33 @@ async function collectInstagramPosts(page, profile, username, profileUrl, runtim
 
     await sleep(1100);
 
+    if (runtimeState) {
+      const recovery = await recoverFromInstagramDailyTimeLimit(
+        page,
+        runtimeState,
+        notes,
+        'posts',
+        link.postUrl,
+      );
+
+      runtimeConfig = runtimeState.runtimeConfig;
+
+      if (!recovery.recovered) {
+        rateLimited = true;
+        failedItems.push({
+          ...link,
+          error: 'instagram-daily-time-limit',
+        });
+        break;
+      }
+    }
+
     const details = await page.evaluate((profileUsername) => ({
       bodyText: document.body?.innerText || '',
       description: document.querySelector('meta[property="og:description"]')?.getAttribute('content') || null,
       thumbnailUrl: document.querySelector('meta[property="og:image"]')?.getAttribute('content') || null,
       publishedAt: document.querySelector('time[datetime]')?.getAttribute('datetime') || null,
-      rateLimited: /rate limit|bitte warte einige minuten|please wait a few minutes/i.test(document.body?.innerText || ''),
+      rateLimited: /rate limit|bitte warte einige minuten|please wait a few minutes|t[aä]gliches zeitlimit erreicht|daily time limit reached|reached your daily time limit/i.test(document.body?.innerText || ''),
       ownerSeen: Array.from(document.querySelectorAll('a[href]')).some((anchor) => {
         try {
           const pathParts = new URL(anchor.getAttribute('href'), window.location.origin).pathname
@@ -2699,7 +2728,7 @@ async function enrichProfileEntriesWithHoverCards(page, entries = [], hoveredUse
 async function collectFollowerEntriesFromDialog(page) {
   return page.evaluate(() => {
     const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
-    const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|zu viele anfragen|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|try again later|too many requests|429|error 429|we restrict certain activity|we limit how often|this action was blocked|rate limit)/i;
+    const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|zu viele anfragen|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|t(?:a|\u00e4)gliches zeitlimit erreicht|du hast dein t(?:a|\u00e4)gliches zeitlimit erreicht|try again later|too many requests|429|error 429|we restrict certain activity|we limit how often|this action was blocked|daily time limit reached|reached your daily time limit|rate limit)/i;
     const rateLimitDialog = Array.from(document.querySelectorAll('div[role="dialog"]'))
       .find((dialogElement) => rateLimitPattern.test(
         normalizeElementText(dialogElement.innerText || dialogElement.textContent || ''),
@@ -4522,7 +4551,7 @@ async function detectInstagramHttp429Page(page) {
 
   return {
     ...diagnostics,
-    detected: /http\s*error\s*429|error\s*429|this page isn'?t working|too many requests|status\s*429/.test(haystack),
+    detected: /http\s*error\s*429|error\s*429|this page isn'?t working|too many requests|status\s*429|t(?:a|\u00e4)gliches zeitlimit erreicht|du hast dein t(?:a|\u00e4)gliches zeitlimit erreicht|daily time limit reached|reached your daily time limit/.test(haystack),
   };
 }
 
@@ -5018,7 +5047,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
       .replace(/^@/, '')
       .replace(/[^a-z0-9._]/gi, '')
       .toLowerCase();
-    const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|zu viele anfragen|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|try again later|too many requests|429|error 429|we restrict certain activity|we limit how often|this action was blocked|rate limit)/i;
+    const rateLimitPattern = /(?:versuche es sp(?:a|\u00e4)ter noch einmal|zu viele anfragen|wir schr(?:a|\u00e4)nken die h(?:a|\u00e4)ufigkeit|t(?:a|\u00e4)gliches zeitlimit erreicht|du hast dein t(?:a|\u00e4)gliches zeitlimit erreicht|try again later|too many requests|429|error 429|we restrict certain activity|we limit how often|this action was blocked|daily time limit reached|reached your daily time limit|rate limit)/i;
     const discoverMorePattern = /(?:entdecke mehr konten|weitere konten entdecken|discover more accounts|find more accounts)/i;
     const bodyText = normalizeElementText(document.body?.innerText || document.body?.textContent || '');
 
@@ -7022,6 +7051,32 @@ function getRuntimeAccountPool(runtimeConfig = {}) {
   }];
 }
 
+async function detectInstagramDailyTimeLimit(page) {
+  return page.evaluate(() => {
+    const bodyText = String(document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    const normalized = bodyText.toLowerCase();
+    const matched = [
+      'du hast dein tägliches zeitlimit erreicht',
+      'du hast dein taegliches zeitlimit erreicht',
+      'tägliches zeitlimit erreicht',
+      'taegliches zeitlimit erreicht',
+      'you have reached your daily time limit',
+      "you've reached your daily time limit",
+      'daily time limit reached',
+    ].some((needle) => normalized.includes(needle));
+
+    return {
+      matched,
+      text: matched ? bodyText.slice(0, 1000) : null,
+      url: window.location.href,
+    };
+  }).catch(() => ({
+    matched: false,
+    text: null,
+    url: page.url(),
+  }));
+}
+
 function selectNextRuntimeAccount(runtimeConfig, usedAccountKeys) {
   const accountPool = getRuntimeAccountPool(runtimeConfig);
 
@@ -7200,6 +7255,96 @@ async function switchScraperAccountAfterRateLimit(page, runtimeConfig, notes, re
       loginDiagnostics: sessionResult.loginDiagnostics,
     });
   }
+}
+
+async function recoverFromInstagramDailyTimeLimit(
+  page,
+  runtimeState,
+  notes,
+  relationship,
+  retryUrl,
+) {
+  const maxAttempts = Math.max(1, getRuntimeAccountPool(runtimeState.runtimeConfig).length);
+  let switched = false;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const detection = await detectInstagramDailyTimeLimit(page);
+
+    if (!detection.matched) {
+      return {
+        detected: switched,
+        switched,
+        recovered: true,
+        exhausted: false,
+      };
+    }
+
+    const rateLimitText = detection.text || 'Instagram daily time limit reached';
+
+    progressLog('instagram-daily-time-limit', {
+      relationship,
+      rateLimited: true,
+      reason: 'instagram-daily-time-limit',
+      rateLimitText,
+      url: detection.url,
+      message: 'Instagram-Zeitlimit erkannt; Scraper-Profil wird gewechselt.',
+      ...(await captureLivePreviewScreenshot(page, runtimeState.runtimeConfig, true)),
+    });
+    recordRunDebug('instagram-daily-time-limit-detected', {
+      relationship,
+      attempt: attempt + 1,
+      url: detection.url,
+      text: rateLimitText,
+      profileLabel: runtimeState.runtimeConfig.profileLabel || null,
+    });
+
+    const switchResult = await switchScraperAccountAfterRateLimit(
+      page,
+      runtimeState.runtimeConfig,
+      notes,
+      relationship,
+      'instagram-daily-time-limit',
+      runtimeState.usedAccountKeys,
+    );
+
+    if (!switchResult?.sessionEstablished) {
+      runtimeState.cookieSaveDisabled = true;
+
+      return {
+        detected: true,
+        switched,
+        recovered: false,
+        exhausted: true,
+      };
+    }
+
+    switched = true;
+    runtimeState.runtimeConfig = switchResult.runtimeConfig;
+    runtimeState.cookieFilePath = buildCookiePath(switchResult.runtimeConfig, pathHelperOptions);
+    runtimeState.cookieDiagnostics = switchResult.cookieDiagnostics;
+    runtimeState.loginDiagnostics = switchResult.loginDiagnostics;
+
+    const navigation = await navigateWithSoftTimeout(
+      page,
+      retryUrl || page.url(),
+      runtimeState.runtimeConfig,
+    );
+
+    if (!navigation.ok) {
+      notes.push(`Zielseite konnte nach dem Scraper-Profilwechsel nicht stabil geladen werden: ${navigation.error}`);
+    }
+
+    await sleep(1800);
+  }
+
+  const stillLimited = await detectInstagramDailyTimeLimit(page);
+
+  return {
+    detected: true,
+    switched,
+    recovered: !stillLimited.matched,
+    exhausted: stillLimited.matched,
+  };
 }
 
 function buildRelationshipCollectionOptions(runtimeConfig, relationship) {
@@ -8925,6 +9070,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
         navigateWithSoftTimeout,
         normalizeInstagramUsername,
         progressLog,
+        recoverFromInstagramDailyTimeLimit,
         runPublicConnectionBatch,
         sleep,
       },
@@ -8992,6 +9138,23 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       });
 
       await sleep(1800);
+
+      const timeLimitRecovery = await recoverFromInstagramDailyTimeLimit(
+        page,
+        runtimeState,
+        notes,
+        isSuggestionsMode ? 'suggestions' : 'profile',
+        profileUrl,
+      );
+
+      if (!timeLimitRecovery.recovered) {
+        throw new Error('Instagram-Zeitlimit auf allen verfuegbaren Scraper-Profilen erreicht.');
+      }
+
+      runtimeConfig = runtimeState.runtimeConfig;
+      cookieFilePath = runtimeState.cookieFilePath;
+      cookieDiagnostics = runtimeState.cookieDiagnostics;
+      loginDiagnostics = runtimeState.loginDiagnostics;
 
       initialHtml = await page.content();
       initialProfile = await collectProfileInfo(page, username);

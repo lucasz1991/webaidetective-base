@@ -684,10 +684,20 @@ class InstagramScraper
         }
 
         try {
+            $isDailyTimeLimit = Str::contains(
+                Str::lower(implode(' ', [
+                    (string) ($event['stage'] ?? ''),
+                    (string) ($event['reason'] ?? ''),
+                    (string) ($event['message'] ?? ''),
+                    (string) ($event['rateLimitText'] ?? ''),
+                ])),
+                ['daily-time-limit', 'daily time limit', 'tägliches zeitlimit', 'taegliches zeitlimit'],
+            );
+
             app(ScraperProfileDatabaseStore::class)->blockProfileForInstagramLimit(
                 $profileId,
                 $this->rateLimitBlockReason($event),
-                3600,
+                $isDailyTimeLimit ? 86400 : 3600,
                 [
                     'stage' => $this->nullableTrim($event['stage'] ?? null),
                     'relationship' => $this->nullableTrim($event['relationship'] ?? null),
@@ -715,6 +725,9 @@ class InstagramScraper
             || Str::contains($reason, ['instagram-rate-limit', 'rate-limit', 'rate_limited'])
             || Str::contains($message, ['rate-limit', 'rate limit'])
             || Str::contains($rateLimitText, [
+                'daily time limit',
+                'tägliches zeitlimit',
+                'taegliches zeitlimit',
                 'try again later',
                 'we restrict certain activity',
                 'we limit how often',
@@ -728,7 +741,11 @@ class InstagramScraper
         $stage = $this->nullableTrim($event['stage'] ?? null);
         $relationship = $this->nullableTrim($event['relationship'] ?? null);
 
-        return trim('instagram-rate-limit'.($relationship ? ':'.$relationship : '').($stage ? ':'.$stage : ''));
+        $prefix = Str::contains(Str::lower($stage ?? ''), 'daily-time-limit')
+            ? 'instagram-daily-time-limit'
+            : 'instagram-rate-limit';
+
+        return trim($prefix.($relationship ? ':'.$relationship : '').($stage ? ':'.$stage : ''));
     }
 
     private function normalizeConnectionProgressItems(mixed $items, int $limit = 40): array
@@ -1021,6 +1038,7 @@ class InstagramScraper
             'posts-opening-item' => $expected > 0 ? min(95, max(35, 35 + (int) floor(($loaded / max(1, $expected)) * 60))) : 50,
             'posts-item-collected' => $expected > 0 ? min(98, max(40, 35 + (int) floor(($loaded / max(1, $expected)) * 63))) : 75,
             'posts-complete' => 100,
+            'instagram-daily-time-limit' => 100,
             'account-switching' => 8,
             'profile-session-check' => 12,
             'profile-opening' => 25,

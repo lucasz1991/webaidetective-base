@@ -18,6 +18,7 @@ async function runInstagramPostsScanFlow(context) {
     markGracefulStopIfRequested,
     navigateWithSoftTimeout,
     progressLog,
+    recoverFromInstagramDailyTimeLimit,
     sleep,
   } = helpers;
 
@@ -39,6 +40,22 @@ async function runInstagramPostsScanFlow(context) {
   });
 
   await sleep(1800);
+
+  const timeLimitRecovery = await recoverFromInstagramDailyTimeLimit(
+    page,
+    context.runtimeState,
+    notes,
+    'posts',
+    profileUrl,
+  );
+  scanState.runtimeConfig = context.runtimeState.runtimeConfig;
+  scanState.cookieFilePath = context.runtimeState.cookieFilePath;
+  scanState.cookieDiagnostics = context.runtimeState.cookieDiagnostics;
+  scanState.loginDiagnostics = context.runtimeState.loginDiagnostics;
+
+  if (!timeLimitRecovery.recovered) {
+    throw new Error('Instagram-Zeitlimit auf allen verfuegbaren Scraper-Profilen erreicht.');
+  }
 
   scanState.initialHtml = await page.content();
   scanState.initialProfile = await collectProfileInfo(page, username);
@@ -70,7 +87,13 @@ async function runInstagramPostsScanFlow(context) {
     username,
     profileUrl,
     scanState.runtimeConfig,
+    context.runtimeState,
+    notes,
   );
+  scanState.runtimeConfig = context.runtimeState.runtimeConfig;
+  scanState.cookieFilePath = context.runtimeState.cookieFilePath;
+  scanState.cookieDiagnostics = context.runtimeState.cookieDiagnostics;
+  scanState.loginDiagnostics = context.runtimeState.loginDiagnostics;
   scanState.initialProfile.postsScan = scanState.postsScanResult;
   scanState.initialHtml = await page.content().catch(() => scanState.initialHtml);
   scanState.title = await page.title().catch(() => scanState.title);

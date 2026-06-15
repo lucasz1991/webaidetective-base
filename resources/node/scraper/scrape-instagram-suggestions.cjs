@@ -218,7 +218,7 @@ async function runProfileSuggestionConnectionScan(
     return detectInstagramHttp429Page(page);
   };
   const looksLikeHttp429 = (value) => (
-    /http\s*error\s*429|error\s*429|http\s*429|\b429\b|too many requests/i.test(String(value || ''))
+    /http\s*error\s*429|error\s*429|http\s*429|\b429\b|too many requests|t[aä]gliches zeitlimit erreicht|daily time limit reached|reached your daily time limit/i.test(String(value || ''))
   );
   const resultLooksLikeHttp429 = (result = {}) => (
     Number(result?.status || 0) === 429

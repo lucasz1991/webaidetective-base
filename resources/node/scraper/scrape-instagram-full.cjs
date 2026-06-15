@@ -21,6 +21,7 @@ async function runInstagramFullScanFlow(context) {
     markGracefulStopIfRequested,
     navigateWithSoftTimeout,
     progressLog,
+    recoverFromInstagramDailyTimeLimit,
     sleep,
   } = helpers;
 
@@ -42,6 +43,22 @@ async function runInstagramFullScanFlow(context) {
   });
 
   await sleep(1800);
+
+  const timeLimitRecovery = await recoverFromInstagramDailyTimeLimit(
+    page,
+    runtimeState,
+    notes,
+    'profile',
+    profileUrl,
+  );
+  scanState.runtimeConfig = runtimeState.runtimeConfig;
+  scanState.cookieFilePath = runtimeState.cookieFilePath;
+  scanState.cookieDiagnostics = runtimeState.cookieDiagnostics;
+  scanState.loginDiagnostics = runtimeState.loginDiagnostics;
+
+  if (!timeLimitRecovery.recovered) {
+    throw new Error('Instagram-Zeitlimit auf allen verfuegbaren Scraper-Profilen erreicht.');
+  }
 
   scanState.initialHtml = await page.content();
   scanState.initialProfile = await collectProfileInfo(page, username);
