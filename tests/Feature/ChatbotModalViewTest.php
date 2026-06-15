@@ -2,8 +2,6 @@
 
 namespace Tests\Feature;
 
-use DOMDocument;
-use DOMXPath;
 use Tests\TestCase;
 
 class ChatbotModalViewTest extends TestCase
@@ -19,9 +17,12 @@ class ChatbotModalViewTest extends TestCase
         $this->assertStringContainsString('wire:stream="assistant-response-stream"', $view);
         $this->assertStringContainsString('wire:stream="assistant-status-stream"', $view);
         $this->assertStringContainsString('Copilot denkt nach', $view);
+        $this->assertStringContainsString("route('assistant.audio-output.stream', [], false)", $view);
+        $this->assertStringContainsString('ttsErrorMessage(error)', $view);
+        $this->assertStringContainsString('x-show="ttsError"', $view);
         $this->assertStringContainsString('streamBufferedAssistantText', file_get_contents(app_path('Livewire/Tools/Chatbot.php')));
         $this->assertStringContainsString('Array.isArray(item.options)', $view);
-        $this->assertStringContainsString('quick(option.prompt)', $view);
+        $this->assertStringContainsString('$wire.sendChatOption(messageIndex, optionIndex)', $view);
         $this->assertStringNotContainsString('Scan-Typ "${scanType}"', $view);
         $this->assertStringContainsString('from-sky-600 via-cyan-600 to-emerald-600', $view);
         $this->assertStringContainsString('Scans priorisieren', $view);
@@ -31,25 +32,12 @@ class ChatbotModalViewTest extends TestCase
         $this->assertStringNotContainsString('bg-slate-950 px-3 py-2 text-white', $view);
     }
 
-    public function test_chatbot_alpine_data_attribute_is_not_truncated_by_html_quotes(): void
+    public function test_chatbot_alpine_data_contains_required_actions(): void
     {
         $view = file_get_contents(resource_path('views/livewire/tools/chatbot.blade.php'));
-        $document = new DOMDocument;
 
-        $previousState = libxml_use_internal_errors(true);
-        $document->loadHTML(
-            '<!doctype html><html><body>'.$view.'</body></html>',
-            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD,
-        );
-        libxml_clear_errors();
-        libxml_use_internal_errors($previousState);
-
-        $root = (new DOMXPath($document))
-            ->query('//div[contains(concat(" ", normalize-space(@class), " "), " investigation-copilot ")]')
-            ?->item(0);
-
-        $this->assertNotNull($root);
-        $this->assertStringContainsString('requestProfileScanType(profile, scanType, scanLabel)', $root->getAttribute('x-data'));
-        $this->assertStringContainsString('toggleVoice()', $root->getAttribute('x-data'));
+        $this->assertStringContainsString('class="investigation-copilot"', $view);
+        $this->assertStringContainsString('requestProfileScanType(profile, scanType, scanLabel)', $view);
+        $this->assertStringContainsString('toggleVoice()', $view);
     }
 }

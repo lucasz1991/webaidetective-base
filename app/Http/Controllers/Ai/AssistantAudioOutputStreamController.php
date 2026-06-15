@@ -16,6 +16,18 @@ class AssistantAudioOutputStreamController extends Controller
 
     public function __invoke(Request $request)
     {
+        $connectionLogger = app(AiConnectionLogger::class);
+        $connectionId = $connectionLogger->connectionId();
+        $startedAt = microtime(true);
+
+        $connectionLogger->write('info', 'OpenRouter TTS endpoint called.', [
+            'connection_id' => $connectionId,
+            'user_id' => $request->user()?->id,
+            'request_path' => $request->path(),
+            'request_host' => $request->getHost(),
+            'origin' => (string) $request->header('Origin'),
+        ]);
+
         $validated = $request->validate([
             'text' => ['required', 'string', 'max:2000'],
             'voice' => ['nullable', 'string', 'max:80'],
@@ -23,20 +35,47 @@ class AssistantAudioOutputStreamController extends Controller
             'speed' => ['nullable', 'numeric', 'min:0.25', 'max:4'],
         ]);
 
-        $apiKey = $this->setting('api_key');
-        $model = $this->setting('audio_output_model');
-        $apiUrl = $this->openRouterAudioOutputApiUrl();
-        $voice = trim((string) ($validated['voice'] ?? $this->setting('audio_output_voice', 'alloy')));
-        $format = (string) ($validated['format'] ?? $this->setting('audio_output_format', 'mp3'));
+        try {
+            $apiKey = $this->setting('api_key');
+            $model = $this->setting('audio_output_model');
+            $apiUrl = $this->openRouterAudioOutputApiUrl();
+            $voice = trim((string) ($validated['voice'] ?? $this->setting('audio_output_voice', 'alloy')));
+            $format = (string) ($validated['format'] ?? $this->setting('audio_output_format', 'mp3'));
+        } catch (\Throwable $exception) {
+            $connectionLogger->write('error', 'OpenRouter TTS configuration could not be loaded.', [
+                'connection_id' => $connectionId,
+                'duration_ms' => $connectionLogger->durationMs($startedAt),
+                'exception' => $exception::class,
+                'error' => $connectionLogger->excerpt($exception->getMessage()),
+            ]);
+
+            return response()->json([
+                'message' => 'Die Audio-Konfiguration konnte nicht geladen werden.',
+                'detail' => $exception->getMessage(),
+            ], 503);
+        }
+
         $speed = (float) ($validated['speed'] ?? 1);
 
         if ($apiKey === '' || $model === '' || $apiUrl === '') {
+            $connectionLogger->write('warning', 'OpenRouter TTS configuration is incomplete.', [
+                'connection_id' => $connectionId,
+                'api_key_present' => $apiKey !== '',
+                'model_present' => $model !== '',
+                'api_url_present' => $apiUrl !== '',
+            ]);
+
             return response()->json([
                 'message' => 'OpenRouter-Audioausgabe ist nicht konfiguriert. Bitte API-Key, OpenRouter-TTS-Modell und OpenRouter-Audio-Endpoint prüfen.',
             ], 422);
         }
 
         if (! $this->isOpenRouterUrl($apiUrl)) {
+            $connectionLogger->write('warning', 'OpenRouter TTS URL is invalid.', [
+                'connection_id' => $connectionId,
+                'api_url' => $apiUrl,
+            ]);
+
             return response()->json([
                 'message' => 'Die Audioausgabe ist auf OpenRouter festgelegt. Bitte als Audio-Endpoint eine OpenRouter-URL verwenden.',
                 'configured_url' => $apiUrl,
@@ -50,10 +89,6 @@ class AssistantAudioOutputStreamController extends Controller
             'pcm' => 'audio/pcm',
             default => 'audio/mpeg',
         };
-        $connectionLogger = app(AiConnectionLogger::class);
-        $connectionId = $connectionLogger->connectionId();
-        $startedAt = microtime(true);
-
         $connectionLogger->write('info', 'OpenRouter TTS request started.', [
             'connection_id' => $connectionId,
             'user_id' => $request->user()?->id,

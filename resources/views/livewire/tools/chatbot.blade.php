@@ -15,9 +15,10 @@
         voiceSupported: false,
         listening: false,
         recognition: null,
-        ttsEndpoint: @js(route('assistant.audio-output.stream')),
+        ttsEndpoint: @js(route('assistant.audio-output.stream', [], false)),
         csrfToken: @js(csrf_token()),
         ttsAudio: null,
+        ttsError: '',
         ttsQueue: [],
         ttsPlaying: false,
         ttsAbortController: null,
@@ -329,6 +330,7 @@
             if (!this.speechSupported || !text) return;
 
             this.stopSpeaking();
+            this.ttsError = '';
             this.queueTtsSentence(String(text), index);
         },
         beginTtsStream() {
@@ -452,6 +454,7 @@
                 }
             } catch (error) {
                 if (error?.name !== 'AbortError') {
+                    this.ttsError = this.ttsErrorMessage(error);
                     console.warn('AI-Audioausgabe fehlgeschlagen:', error);
                 }
             } finally {
@@ -489,7 +492,7 @@
             const response = await fetch(this.ttsEndpoint, this.ttsFetchOptions(text));
 
             if (!response.ok) {
-                throw new Error(await response.text());
+                throw new Error(await this.ttsResponseError(response));
             }
 
             const blob = await response.blob();
@@ -543,7 +546,7 @@
                         const response = await fetch(this.ttsEndpoint, this.ttsFetchOptions(text));
 
                         if (!response.ok || !response.body) {
-                            throw new Error(await response.text());
+                            throw new Error(await this.ttsResponseError(response));
                         }
 
                         const reader = response.body.getReader();
@@ -558,7 +561,7 @@
 
                             if (!started) {
                                 started = true;
-                                audio.play().catch(() => {});
+                                await audio.play();
                             }
                         }
 
@@ -574,7 +577,9 @@
                             endStream();
                         }
 
-                        audio.play().catch(() => {});
+                        if (!started) {
+                            await audio.play();
+                        }
                     } catch (error) {
                         cleanup();
                         reject(error);
@@ -591,6 +596,29 @@
                 audio.onerror = () => reject(new Error('Audio konnte nicht abgespielt werden.'));
                 audio.play().catch(reject);
             });
+        },
+        async ttsResponseError(response) {
+            const raw = await response.text();
+
+            try {
+                const payload = JSON.parse(raw);
+                return payload?.detail || payload?.message || `HTTP ${response.status}`;
+            } catch {
+                return raw || `HTTP ${response.status}`;
+            }
+        },
+        ttsErrorMessage(error) {
+            const message = String(error?.message || error || 'Unbekannter Audiofehler.');
+
+            if (message.includes('Failed to fetch')) {
+                return `Der Audio-Endpunkt ${this.ttsEndpoint} ist nicht erreichbar.`;
+            }
+
+            if (error?.name === 'NotAllowedError') {
+                return 'Der Browser hat die Audiowiedergabe blockiert. Bitte erneut auf "AI-Audio testen" klicken.';
+            }
+
+            return message.length > 400 ? `${message.slice(0, 400)}...` : message;
         },
         stopSpeaking() {
             if (this.ttsStreamObserver) {
@@ -890,6 +918,13 @@
                                             Stoppen
                                         </button>
                                     </div>
+
+                                    <div
+                                        x-show="ttsError"
+                                        x-cloak
+                                        class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800"
+                                        x-text="ttsError"
+                                    ></div>
                                 </div>
                             </x-slot>
                         </x-ui.dropdown.anchor-dropdown>
