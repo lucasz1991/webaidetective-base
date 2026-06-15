@@ -615,7 +615,7 @@
             }
 
             if (error?.name === 'NotAllowedError') {
-                return 'Der Browser hat die Audiowiedergabe blockiert. Bitte erneut auf "AI-Audio testen" klicken.';
+                return 'Der Browser hat die Audiowiedergabe blockiert. Bitte den Audio-Test erneut anklicken.';
             }
 
             return message.length > 400 ? `${message.slice(0, 400)}...` : message;
