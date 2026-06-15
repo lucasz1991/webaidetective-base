@@ -39,7 +39,7 @@ class AssistantAudioOutputStreamController extends Controller
             $apiKey = $this->setting('api_key');
             $model = $this->setting('audio_output_model');
             $apiUrl = $this->openRouterAudioOutputApiUrl();
-            $voice = trim((string) ($validated['voice'] ?? $this->setting('audio_output_voice', 'alloy')));
+            $voice = trim((string) ($validated['voice'] ?? $this->setting('audio_output_voice')));
             $format = (string) ($validated['format'] ?? $this->setting('audio_output_format', 'mp3'));
         } catch (\Throwable $exception) {
             $connectionLogger->write('error', 'OpenRouter TTS configuration could not be loaded.', [
@@ -56,6 +56,8 @@ class AssistantAudioOutputStreamController extends Controller
         }
 
         $speed = (float) ($validated['speed'] ?? 1);
+        $voice = $voice !== '' ? $voice : $this->defaultVoiceForModel($model);
+        $format = $this->providerAudioFormat($model, $format);
 
         if ($apiKey === '' || $model === '' || $apiUrl === '') {
             $connectionLogger->write('warning', 'OpenRouter TTS configuration is incomplete.', [
@@ -83,12 +85,13 @@ class AssistantAudioOutputStreamController extends Controller
             ], 422);
         }
 
-        $contentType = match ($format) {
+        $providerContentType = match ($format) {
             'opus' => 'audio/opus',
             'wav' => 'audio/wav',
             'pcm' => 'audio/pcm',
             default => 'audio/mpeg',
         };
+        $responseContentType = $format === 'pcm' ? 'audio/wav' : $providerContentType;
         $connectionLogger->write('info', 'OpenRouter TTS request started.', [
             'connection_id' => $connectionId,
             'user_id' => $request->user()?->id,
@@ -102,7 +105,7 @@ class AssistantAudioOutputStreamController extends Controller
 
         try {
             $providerResponse = Http::withToken($apiKey)
-                ->accept($contentType)
+                ->accept($providerContentType)
                 ->asJson()
                 ->withHeaders(array_filter([
                     'HTTP-Referer' => $this->setting('referer_url', config('app.url')),
@@ -179,11 +182,34 @@ class AssistantAudioOutputStreamController extends Controller
         if (! $providerResponse->successful()) {
             return response()->json([
                 'message' => 'OpenRouter Audio/TTS antwortet mit HTTP '.$providerResponse->status().'.',
-                'detail' => $this->providerErrorMessage((string) $errorBody),
+                'detail' => $this->providerErrorMessage(
+                    (string) $errorBody,
+                    $providerResponse->status(),
+                    $model,
+                ),
             ], 502);
         }
 
         $body = $providerResponse->toPsrResponse()->getBody();
+
+        if ($format === 'pcm') {
+            $pcm = (string) $body;
+            $audio = $this->pcmToWav($pcm);
+
+            $connectionLogger->write('info', 'OpenRouter TTS PCM response converted to WAV.', [
+                'connection_id' => $connectionId,
+                'duration_ms' => $connectionLogger->durationMs($startedAt),
+                'pcm_bytes' => strlen($pcm),
+                'wav_bytes' => strlen($audio),
+            ]);
+
+            return response($audio, 200, [
+                'Content-Type' => $responseContentType,
+                'Content-Length' => (string) strlen($audio),
+                'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
+                'Pragma' => 'no-cache',
+            ]);
+        }
 
         return response()->stream(function () use ($body, $connectionId, $connectionLogger, $startedAt): void {
             $bytes = 0;
@@ -208,7 +234,7 @@ class AssistantAudioOutputStreamController extends Controller
                 ]);
             }
         }, 200, [
-            'Content-Type' => $contentType,
+            'Content-Type' => $responseContentType,
             'Cache-Control' => 'no-store, no-cache, must-revalidate, max-age=0',
             'Pragma' => 'no-cache',
             'X-Accel-Buffering' => 'no',
@@ -250,10 +276,16 @@ class AssistantAudioOutputStreamController extends Controller
         return $this->isOpenRouterUrl($url) && $path === '/api/v1/audio/speech';
     }
 
-    private function providerErrorMessage(string $body): string
+    private function providerErrorMessage(string $body, int $status = 0, string $model = ''): string
     {
         $payload = json_decode($body, true);
         $message = is_array($payload) ? data_get($payload, 'error.message') : null;
+
+        if ($status === 404 || (is_string($message) && str_contains(Str::lower($message), 'provider returned 404'))) {
+            return 'Das konfigurierte TTS-Modell "'.$model.'" wurde am OpenRouter Speech-Endpoint nicht gefunden '
+                .'oder unterstützt keine Speech-Ausgabe. Verwende ein aktuelles Speech-Modell, zum Beispiel '
+                .'"x-ai/grok-voice-tts-1.0" mit einer Stimme wie "Eve".';
+        }
 
         if (is_string($message) && str_contains($message, 'specify "prompt" or "messages"')) {
             return 'Der konfigurierte Audio-Endpoint ist kein TTS-Endpoint und erwartet Chat-Nachrichten. '
@@ -265,6 +297,37 @@ class AssistantAudioOutputStreamController extends Controller
         }
 
         return mb_substr($body, 0, 1000);
+    }
+
+    private function defaultVoiceForModel(string $model): string
+    {
+        return Str::startsWith(Str::lower($model), 'x-ai/') ? 'Eve' : 'alloy';
+    }
+
+    private function providerAudioFormat(string $model, string $format): string
+    {
+        $normalizedModel = Str::lower($model);
+
+        if (Str::startsWith($normalizedModel, 'google/') && Str::contains($normalizedModel, 'tts')) {
+            return 'pcm';
+        }
+
+        return $format;
+    }
+
+    private function pcmToWav(string $pcm, int $sampleRate = 24000, int $channels = 1, int $bitsPerSample = 16): string
+    {
+        $dataLength = strlen($pcm);
+        $byteRate = $sampleRate * $channels * intdiv($bitsPerSample, 8);
+        $blockAlign = $channels * intdiv($bitsPerSample, 8);
+
+        return 'RIFF'
+            .pack('V', 36 + $dataLength)
+            .'WAVEfmt '
+            .pack('VvvVVvv', 16, 1, $channels, $sampleRate, $byteRate, $blockAlign, $bitsPerSample)
+            .'data'
+            .pack('V', $dataLength)
+            .$pcm;
     }
 
     private function setting(string $key, ?string $default = ''): string

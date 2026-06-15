@@ -447,11 +447,7 @@
             this.speakingIndex = item.index;
 
             try {
-                if (window.MediaSource && MediaSource.isTypeSupported('audio/mpeg')) {
-                    await this.playTtsViaMediaSource(item.text);
-                } else {
-                    await this.playTtsViaBlob(item.text);
-                }
+                await this.playTtsViaBlob(item.text);
             } catch (error) {
                 if (error?.name !== 'AbortError') {
                     this.ttsError = this.ttsErrorMessage(error);
@@ -483,7 +479,6 @@
                 signal: this.ttsAbortController.signal,
                 body: JSON.stringify({
                     text,
-                    format: 'mp3',
                     speed: Number(this.speechRate || 1),
                 }),
             };
