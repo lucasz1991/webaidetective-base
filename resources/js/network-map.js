@@ -3,7 +3,8 @@ const activeRoots = new Set();
 const DEFAULT_LAYOUT_MODE = 'clusters';
 const DEFAULT_BACKGROUND_MODE = 'light';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
-const LAYOUT_STORAGE_PREFIX = 'network-map-render:v8';
+const LAYOUT_STORAGE_PREFIX = 'network-map-render:v9';
+const FILTER_STORAGE_PREFIX = 'network-map-filters:v2';
 let cytoscapeLoader;
 let threeLoader;
 
@@ -1713,7 +1714,7 @@ function updateButton(button, active) {
 }
 
 function filterStorageKey(root) {
-    return `network-map-filters:${root.dataset.networkFilterScope || root.dataset.networkMapId || 'default'}`;
+    return `${FILTER_STORAGE_PREFIX}:${root.dataset.networkFilterScope || root.dataset.networkMapId || 'default'}`;
 }
 
 function readStoredFilters(root) {
@@ -2033,6 +2034,59 @@ function isFinitePoint(point) {
     return Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y));
 }
 
+function safeNodeStyleNumber(node, key, fallback, min = 1, max = 1000) {
+    const value = Number(node.data(key));
+
+    if (!Number.isFinite(value)) {
+        return fallback;
+    }
+
+    return Math.max(min, Math.min(max, value));
+}
+
+function safeEdgeStyleNumber(edge, key, fallback, min = 0.1, max = 24) {
+    const value = Number(edge.data(key));
+
+    if (!Number.isFinite(value)) {
+        return fallback;
+    }
+
+    return Math.max(min, Math.min(max, value));
+}
+
+function positionsBoundingBox(entries) {
+    const points = entries
+        .map(([, position]) => ({ x: Number(position.x), y: Number(position.y) }))
+        .filter(isFinitePoint);
+
+    if (!points.length) {
+        return null;
+    }
+
+    const xs = points.map((point) => point.x);
+    const ys = points.map((point) => point.y);
+
+    return {
+        minX: Math.min(...xs),
+        maxX: Math.max(...xs),
+        minY: Math.min(...ys),
+        maxY: Math.max(...ys),
+    };
+}
+
+function storedLayoutLooksSane(entries) {
+    const bounds = positionsBoundingBox(entries);
+
+    if (!bounds) {
+        return false;
+    }
+
+    const width = bounds.maxX - bounds.minX;
+    const height = bounds.maxY - bounds.minY;
+
+    return width <= 180000 && height <= 180000;
+}
+
 function writeStoredLayout(root, cy) {
     const state = instances.get(root);
 
@@ -2116,7 +2170,8 @@ function applyStoredLayout(root, cy, options = {}) {
         .filter(([id, position]) => cy.getElementById(id).length && isFinitePoint(position));
     const minExpected = Math.max(1, Math.floor(cy.nodes().length * (options.minRatio ?? 0.75)));
 
-    if (entries.length < minExpected) {
+    if (entries.length < minExpected || !storedLayoutLooksSane(entries)) {
+        clearStoredLayout(root, cy);
         return false;
     }
 
@@ -2134,16 +2189,9 @@ function applyStoredLayout(root, cy, options = {}) {
         });
     });
 
-    if (isFinitePoint(payload.stored.pan) && Number.isFinite(Number(payload.stored.zoom))) {
-        cy.zoom(Math.max(cy.minZoom(), Math.min(cy.maxZoom(), Number(payload.stored.zoom))));
-        cy.pan({
-            x: Number(payload.stored.pan.x),
-            y: Number(payload.stored.pan.y),
-        });
-    }
-
     window.requestAnimationFrame(() => {
         state.suppressLayoutSave = false;
+        fitGraph(cy, { tight: true });
         schedulePublicBadgeUpdate(root, cy);
     });
 
@@ -2353,6 +2401,10 @@ function recommendedMinDegree(root, cy, state) {
 
     while (degrees.filter((degree) => degree >= threshold).length > limit) {
         threshold += 1;
+
+        if (threshold > degrees[0]) {
+            return 0;
+        }
     }
 
     return threshold;
@@ -4090,19 +4142,18 @@ async function initNetworkMap(root) {
         elements: initialElements,
         minZoom: 0.02,
         maxZoom: 4.5,
-        wheelSensitivity: 0.16,
         style: [
             {
                 selector: 'node',
                 style: {
-                    width: 'data(renderNodeSize)',
-                    height: 'data(renderNodeSize)',
+                    width: (node) => safeNodeStyleNumber(node, 'renderNodeSize', 46, 8, 900),
+                    height: (node) => safeNodeStyleNumber(node, 'renderNodeSize', 46, 8, 900),
                     'background-color': '#eff6ff',
                     'border-color': '#94a3b8',
                     'border-width': 2,
                     color: '#0f172a',
                     label: 'data(label)',
-                    'font-size': 'data(renderNodeFontSize)',
+                    'font-size': (node) => safeNodeStyleNumber(node, 'renderNodeFontSize', 11, 6, 72),
                     'font-weight': 700,
                     'text-background-color': '#ffffff',
                     'text-background-opacity': 0.88,
@@ -4111,7 +4162,7 @@ async function initNetworkMap(root) {
                     'text-border-width': 1,
                     'text-border-opacity': 0.9,
                     'text-margin-y': 10,
-                    'text-max-width': 'data(renderTextMaxWidth)',
+                    'text-max-width': (node) => safeNodeStyleNumber(node, 'renderTextMaxWidth', 105, 24, 900),
                     'text-valign': 'bottom',
                     'text-wrap': 'wrap',
                 },
@@ -4186,7 +4237,7 @@ async function initNetworkMap(root) {
             {
                 selector: 'edge',
                 style: {
-                    width: 'data(edgeWidth)',
+                    width: (edge) => safeEdgeStyleNumber(edge, 'edgeWidth', 1.05),
                     'line-color': 'data(lineColor)',
                     'source-arrow-color': 'data(sourceArrowColor)',
                     'target-arrow-color': 'data(targetArrowColor)',
@@ -4201,31 +4252,25 @@ async function initNetworkMap(root) {
             {
                 selector: 'edge[networkType = "inferred"]',
                 style: {
-                    width: 'data(edgeWidth)',
+                    width: (edge) => safeEdgeStyleNumber(edge, 'edgeWidth', 1.05),
                 },
             },
             {
                 selector: 'edge[networkType = "tracked-list"]',
                 style: {
-                    width: 'data(edgeWidth)',
+                    width: (edge) => safeEdgeStyleNumber(edge, 'edgeWidth', 1.35),
                 },
             },
             {
                 selector: 'edge[networkType = "tracked-profile-rel"]',
                 style: {
-                    width: 'data(edgeWidth)',
+                    width: (edge) => safeEdgeStyleNumber(edge, 'edgeWidth', 1.35),
                 },
             },
             {
                 selector: 'edge[otherUserEvidence]',
                 style: {
                     width: 1.55,
-                },
-            },
-            {
-                selector: 'edge[mutualFollowing = true]',
-                style: {
-                    width: 'data(edgeWidth)',
                 },
             },
             {
