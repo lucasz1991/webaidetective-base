@@ -486,11 +486,16 @@ async function runProfileSuggestionConnectionScan(
       const shouldDismissAsKnownMatch = Boolean(history.hasMatch);
       const shouldDismissAsFinalMiss = Boolean(history.permanentlyDismissed)
         || Number(history.noMatchChecks || 0) >= noMatchSkipAfter;
+      const shouldSkipAsKnownSuggestion = Boolean(history.knownSuggestion || history.knownProfile);
+      const shouldSkipWithoutCheck = shouldDismissAsKnownMatch || shouldDismissAsFinalMiss || shouldSkipAsKnownSuggestion;
+      const skipReason = shouldDismissAsKnownMatch
+        ? 'already-saved-match'
+        : (shouldDismissAsFinalMiss ? 'already-dismissed-no-match' : 'already-known-suggestion');
 
       rememberObservedSuggestion(candidate, {
         checked: false,
         skipped: false,
-        alreadyKnown: shouldDismissAsKnownMatch,
+        alreadyKnown: shouldDismissAsKnownMatch || shouldSkipAsKnownSuggestion,
         previousNoMatchChecks: Number(history.noMatchChecks || 0),
         previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
       });
@@ -505,9 +510,7 @@ async function runProfileSuggestionConnectionScan(
             ...candidate,
             dismissed: true,
             dismissedBeforeCheck: true,
-            dismissReason: shouldDismissAsKnownMatch
-              ? 'already-saved-match'
-              : 'already-dismissed-no-match',
+            dismissReason: skipReason,
             previousNoMatchChecks: Number(history.noMatchChecks || 0),
             previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
           });
@@ -515,14 +518,12 @@ async function runProfileSuggestionConnectionScan(
         }
       }
 
-      if (shouldDismissAsKnownMatch || shouldDismissAsFinalMiss) {
+      if (shouldSkipWithoutCheck) {
         rememberObservedSuggestion(candidate, {
           checked: false,
           skipped: true,
-          skippedReason: shouldDismissAsKnownMatch
-            ? 'already-saved-match'
-            : 'already-dismissed-no-match',
-          alreadyKnown: shouldDismissAsKnownMatch,
+          skippedReason: skipReason,
+          alreadyKnown: shouldDismissAsKnownMatch || shouldSkipAsKnownSuggestion,
           dismissedFromSuggestions: dismissedUsernames.has(candidateUsername),
           previousNoMatchChecks: Number(history.noMatchChecks || 0),
           previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
@@ -531,9 +532,8 @@ async function runProfileSuggestionConnectionScan(
           ...candidate,
           checked: false,
           skipped: true,
-          skippedReason: shouldDismissAsKnownMatch
-            ? 'already-saved-match'
-            : 'already-dismissed-no-match',
+          skippedReason: skipReason,
+          alreadyKnown: shouldDismissAsKnownMatch || shouldSkipAsKnownSuggestion,
           dismissedFromSuggestions: dismissedUsernames.has(candidateUsername),
           previousNoMatchChecks: Number(history.noMatchChecks || 0),
           previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
@@ -802,7 +802,77 @@ async function runProfileSuggestionConnectionScan(
             gracefullyStopped = true;
           }
 
-          targetFound = Boolean(publicListSearch.targetFound);
+          const targetFoundInPublicLists = Boolean(publicListSearch.targetFound);
+          let candidateSuggestions = {
+            items: [],
+            available: false,
+            rateLimited: false,
+          };
+
+          if (!rateLimited && !gracefullyStopped) {
+            try {
+              await closeInstagramDialog(page);
+              await scrollToProfileSuggestions(page, 5);
+              const candidateSeeAllResult = await clickProfileSuggestionsSeeAll(page);
+
+              if (candidateSeeAllResult?.clicked) {
+                await sleep(1300);
+              }
+
+              for (let suggestionAttempt = 0; suggestionAttempt < 3; suggestionAttempt += 1) {
+                candidateSuggestions = await collectProfileSuggestionItemsDeep(
+                  page,
+                  candidate.username,
+                  maxCandidateSuggestions,
+                  {
+                    includeSeeAll: true,
+                    forceSeeAll: true,
+                    continueUntilEnd: true,
+                    runtimeConfig,
+                    maxInlineRounds: runtimeConfig.suggestionCandidateInlineMaxRounds || 24,
+                    maxDialogRounds: runtimeConfig.suggestionCandidateDialogMaxRounds || 36,
+                  },
+                );
+
+                const suggestionsHttp429 = await pageHas429();
+                const suggestionsHit429 = suggestionsHttp429.detected
+                  || (Boolean(candidateSuggestions.rateLimited) && resultLooksLikeHttp429(candidateSuggestions));
+
+                if (!suggestionsHit429) {
+                  break;
+                }
+
+                const switched = await switchScraperProfileFor429(`Kandidaten-Vorschlaege @${candidate.username}`, candidate.profileUrl);
+
+                if (!switched) {
+                  rateLimited = true;
+                  rateLimitText = suggestionsHttp429.text || candidateSuggestions.rateLimitText || 'HTTP ERROR 429';
+                  break;
+                }
+
+                candidateSuggestions = {
+                  items: [],
+                  available: false,
+                  rateLimited: false,
+                };
+                await scrollToProfileSuggestions(page, 5);
+              }
+            } catch (error) {
+              notes.push(`Vorschlaege von @${candidate.username} konnten nicht gelesen werden: ${normalizeCandidateErrorMessage(error)}`);
+            } finally {
+              await closeInstagramDialog(page).catch(() => {});
+            }
+          }
+
+          if (candidateSuggestions.rateLimited) {
+            rateLimited = true;
+            rateLimitText = candidateSuggestions.rateLimitText || rateLimitText;
+          }
+
+          const targetFoundAsSuggestion = candidateSuggestions.items.some((item) => (
+            normalizeInstagramUsername(item.username) === targetUsername
+          ));
+          targetFound = targetFoundInPublicLists || targetFoundAsSuggestion;
           const definitiveNoMatch = !targetFound
             && Boolean(publicListSearch.conclusive)
             && !Boolean(publicListSearch.rateLimited)
@@ -825,18 +895,18 @@ async function runProfileSuggestionConnectionScan(
               ? Number(candidateHoverCard.followingCount)
               : (hasFiniteNumericValue(candidate.followingCount) ? Number(candidate.followingCount) : candidateProfile.followingCount),
             hoverCard: candidateHoverCard,
-            targetFoundAsSuggestion: false,
-            targetFoundInPublicLists: targetFound,
+            targetFoundAsSuggestion,
+            targetFoundInPublicLists,
             targetFoundInFollowers: Boolean(publicListSearch.targetFoundInFollowers),
             targetFoundInFollowing: Boolean(publicListSearch.targetFoundInFollowing),
             finalDismissedAfterSecondMiss: skipPreviouslyChecked
               && definitiveNoMatch
               && Number(candidate.previousNoMatchChecks || 0) >= noMatchSkipAfter - 1,
             dismissedFromSuggestions: Boolean(candidate.dismissedBeforeCheck),
-            suggestionsObserved: 0,
-            suggestionsAvailable: false,
-            suggestionsRateLimited: false,
-            suggestionPreview: [],
+            suggestionsObserved: candidateSuggestions.items.length,
+            suggestionsAvailable: Boolean(candidateSuggestions.available),
+            suggestionsRateLimited: Boolean(candidateSuggestions.rateLimited),
+            suggestionPreview: candidateSuggestions.items.slice(0, maxCandidateSuggestions),
             publicListSearchAttempted: Boolean(publicListSearch.attempted),
             publicListSearchConclusive: Boolean(publicListSearch.conclusive),
             publicListRateLimited: Boolean(publicListSearch.rateLimited),
@@ -854,10 +924,12 @@ async function runProfileSuggestionConnectionScan(
               ? `@${candidate.username} erneut ohne Listentreffer geprueft und endgueltig aus den sichtbaren Vorschlaegen entfernt.`
               : `@${candidate.username} oeffentlich geprueft; @${targetUsername} wurde in den normalen Listen nicht gefunden.`);
           progressPayload = {
-            targetFoundInPublicLists: targetFound,
+            targetFoundAsSuggestion,
+            targetFoundInPublicLists,
             targetFoundInFollowers: Boolean(publicListSearch.targetFoundInFollowers),
             targetFoundInFollowing: Boolean(publicListSearch.targetFoundInFollowing),
             publicListSearchConclusive: Boolean(publicListSearch.conclusive),
+            suggestionsObserved: candidateSuggestions.items.length,
           };
 
           if (targetFound) {
@@ -880,16 +952,17 @@ async function runProfileSuggestionConnectionScan(
               hoverCard: candidateHoverCard,
               sourceSuggestionUsername: candidate.username,
               sourcePublicUsername: candidate.username,
-              targetFoundAsSuggestion: false,
-              targetFoundInPublicLists: true,
+              targetFoundAsSuggestion,
+              targetFoundInPublicLists,
               targetFoundInFollowers: Boolean(publicListSearch.targetFoundInFollowers),
               targetFoundInFollowing: Boolean(publicListSearch.targetFoundInFollowing),
               sourceLists: [
+                ...(targetFoundAsSuggestion ? ['profile_suggestions'] : []),
                 ...(publicListSearch.targetFoundInFollowers ? ['public_profile_followers'] : []),
                 ...(publicListSearch.targetFoundInFollowing ? ['public_profile_following'] : []),
               ],
               publicListSearch,
-              suggestionPreview: [],
+              suggestionPreview: candidateSuggestions.items.slice(0, maxCandidateSuggestions),
             });
           }
         } else {
@@ -1172,6 +1245,7 @@ async function runProfileSuggestionConnectionScan(
       'already-saved-match',
       'already-dismissed-no-match',
       'already-scanned-suggestion',
+      'already-known-suggestion',
     ].includes(candidate.skippedReason)
     || Number(candidate.previousNoMatchChecks || 0) > 0
   )).length;

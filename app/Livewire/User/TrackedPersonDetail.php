@@ -3,6 +3,7 @@
 namespace App\Livewire\User;
 
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
+use App\Models\InstagramPost;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScan;
 use App\Models\TrackedPerson;
@@ -104,6 +105,12 @@ class TrackedPersonDetail extends Component
     public bool $showSettingsModal = false;
 
     public bool $showDeleteConfirmationModal = false;
+
+    public bool $showPostEngagementModal = false;
+
+    public ?int $selectedPostId = null;
+
+    public string $activePostEngagementType = 'comments';
 
     public $knownFactLabel = '';
 
@@ -332,6 +339,33 @@ class TrackedPersonDetail extends Component
     public function scanInstagramFollowingList(): void
     {
         $this->runInstagramRelationshipListScan('following');
+    }
+
+    public function openPostEngagementModal(int $postId, string $type): void
+    {
+        if (! in_array($type, ['likes', 'comments'], true)) {
+            return;
+        }
+
+        $trackedPerson = $this->resolveTrackedPerson();
+        $profileId = $trackedPerson->current_instagram_profile_id;
+
+        if (! $profileId) {
+            return;
+        }
+
+        $postExists = InstagramPost::query()
+            ->whereKey($postId)
+            ->where('instagram_profile_id', $profileId)
+            ->exists();
+
+        if (! $postExists) {
+            return;
+        }
+
+        $this->selectedPostId = $postId;
+        $this->activePostEngagementType = $type;
+        $this->showPostEngagementModal = true;
     }
 
     public function resumeSavedInstagramScan(string $scanType): void

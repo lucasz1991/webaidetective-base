@@ -297,7 +297,7 @@ class InstagramProfileRelationshipStore
         mixed $observedAt = null,
         array $evidence = [],
     ): int {
-        if (! $this->isReady() || ! in_array($listType, ['followers', 'following'], true)) {
+        if (! $this->isReady() || ! in_array($listType, ['followers', 'following', 'profile_suggestions'], true)) {
             return 0;
         }
 

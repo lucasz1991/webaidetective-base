@@ -1835,61 +1835,12 @@
                 @endif
             </div>
 
-            <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <div class="flex flex-wrap items-center justify-between gap-2">
-                    <h3 class="text-lg font-bold text-slate-900">Instagram-Beitraege</h3>
-                    @if($trackedPerson->currentInstagramProfile?->postScans?->isNotEmpty())
-                        <span class="text-xs text-slate-500">
-                            Letzter Scan:
-                            {{ $trackedPerson->currentInstagramProfile->postScans->first()->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
-                        </span>
-                    @endif
-                </div>
-
-                <div class="mt-3 max-h-[42rem] overflow-y-auto pr-2">
-                    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                        @forelse($currentInstagramPostRows as $postRow)
-                        <article class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm transition hover:border-violet-300 hover:bg-violet-50">
-                            @if($postRow->primaryMedia?->media_type === 'video' && $postRow->mediaUrl)
-                                <video controls preload="metadata" playsinline poster="{{ $postRow->previewUrl }}" class="h-44 w-full bg-black object-contain">
-                                    <source src="{{ $postRow->mediaUrl }}" type="{{ $postRow->primaryMedia->mime_type ?: 'video/mp4' }}">
-                                </video>
-                            @elseif($postRow->mediaUrl || $postRow->previewUrl)
-                                <a href="{{ $postRow->post->post_url }}" target="_blank" rel="noopener noreferrer" class="block">
-                                    <img src="{{ $postRow->mediaUrl ?: $postRow->previewUrl }}" alt="Instagram-Beitrag {{ $postRow->post->shortcode }}" loading="lazy" class="h-44 w-full object-cover">
-                                </a>
-                            @endif
-                            <div class="p-3">
-                                <div class="flex justify-between gap-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                    <span>
-                                        {{ $postRow->post->media_type }}
-                                        @if($postRow->post->media_count > 1)
-                                            · {{ number_format($postRow->post->media_count) }} Medien
-                                        @endif
-                                    </span>
-                                    <span>{{ $postRow->post->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>
-                                </div>
-                                @if($postRow->post->caption)
-                                    <p class="mt-2 line-clamp-2 text-sm text-slate-700">{{ $postRow->post->caption }}</p>
-                                @endif
-                                <div class="mt-3 flex gap-4 text-sm font-semibold text-slate-800">
-                                    <span>{{ $postRow->post->likes_count !== null ? number_format($postRow->post->likes_count) : '-' }} Likes</span>
-                                    <span>{{ $postRow->post->comments_count !== null ? number_format($postRow->post->comments_count) : '-' }} Kommentare</span>
-                                </div>
-                                <div class="mt-1 text-xs text-slate-500">
-                                    {{ number_format($postRow->post->metrics_count ?? 0) }} gespeicherte Messpunkte
-                                </div>
-                                <a href="{{ $postRow->post->post_url }}" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex text-xs font-semibold text-violet-700 hover:text-violet-900">
-                                    Auf Instagram öffnen
-                                </a>
-                            </div>
-                        </article>
-                        @empty
-                            <p class="text-sm text-slate-500">Noch keine Instagram-Beitraege gespeichert.</p>
-                        @endforelse
-                    </div>
-                </div>
-            </div>
+            <x-instagram-posts-gallery
+                :posts="$trackedPerson->currentInstagramProfile?->posts ?? collect()"
+                title="Instagram-Beitraege"
+                :last-scan-at="$trackedPerson->currentInstagramProfile?->postScans?->first()?->scanned_at"
+                empty-text="Noch keine Instagram-Beitraege gespeichert."
+            />
 
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Profilbild-Historie</h3>
@@ -1972,4 +1923,10 @@
             </div>
         </div>
     </section>
+
+    <x-instagram-post-engagement-modal
+        :selected-post="$selectedPost"
+        :selected-post-id="$selectedPostId"
+        :active-tab="$activePostEngagementType"
+    />
 </div>
