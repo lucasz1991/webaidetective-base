@@ -39,11 +39,6 @@
 @endphp
 
 <article
-    x-data="{
-        statusOpen: false,
-    }"
-    x-on:keydown.escape.window="statusOpen = false"
-    x-on:monitoring-dropdown-opened="statusOpen = false"
     wire:key="tracked-person-instagram-card-{{ $trackedPerson->id }}"
     wire:click="selectTrackedPerson({{ $trackedPerson->id }})"
     wire:keydown.enter="selectTrackedPerson({{ $trackedPerson->id }})"
@@ -67,41 +62,46 @@
     <div class="absolute right-3 top-3 z-30 flex items-center gap-1" x-on:click.stop>
         <x-profile.profile-monitoring-dropdown :tracked-person="$trackedPerson" />
 
-        <div class="relative">
-            <button
-                type="button"
-                x-on:click="statusOpen = !statusOpen; if (statusOpen) $dispatch('close-monitoring-dropdown')"
-                class="inline-flex h-7 w-7 items-center justify-center rounded-full border border-transparent {{ $statusIconClass }} transition"
-                title="Scanstatus"
-                aria-label="Scanstatus anzeigen"
-            >
-                @if($statusLevel === 'error')
-                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M12 9v4M12 17h.01M10.3 4.3 2.8 17.5A2 2 0 0 0 4.5 20h15a2 2 0 0 0 1.7-2.5L13.7 4.3a2 2 0 0 0-3.4 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                @elseif($statusLevel === 'success' && ! $isStale)
-                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                @elseif($statusLevel === 'partial')
-                    <svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                        <path d="M3 12a9 9 0 0 0 9 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".45"/>
-                    </svg>
-                @else
-                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M12 6v6l4 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
-                    </svg>
-                @endif
-            </button>
-            <div
-                x-show="statusOpen"
-                x-cloak
-                x-transition
-                x-on:click.outside="statusOpen = false"
-                class="absolute right-0 top-10 z-40 w-72 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-xl"
-            >
+        <x-ui.dropdown.anchor-dropdown
+            align="right"
+            width="auto"
+            :offset="8"
+            dropdown-classes=""
+            content-classes="w-72 rounded-lg border border-slate-200 bg-white"
+        >
+            <x-slot name="trigger">
+                <button
+                    type="button"
+                    x-on:click="$dispatch('close-monitoring-dropdown')"
+                    x-bind:aria-expanded="open"
+                    class="inline-flex h-7 w-7 items-center justify-center rounded-full border border-transparent {{ $statusIconClass }} transition"
+                    title="Scanstatus"
+                    aria-label="Scanstatus anzeigen"
+                >
+                    @if($statusLevel === 'error')
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M12 9v4M12 17h.01M10.3 4.3 2.8 17.5A2 2 0 0 0 4.5 20h15a2 2 0 0 0 1.7-2.5L13.7 4.3a2 2 0 0 0-3.4 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    @elseif($statusLevel === 'success' && ! $isStale)
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    @elseif($statusLevel === 'partial')
+                        <svg class="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                            <path d="M3 12a9 9 0 0 0 9 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity=".45"/>
+                        </svg>
+                    @else
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M12 6v6l4 2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/>
+                        </svg>
+                    @endif
+                </button>
+            </x-slot>
+
+            <x-slot name="content">
+                <div class="p-3 text-left">
                 <div class="flex items-start justify-between gap-3">
                     <div>
                         <div class="text-xs font-bold uppercase tracking-wide text-slate-500">Scanstatus</div>
@@ -128,8 +128,9 @@
                 >
                     Statusdetails anzeigen
                 </button>
-            </div>
-        </div>
+                </div>
+            </x-slot>
+        </x-ui.dropdown.anchor-dropdown>
     </div>
 
     <div class="grid gap-3 p-3.5 pr-20 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">

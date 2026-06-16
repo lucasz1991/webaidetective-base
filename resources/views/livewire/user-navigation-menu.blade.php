@@ -131,7 +131,7 @@
         x-ref="nav"
         data-user-navigation
         :style="(!showNav && !isMobileMenuOpen) ? 'margin-top: -' + navHeight + 'px' : 'margin-top: 0px'"
-        class="fixed z-30 w-screen bg-white transition-all duration-300 ease-in-out"
+        class="fixed z-50 w-screen bg-white transition-all duration-300 ease-in-out"
         wire:loading.class="cursor-wait"
     >
              <div class="w-full border-b border-gray-300 px-3 md:px-8">
@@ -469,7 +469,7 @@
                                  x-transition:leave-start="opacity-100 "
                                  x-transition:leave-end="opacity-0"
                                  :style="isMobile ? 'top: ' + navHeight + 'px; height: calc(100vh - ' + navHeight + 'px);' : ''"
-                                 :class="isMobileMenuOpen ? 'max-md:inset-0  max-md:bg-black max-md:bg-opacity-50 max-md:z-30' : ''"   
+                                 :class="isMobileMenuOpen ? 'max-md:inset-0  max-md:bg-black max-md:bg-opacity-50 max-md:z-50' : ''"   
                                  @click="$dispatch('navhide')"
                                  x-cloak   class="max-md:order-3 md:order-1 max-md:fixed  md:grow md:flex md:justify-center" >
                                  
