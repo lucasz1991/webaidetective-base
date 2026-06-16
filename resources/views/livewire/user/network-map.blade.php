@@ -7,7 +7,7 @@
     data-network-max-visible-profiles="250"
     data-network-layout-mode="clusters"
     data-network-lazy="true"
-    wire:init="prepareGraph"
+    wire:init="loadNetworkGraph"
     wire:loading.class="cursor-wait"
     x-data="{
         mapFullscreen: false,

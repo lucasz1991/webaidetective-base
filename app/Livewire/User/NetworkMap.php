@@ -187,10 +187,10 @@ class NetworkMap extends Component
         $this->graphToken = null;
         $this->graphStats = $this->emptyGraphStats($user->trackedPeople()->count());
         $this->dispatch('network-map-reset', mapId: $this->mapId);
-        $this->prepareGraph();
+        $this->loadNetworkGraph();
     }
 
-    public function prepareGraph(): void
+    public function loadNetworkGraph(): void
     {
         $user = Auth::user();
 
@@ -2662,7 +2662,7 @@ class NetworkMap extends Component
 
             // Reset graph to refresh UI
             $this->graphToken = null;
-            $this->prepareGraph();
+            $this->loadNetworkGraph();
             $this->dispatch('notification', type: 'success', message: 'Profil wurde als bekannt gespeichert');
 
         } catch (\Throwable $e) {
@@ -2904,7 +2904,7 @@ class NetworkMap extends Component
             );
             $this->forgetGraphCache((int) $user->id);
             $this->graphToken = null;
-            $this->prepareGraph();
+            $this->loadNetworkGraph();
             $this->dispatch(
                 'notification',
                 type: $result['statusLevel'] === 'success' ? 'success' : 'warning',
