@@ -4301,6 +4301,26 @@ async function initNetworkMap(root) {
             });
         }
 
+        const initialChunkCount = Number(root.dataset.networkGraphChunkCount || 0);
+        const initialChunkUrl = String(root.dataset.networkGraphChunkUrl || '').trim();
+
+        if (initialChunkUrl && Number.isFinite(initialChunkCount) && initialChunkCount > 0) {
+            window.requestAnimationFrame(() => {
+                if (root.dataset.networkGraphAutoloaded === 'true') {
+                    return;
+                }
+
+                root.dataset.networkGraphAutoloaded = 'true';
+                loadPreparedGraph(root, {
+                    mapId: root.dataset.networkMapId,
+                    token: root.dataset.networkGraphToken,
+                    dataHash: root.dataset.networkGraphHash,
+                    chunkCount: initialChunkCount,
+                    chunkUrl: initialChunkUrl,
+                });
+            });
+        }
+
         window.addEventListener('resize', resizeHandler);
 
         return state;

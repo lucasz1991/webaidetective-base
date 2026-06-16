@@ -7,7 +7,15 @@
     data-network-max-visible-profiles="250"
     data-network-layout-mode="clusters"
     data-network-lazy="true"
-    wire:init="loadNetworkGraph"
+    @if($graphToken && ($cacheDebug['chunk_count'] ?? 0) > 0)
+        data-network-graph-token="{{ $graphToken }}"
+        data-network-graph-hash="{{ $cacheDebug['data_hash'] ?? '' }}"
+        data-network-graph-chunk-count="{{ $cacheDebug['chunk_count'] }}"
+        data-network-graph-chunk-url="{{ route('network.graph-chunk', ['token' => $graphToken, 'chunk' => '__CHUNK__']) }}"
+    @endif
+    @unless($embedded)
+        wire:init="loadNetworkGraph"
+    @endunless
     wire:loading.class="cursor-wait"
     x-data="{
         mapFullscreen: false,
