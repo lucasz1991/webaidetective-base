@@ -182,7 +182,7 @@ class NetworkMap extends Component
         });
 
         $this->forgetGraphCache((int) $user->id);
-
+ 
         $this->primaryTrackedPersonId = $trackedPersonId;
         $this->graphToken = null;
         $this->graphStats = $this->emptyGraphStats($user->trackedPeople()->count());
