@@ -45,7 +45,9 @@
         </div>
         <x-pagebuilder-module :position="'footer'"/>
         @livewire('footer')
-        @livewire('tools.chatbot')
+        @auth
+            @livewire('tools.chatbot')
+        @endauth
         
         @stack('modals')
         
