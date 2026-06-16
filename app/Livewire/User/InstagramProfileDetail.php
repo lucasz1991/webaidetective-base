@@ -103,6 +103,7 @@ class InstagramProfileDetail extends Component
             $selectedPost = $profile->posts()
                 ->whereKey($this->selectedPostId)
                 ->with([
+                    'media',
                     'likes' => fn ($query) => $query
                         ->where('is_active', true)
                         ->orderBy('username'),

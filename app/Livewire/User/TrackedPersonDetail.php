@@ -1377,7 +1377,11 @@ class TrackedPersonDetail extends Component
                     ->limit(10),
                 'currentInstagramProfile.posts' => fn ($query) => $query
                     ->with('media')
-                    ->withCount('metrics')
+                    ->withCount([
+                        'metrics',
+                        'likes as stored_likes_count' => fn ($likes) => $likes->where('is_active', true),
+                        'comments as stored_comments_count' => fn ($comments) => $comments->where('is_active', true),
+                    ])
                     ->latest('published_at')
                     ->latest('last_seen_at')
                     ->limit(24),
@@ -1480,6 +1484,23 @@ class TrackedPersonDetail extends Component
         $latestProfileVisibility = data_get($latestSnapshot?->raw_payload, 'extractedProfile.profileVisibility');
         $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
         $relationshipProfileImages = collect($relationshipProfileImages);
+        $selectedPost = null;
+
+        if ($this->showPostEngagementModal && $this->selectedPostId && $trackedPerson->current_instagram_profile_id) {
+            $selectedPost = InstagramPost::query()
+                ->whereKey($this->selectedPostId)
+                ->where('instagram_profile_id', $trackedPerson->current_instagram_profile_id)
+                ->with([
+                    'media',
+                    'likes' => fn ($query) => $query
+                        ->where('is_active', true)
+                        ->orderBy('username'),
+                    'comments' => fn ($query) => $query
+                        ->where('is_active', true)
+                        ->orderByDesc('published_at'),
+                ])
+                ->first();
+        }
 
         return [
             'detailStatusClass' => $this->detailStatusClass($this->detailStatusLevel),
@@ -1546,6 +1567,7 @@ class TrackedPersonDetail extends Component
             'currentInstagramPostRows' => $this->instagramPostRows($trackedPerson->currentInstagramProfile?->posts ?? collect()),
             'historySnapshotRows' => $this->historySnapshotRows($trackedPerson->instagramSnapshots ?? collect()),
             'resumableInstagramScan' => $this->resumableInstagramScan($trackedPerson),
+            'selectedPost' => $selectedPost,
         ];
     }
 
