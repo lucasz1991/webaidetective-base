@@ -106,7 +106,7 @@ class NetworkMap extends Component
             'scope' => $this->contextTrackedPersonId ? 'person-'.$this->contextTrackedPersonId : 'global',
         ];
 
-        $this->loadNetworkGraph();
+        $this->loadNetworkGraph(dispatchPrepared: false);
     }
 
     private function generateDataHash(Collection $trackedPeople): string
@@ -192,7 +192,7 @@ class NetworkMap extends Component
         $this->loadNetworkGraph();
     }
 
-    public function loadNetworkGraph(): void
+    public function loadNetworkGraph(bool $dispatchPrepared = true): void
     {
         $user = Auth::user();
 
@@ -216,7 +216,9 @@ class NetworkMap extends Component
                 'scope' => $this->contextTrackedPersonId ? 'person-'.$this->contextTrackedPersonId : 'global',
                 'tracked_people' => 0,
             ];
-            $this->dispatch('network-map-empty', mapId: $this->mapId, stats: $this->graphStats);
+            if ($dispatchPrepared) {
+                $this->dispatch('network-map-empty', mapId: $this->mapId, stats: $this->graphStats);
+            }
 
             return;
         }
@@ -248,15 +250,17 @@ class NetworkMap extends Component
                 'tracked_people' => $trackedPeople->count(),
                 'generated_at' => $cachedMeta['generated_at'] ?? null,
             ];
-            $this->dispatch(
-                'network-map-graph-prepared',
-                mapId: $this->mapId,
-                token: $cachedToken,
-                dataHash: $dataHash,
-                chunkCount: count($cachedData['chunks'] ?? []),
-                chunkUrl: route('network.graph-chunk', ['token' => $cachedToken, 'chunk' => '__CHUNK__']),
-                stats: $this->graphStats,
-            );
+            if ($dispatchPrepared) {
+                $this->dispatch(
+                    'network-map-graph-prepared',
+                    mapId: $this->mapId,
+                    token: $cachedToken,
+                    dataHash: $dataHash,
+                    chunkCount: count($cachedData['chunks'] ?? []),
+                    chunkUrl: route('network.graph-chunk', ['token' => $cachedToken, 'chunk' => '__CHUNK__']),
+                    stats: $this->graphStats,
+                );
+            }
 
             return;
         }
@@ -315,15 +319,17 @@ class NetworkMap extends Component
             'tracked_people' => $trackedPeople->count(),
             'generated_at' => now()->toDateTimeString(),
         ];
-        $this->dispatch(
-            'network-map-graph-prepared',
-            mapId: $this->mapId,
-            token: $token,
-            dataHash: $dataHash,
-            chunkCount: count($chunks),
-            chunkUrl: route('network.graph-chunk', ['token' => $token, 'chunk' => '__CHUNK__']),
-            stats: $stats,
-        );
+        if ($dispatchPrepared) {
+            $this->dispatch(
+                'network-map-graph-prepared',
+                mapId: $this->mapId,
+                token: $token,
+                dataHash: $dataHash,
+                chunkCount: count($chunks),
+                chunkUrl: route('network.graph-chunk', ['token' => $token, 'chunk' => '__CHUNK__']),
+                stats: $stats,
+            );
+        }
     }
 
     public function render()

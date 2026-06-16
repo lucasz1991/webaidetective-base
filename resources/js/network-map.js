@@ -4292,6 +4292,8 @@ async function initNetworkMap(root) {
             nodeTapTimer: null,
             graphToken: String(root.dataset.networkGraphToken || '').trim(),
             graphDataHash: String(root.dataset.networkGraphHash || '').trim(),
+            currentGraphLoadKey: '',
+            loadedGraphKey: '',
             layoutMode: readStoredLayoutMode(root),
             viewMode: readStoredViewMode(root),
             backgroundMode: readStoredBackgroundMode(root),
@@ -4555,6 +4557,15 @@ function chunkUrl(template, index) {
     return String(template || '').replace('__CHUNK__', String(index));
 }
 
+function preparedGraphLoadKey(detail) {
+    const token = String(detail?.token || '').trim();
+    const dataHash = String(detail?.dataHash || detail?.data_hash || '').trim();
+    const chunkCount = String(detail?.chunkCount || '').trim();
+    const chunkTemplate = String(detail?.chunkUrl || '').trim();
+
+    return [token, dataHash, chunkCount, chunkTemplate].filter(Boolean).join('|');
+}
+
 async function loadPreparedGraph(root, detail) {
     const state = await initNetworkMap(root);
 
@@ -4564,9 +4575,20 @@ async function loadPreparedGraph(root, detail) {
 
     const cy = state.cy;
     const chunkCount = Number(detail.chunkCount);
+    const loadKey = preparedGraphLoadKey(detail);
+
+    if (loadKey && state.currentGraphLoadKey === loadKey) {
+        return;
+    }
+
+    if (loadKey && state.loadedGraphKey === loadKey && cy.nodes().length > 0) {
+        return;
+    }
+
     const generation = state.loadGeneration + 1;
     updateGraphIdentity(root, state, detail);
     state.loadGeneration = generation;
+    state.currentGraphLoadKey = loadKey;
     state.loadedNodes = 0;
     state.loadedEdges = 0;
     state.selectedId = null;
@@ -4587,6 +4609,10 @@ async function loadPreparedGraph(root, detail) {
 
     for (let index = 0; index < chunkCount; index += 1) {
         if (state.loadGeneration !== generation) {
+            if (state.currentGraphLoadKey === loadKey) {
+                state.currentGraphLoadKey = '';
+            }
+
             return;
         }
 
@@ -4623,12 +4649,18 @@ async function loadPreparedGraph(root, detail) {
     }
 
     if (state.loadGeneration !== generation) {
+        if (state.currentGraphLoadKey === loadKey) {
+            state.currentGraphLoadKey = '';
+        }
+
         return;
     }
 
     applyAutoMinDegreeIfNeeded(root, cy);
     applyFilters(root, cy, { layout: false });
     state.isLoadingGraph = false;
+    state.currentGraphLoadKey = '';
+    state.loadedGraphKey = loadKey;
     updateBuildStatus(root, {
         visible: true,
         label: 'Netzwerk geladen',
@@ -4671,6 +4703,7 @@ async function handlePreparedGraph(event) {
 
         if (state) {
             state.isLoadingGraph = false;
+            state.currentGraphLoadKey = '';
         }
 
         console.error(error);
