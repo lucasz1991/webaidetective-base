@@ -7,6 +7,8 @@ use App\Models\CreditWallet;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileRelationship;
 use App\Models\InstagramProfileScan;
+use App\Models\TrackedPerson;
+use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Models\User;
 use App\Services\Billing\ScanCreditService;
@@ -212,5 +214,62 @@ class InstagramProfileScanBillingTest extends TestCase
         $this->assertTrue($history['known_from_graph']['knownSuggestion']);
         $this->assertTrue($history['known_from_previous_scan']['knownProfile']);
         $this->assertTrue($history['known_from_previous_scan']['knownSuggestion']);
+    }
+
+    public function test_public_suggestion_list_hits_are_stored_as_reconstructed_lists_not_suggestion_connections(): void
+    {
+        $user = User::factory()->create();
+        $person = TrackedPerson::create([
+            'user_id' => $user->id,
+            'first_name' => 'Public',
+            'last_name' => 'Target',
+            'instagram_username' => 'public_rule_target',
+        ]);
+        $connection = [
+            'username' => 'public_candidate_hit',
+            'displayName' => 'Public Candidate',
+            'profileUrl' => 'https://www.instagram.com/public_candidate_hit/',
+            'profileVisibility' => 'public',
+            'isPrivate' => false,
+            'targetFoundAsSuggestion' => false,
+            'targetFoundInPublicLists' => true,
+            'targetFoundInFollowers' => true,
+            'targetFoundInFollowing' => true,
+            'sourceLists' => ['public_profile_followers', 'public_profile_following'],
+            'publicListSearch' => ['targetFound' => true],
+        ];
+        $service = app(TrackedPersonInstagramSuggestionScanService::class);
+        $seenAt = now('UTC');
+
+        $storeInferred = new ReflectionMethod($service, 'storeInferredSuggestionConnections');
+        $storeInferred->setAccessible(true);
+        $storeInferred->invoke($service, $person, null, 'public_rule_target', [$connection], [], $seenAt);
+
+        $storePublicLists = new ReflectionMethod($service, 'storePublicListRelationships');
+        $storePublicLists->setAccessible(true);
+        $storePublicLists->invoke($service, $person, null, 'public_rule_target', [$connection], $seenAt);
+
+        $target = InstagramProfile::where('username', 'public_rule_target')->firstOrFail();
+        $candidate = InstagramProfile::where('username', 'public_candidate_hit')->firstOrFail();
+
+        $this->assertSame(0, TrackedPersonInstagramInferredConnection::query()
+            ->where('tracked_person_id', $person->id)
+            ->where('relationship_type', 'suggestion_connection')
+            ->where('candidate_username', 'public_candidate_hit')
+            ->count());
+
+        foreach (['followers', 'following'] as $listType) {
+            $relationship = InstagramProfileRelationship::query()
+                ->where('source_instagram_profile_id', $target->id)
+                ->where('related_instagram_profile_id', $candidate->id)
+                ->where('list_type', $listType)
+                ->firstOrFail();
+
+            $this->assertTrue((bool) data_get($relationship->evidence, 'reconstructed'));
+            $this->assertSame(
+                'reconstructed_from_public_suggestion_scan',
+                data_get($relationship->evidence, 'relationship_origin'),
+            );
+        }
     }
 }

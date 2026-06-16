@@ -803,76 +803,8 @@ async function runProfileSuggestionConnectionScan(
           }
 
           const targetFoundInPublicLists = Boolean(publicListSearch.targetFound);
-          let candidateSuggestions = {
-            items: [],
-            available: false,
-            rateLimited: false,
-          };
-
-          if (!rateLimited && !gracefullyStopped) {
-            try {
-              await closeInstagramDialog(page);
-              await scrollToProfileSuggestions(page, 5);
-              const candidateSeeAllResult = await clickProfileSuggestionsSeeAll(page);
-
-              if (candidateSeeAllResult?.clicked) {
-                await sleep(1300);
-              }
-
-              for (let suggestionAttempt = 0; suggestionAttempt < 3; suggestionAttempt += 1) {
-                candidateSuggestions = await collectProfileSuggestionItemsDeep(
-                  page,
-                  candidate.username,
-                  maxCandidateSuggestions,
-                  {
-                    includeSeeAll: true,
-                    forceSeeAll: true,
-                    continueUntilEnd: true,
-                    runtimeConfig,
-                    maxInlineRounds: runtimeConfig.suggestionCandidateInlineMaxRounds || 24,
-                    maxDialogRounds: runtimeConfig.suggestionCandidateDialogMaxRounds || 36,
-                  },
-                );
-
-                const suggestionsHttp429 = await pageHas429();
-                const suggestionsHit429 = suggestionsHttp429.detected
-                  || (Boolean(candidateSuggestions.rateLimited) && resultLooksLikeHttp429(candidateSuggestions));
-
-                if (!suggestionsHit429) {
-                  break;
-                }
-
-                const switched = await switchScraperProfileFor429(`Kandidaten-Vorschlaege @${candidate.username}`, candidate.profileUrl);
-
-                if (!switched) {
-                  rateLimited = true;
-                  rateLimitText = suggestionsHttp429.text || candidateSuggestions.rateLimitText || 'HTTP ERROR 429';
-                  break;
-                }
-
-                candidateSuggestions = {
-                  items: [],
-                  available: false,
-                  rateLimited: false,
-                };
-                await scrollToProfileSuggestions(page, 5);
-              }
-            } catch (error) {
-              notes.push(`Vorschlaege von @${candidate.username} konnten nicht gelesen werden: ${normalizeCandidateErrorMessage(error)}`);
-            } finally {
-              await closeInstagramDialog(page).catch(() => {});
-            }
-          }
-
-          if (candidateSuggestions.rateLimited) {
-            rateLimited = true;
-            rateLimitText = candidateSuggestions.rateLimitText || rateLimitText;
-          }
-
-          const targetFoundAsSuggestion = candidateSuggestions.items.some((item) => (
-            normalizeInstagramUsername(item.username) === targetUsername
-          ));
-          targetFound = targetFoundInPublicLists || targetFoundAsSuggestion;
+          const targetFoundAsSuggestion = false;
+          targetFound = targetFoundInPublicLists;
           const definitiveNoMatch = !targetFound
             && Boolean(publicListSearch.conclusive)
             && !Boolean(publicListSearch.rateLimited)
@@ -903,10 +835,10 @@ async function runProfileSuggestionConnectionScan(
               && definitiveNoMatch
               && Number(candidate.previousNoMatchChecks || 0) >= noMatchSkipAfter - 1,
             dismissedFromSuggestions: Boolean(candidate.dismissedBeforeCheck),
-            suggestionsObserved: candidateSuggestions.items.length,
-            suggestionsAvailable: Boolean(candidateSuggestions.available),
-            suggestionsRateLimited: Boolean(candidateSuggestions.rateLimited),
-            suggestionPreview: candidateSuggestions.items.slice(0, maxCandidateSuggestions),
+            suggestionsObserved: 0,
+            suggestionsAvailable: false,
+            suggestionsRateLimited: false,
+            suggestionPreview: [],
             publicListSearchAttempted: Boolean(publicListSearch.attempted),
             publicListSearchConclusive: Boolean(publicListSearch.conclusive),
             publicListRateLimited: Boolean(publicListSearch.rateLimited),
@@ -929,7 +861,7 @@ async function runProfileSuggestionConnectionScan(
             targetFoundInFollowers: Boolean(publicListSearch.targetFoundInFollowers),
             targetFoundInFollowing: Boolean(publicListSearch.targetFoundInFollowing),
             publicListSearchConclusive: Boolean(publicListSearch.conclusive),
-            suggestionsObserved: candidateSuggestions.items.length,
+            suggestionsObserved: 0,
           };
 
           if (targetFound) {
@@ -957,12 +889,11 @@ async function runProfileSuggestionConnectionScan(
               targetFoundInFollowers: Boolean(publicListSearch.targetFoundInFollowers),
               targetFoundInFollowing: Boolean(publicListSearch.targetFoundInFollowing),
               sourceLists: [
-                ...(targetFoundAsSuggestion ? ['profile_suggestions'] : []),
                 ...(publicListSearch.targetFoundInFollowers ? ['public_profile_followers'] : []),
                 ...(publicListSearch.targetFoundInFollowing ? ['public_profile_following'] : []),
               ],
               publicListSearch,
-              suggestionPreview: candidateSuggestions.items.slice(0, maxCandidateSuggestions),
+              suggestionPreview: [],
             });
           }
         } else {

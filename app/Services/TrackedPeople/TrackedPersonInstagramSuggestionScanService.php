@@ -534,6 +534,10 @@ class TrackedPersonInstagramSuggestionScanService
                 continue;
             }
 
+            if (! (bool) ($connection['targetFoundAsSuggestion'] ?? false)) {
+                continue;
+            }
+
             $sourceUsername = $this->scraper->normalizeInstagramUsername(
                 (string) ($connection['sourceSuggestionUsername'] ?? $connection['sourcePublicUsername'] ?? $candidateUsername),
             ) ?? $candidateUsername;
@@ -866,6 +870,9 @@ class TrackedPersonInstagramSuggestionScanService
                 'source' => 'suggestion_public_list_inverse',
                 'suggestion_scan_id' => $scan?->id,
                 'candidate_username' => $candidateUsername,
+                'reconstructed' => true,
+                'relationship_origin' => 'reconstructed_from_public_suggestion_scan',
+                'relationship_origin_label' => 'Rekonstruierte Follower-/Gefolgt-Beziehung aus Vorschlaege-Scan',
                 'public_list_search' => is_array($connection['publicListSearch'] ?? null)
                     ? $connection['publicListSearch']
                     : [],
