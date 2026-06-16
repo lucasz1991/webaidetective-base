@@ -23,10 +23,6 @@
         ttsPlaying: false,
         ttsAbortController: null,
         ttsObjectUrls: [],
-        ttsStreamBuffer: '',
-        ttsStreamLastText: '',
-        ttsStreamObserver: null,
-        ttsStreamFallbackTimer: null,
         ttsCurrentGeneration: 0,
         speechSupported: false,
         speaking: false,
@@ -42,16 +38,12 @@
             this.$watch('chatHistory', (history) => this.handleNewAssistantMessage(history));
             this.$watch('isLoading', (loading) => {
                 if (loading) {
-                    this.beginTtsStream();
-                } else {
-                    this.finishTtsStream();
+                    this.stopSpeaking();
                 }
             });
             this.$watch('autoRead', (enabled) => {
                 if (!enabled) {
                     this.stopSpeaking();
-                } else if (this.isLoading) {
-                    this.beginTtsStream();
                 }
             });
             this.$watch('toolEvents', (events) => this.scheduleToolAlerts(events));
@@ -322,7 +314,7 @@
             if (key === this.lastAssistantMessageKey) return;
 
             this.lastAssistantMessageKey = key;
-            if (this.autoRead && item.content && !this.ttsStreamLastText.trim()) {
+            if (this.autoRead && item.content) {
                 this.speak(item.content, index);
             }
         },
@@ -332,93 +324,6 @@
             this.stopSpeaking();
             this.ttsError = '';
             this.queueTtsSentence(String(text), index);
-        },
-        beginTtsStream() {
-            if (!this.autoRead || !this.speechSupported) return;
-
-            this.stopSpeaking();
-            this.ttsStreamBuffer = '';
-            this.ttsStreamLastText = '';
-            this.ttsCurrentGeneration++;
-            this.observeTtsStream();
-        },
-        observeTtsStream() {
-            this.$nextTick(() => {
-                const el = this.$refs.assistantResponseStream;
-                if (!el) return;
-
-                if (this.ttsStreamObserver) {
-                    this.ttsStreamObserver.disconnect();
-                    this.ttsStreamObserver = null;
-                }
-
-                this.ttsStreamLastText = el.textContent || '';
-                this.ttsStreamObserver = new MutationObserver(() => this.consumeTtsStreamText());
-                this.ttsStreamObserver.observe(el, {
-                    childList: true,
-                    characterData: true,
-                    subtree: true,
-                });
-
-                this.consumeTtsStreamText();
-            });
-        },
-        consumeTtsStreamText() {
-            if (!this.autoRead || !this.speechSupported) return;
-
-            const el = this.$refs.assistantResponseStream;
-            if (!el) return;
-
-            const fullText = el.textContent || '';
-            let delta = '';
-
-            if (fullText.startsWith(this.ttsStreamLastText)) {
-                delta = fullText.slice(this.ttsStreamLastText.length);
-            } else {
-                delta = fullText;
-            }
-
-            this.ttsStreamLastText = fullText;
-
-            if (delta) {
-                this.enqueueTtsText(delta);
-            }
-        },
-        enqueueTtsText(delta) {
-            this.ttsStreamBuffer += String(delta || '').replace(/\s+/g, ' ');
-
-            const sentencePattern = /^([\s\S]*?[.!?…](?:\s+|$))/u;
-            let match = this.ttsStreamBuffer.match(sentencePattern);
-
-            while (match) {
-                const sentence = match[1].trim();
-                this.ttsStreamBuffer = this.ttsStreamBuffer.slice(match[1].length);
-
-                if (sentence.length >= 3) {
-                    this.queueTtsSentence(sentence);
-                }
-
-                match = this.ttsStreamBuffer.match(sentencePattern);
-            }
-        },
-        finishTtsStream() {
-            if (this.ttsStreamFallbackTimer) {
-                window.clearTimeout(this.ttsStreamFallbackTimer);
-            }
-
-            this.ttsStreamFallbackTimer = window.setTimeout(() => {
-                if (this.ttsStreamObserver) {
-                    this.ttsStreamObserver.disconnect();
-                    this.ttsStreamObserver = null;
-                }
-
-                const rest = this.ttsStreamBuffer.trim();
-                this.ttsStreamBuffer = '';
-
-                if (this.autoRead && rest.length >= 3) {
-                    this.queueTtsSentence(rest);
-                }
-            }, 350);
         },
         queueTtsSentence(text, index = null) {
             const cleanText = String(text || '').trim();
@@ -624,20 +529,8 @@
             return message.length > 400 ? `${message.slice(0, 400)}...` : message;
         },
         stopSpeaking() {
-            if (this.ttsStreamObserver) {
-                this.ttsStreamObserver.disconnect();
-                this.ttsStreamObserver = null;
-            }
-
-            if (this.ttsStreamFallbackTimer) {
-                window.clearTimeout(this.ttsStreamFallbackTimer);
-                this.ttsStreamFallbackTimer = null;
-            }
-
             this.ttsCurrentGeneration++;
             this.ttsQueue = [];
-            this.ttsStreamBuffer = '';
-            this.ttsStreamLastText = '';
 
             if (this.ttsAbortController) {
                 this.ttsAbortController.abort();
