@@ -106,9 +106,7 @@ class NetworkMap extends Component
             'scope' => $this->contextTrackedPersonId ? 'person-'.$this->contextTrackedPersonId : 'global',
         ];
 
-        if ($this->embedded) {
-            $this->loadNetworkGraph();
-        }
+        $this->loadNetworkGraph();
     }
 
     private function generateDataHash(Collection $trackedPeople): string

@@ -14,9 +14,6 @@
         data-network-graph-chunk-count="{{ $cacheDebug['chunk_count'] }}"
         data-network-graph-chunk-url="{{ route('network.graph-chunk', ['token' => $graphToken, 'chunk' => '__CHUNK__']) }}"
     @endif
-    @unless($embedded)
-        wire:init="loadNetworkGraph"
-    @endunless
     wire:loading.class="cursor-wait"
     x-data="{
         mapFullscreen: false,
