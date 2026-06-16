@@ -633,7 +633,6 @@ function destroyThreeScene(state) {
     threeState.container.removeEventListener('pointerleave', threeState.pointerUp);
     threeState.container.removeEventListener('wheel', threeState.wheel);
     threeState.container.removeEventListener('contextmenu', threeState.contextMenu);
-    threeState.backgroundTexture?.dispose?.();
     disposeThreeObject(threeState.scene);
     threeState.renderer.dispose();
     threeState.renderer.domElement.remove();
@@ -1473,6 +1472,7 @@ async function ensureThreeScene(root, state) {
     }
 
     const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020617);
     const camera = new THREE.PerspectiveCamera(54, 1, 1, 10000);
     camera.position.set(0, 0, 980);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -1632,7 +1632,6 @@ async function ensureThreeScene(root, state) {
     };
 
     state.threeState = threeState;
-    applyThreeTheme(root, state);
     window.addEventListener('resize', resize);
     container.addEventListener('pointerdown', pointerDown);
     container.addEventListener('pointermove', pointerMove);
@@ -1680,7 +1679,6 @@ async function setViewMode(root, state, mode) {
         overlays?.classList.add('hidden');
         threeCanvas?.classList.remove('hidden');
         await ensureThreeScene(root, state);
-        applyThreeTheme(root, state);
         scheduleThreeRender(root);
         return;
     }
@@ -1754,152 +1752,6 @@ function normalizeLayoutMode(value) {
 
 function normalizeViewMode(value) {
     return String(value || '').trim() === '3d' ? '3d' : '2d';
-}
-
-function normalizeThreeTheme(value) {
-    return String(value || '').trim() === 'light' ? 'light' : 'dark';
-}
-
-function threeThemeStorageKey(root) {
-    return `network-map-three-theme:${root.dataset.networkFilterScope || root.dataset.networkMapId || 'default'}`;
-}
-
-function readStoredThreeTheme(root) {
-    try {
-        return normalizeThreeTheme(localStorage.getItem(threeThemeStorageKey(root)) || root.dataset.networkThreeTheme);
-    } catch {
-        return normalizeThreeTheme(root.dataset.networkThreeTheme);
-    }
-}
-
-function writeStoredThreeTheme(root, theme) {
-    try {
-        localStorage.setItem(threeThemeStorageKey(root), normalizeThreeTheme(theme));
-    } catch {
-        // localStorage can be unavailable in hardened browser contexts.
-    }
-}
-
-function threeThemePalette(theme) {
-    if (normalizeThreeTheme(theme) === 'light') {
-        return {
-            clearColor: 0xf8fbff,
-            fogColor: 0xeaf4ff,
-            fogDensity: 0.00028,
-            cssBackground: 'radial-gradient(circle at 18% 16%, rgba(56, 189, 248, 0.26), transparent 32%), radial-gradient(circle at 78% 22%, rgba(129, 140, 248, 0.20), transparent 34%), linear-gradient(135deg, #f8fbff 0%, #eaf4ff 48%, #dbeafe 100%)',
-        };
-    }
-
-    return {
-        clearColor: 0x020617,
-        fogColor: 0x07111f,
-        fogDensity: 0.00044,
-        cssBackground: 'radial-gradient(circle at 18% 16%, rgba(14, 165, 233, 0.30), transparent 34%), radial-gradient(circle at 80% 24%, rgba(139, 92, 246, 0.24), transparent 36%), radial-gradient(circle at 52% 92%, rgba(244, 63, 94, 0.16), transparent 38%), linear-gradient(135deg, #020617 0%, #08111f 46%, #111827 100%)',
-    };
-}
-
-function createThreeBackgroundTexture(THREE, theme) {
-    const normalizedTheme = normalizeThreeTheme(theme);
-    const canvas = document.createElement('canvas');
-    const size = 1024;
-    canvas.width = size;
-    canvas.height = size;
-    const context = canvas.getContext('2d');
-
-    const baseGradient = context.createLinearGradient(0, 0, size, size);
-
-    if (normalizedTheme === 'light') {
-        baseGradient.addColorStop(0, '#f8fbff');
-        baseGradient.addColorStop(0.48, '#eaf4ff');
-        baseGradient.addColorStop(1, '#dbeafe');
-    } else {
-        baseGradient.addColorStop(0, '#020617');
-        baseGradient.addColorStop(0.46, '#08111f');
-        baseGradient.addColorStop(1, '#111827');
-    }
-
-    context.fillStyle = baseGradient;
-    context.fillRect(0, 0, size, size);
-
-    const addGlow = (x, y, radius, stops) => {
-        const gradient = context.createRadialGradient(x, y, 0, x, y, radius);
-        stops.forEach(([offset, color]) => gradient.addColorStop(offset, color));
-        context.fillStyle = gradient;
-        context.fillRect(0, 0, size, size);
-    };
-
-    if (normalizedTheme === 'light') {
-        addGlow(size * 0.18, size * 0.16, size * 0.52, [[0, 'rgba(56, 189, 248, 0.28)'], [0.48, 'rgba(125, 211, 252, 0.14)'], [1, 'rgba(56, 189, 248, 0)']]);
-        addGlow(size * 0.80, size * 0.22, size * 0.58, [[0, 'rgba(129, 140, 248, 0.20)'], [0.52, 'rgba(196, 181, 253, 0.11)'], [1, 'rgba(129, 140, 248, 0)']]);
-        addGlow(size * 0.48, size * 0.96, size * 0.62, [[0, 'rgba(244, 114, 182, 0.10)'], [0.45, 'rgba(251, 207, 232, 0.08)'], [1, 'rgba(244, 114, 182, 0)']]);
-    } else {
-        addGlow(size * 0.16, size * 0.18, size * 0.56, [[0, 'rgba(14, 165, 233, 0.38)'], [0.42, 'rgba(14, 165, 233, 0.16)'], [1, 'rgba(14, 165, 233, 0)']]);
-        addGlow(size * 0.78, size * 0.22, size * 0.62, [[0, 'rgba(139, 92, 246, 0.34)'], [0.46, 'rgba(139, 92, 246, 0.13)'], [1, 'rgba(139, 92, 246, 0)']]);
-        addGlow(size * 0.54, size * 0.94, size * 0.66, [[0, 'rgba(244, 63, 94, 0.20)'], [0.44, 'rgba(244, 63, 94, 0.08)'], [1, 'rgba(244, 63, 94, 0)']]);
-    }
-
-    const dotCount = normalizedTheme === 'light' ? 58 : 118;
-
-    for (let index = 0; index < dotCount; index += 1) {
-        const seedX = Math.sin((index + 1) * 12.9898) * 43758.5453;
-        const seedY = Math.sin((index + 1) * 78.233) * 24634.6345;
-        const seedSize = Math.sin((index + 1) * 39.425) * 9876.5432;
-        const x = (seedX - Math.floor(seedX)) * size;
-        const y = (seedY - Math.floor(seedY)) * size;
-        const radius = (normalizedTheme === 'light' ? 0.8 : 1.1) + ((seedSize - Math.floor(seedSize)) * (normalizedTheme === 'light' ? 1.4 : 2.4));
-        context.beginPath();
-        context.arc(x, y, radius, 0, Math.PI * 2);
-        context.fillStyle = normalizedTheme === 'light'
-            ? 'rgba(59, 130, 246, 0.13)'
-            : 'rgba(226, 232, 240, 0.26)';
-        context.fill();
-    }
-
-    const vignette = context.createRadialGradient(size / 2, size / 2, size * 0.18, size / 2, size / 2, size * 0.72);
-    vignette.addColorStop(0, normalizedTheme === 'light' ? 'rgba(255, 255, 255, 0)' : 'rgba(2, 6, 23, 0)');
-    vignette.addColorStop(1, normalizedTheme === 'light' ? 'rgba(148, 163, 184, 0.16)' : 'rgba(2, 6, 23, 0.50)');
-    context.fillStyle = vignette;
-    context.fillRect(0, 0, size, size);
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.needsUpdate = true;
-
-    return texture;
-}
-
-function applyThreeTheme(root, state, options = {}) {
-    if (!state) {
-        return;
-    }
-
-    const theme = normalizeThreeTheme(state.threeTheme);
-    const palette = threeThemePalette(theme);
-    state.threeTheme = theme;
-    root.dataset.networkThreeTheme = theme;
-
-    if (options.persist) {
-        writeStoredThreeTheme(root, theme);
-    }
-
-    root.querySelectorAll('[data-network-3d-canvas]').forEach((element) => {
-        element.style.background = palette.cssBackground;
-    });
-    updateThreeThemeControls(root, state);
-
-    const threeState = state.threeState;
-
-    if (!threeState?.THREE || threeState.currentTheme === theme) {
-        return;
-    }
-
-    threeState.backgroundTexture?.dispose?.();
-    threeState.backgroundTexture = createThreeBackgroundTexture(threeState.THREE, theme);
-    threeState.currentTheme = theme;
-    threeState.scene.background = threeState.backgroundTexture;
-    threeState.scene.fog = new threeState.THREE.FogExp2(palette.fogColor, palette.fogDensity);
-    threeState.renderer.setClearColor(palette.clearColor, 1);
-    threeState.needsRender = true;
 }
 
 function viewModeStorageKey(root) {
@@ -1993,22 +1845,12 @@ function updateLayoutControls(root, state) {
     });
 }
 
-function updateThreeThemeControls(root, state) {
-    const theme = normalizeThreeTheme(state?.threeTheme);
-
-    root.querySelectorAll('[data-network-three-theme]').forEach((button) => {
-        updateButton(button, button.dataset.networkThreeTheme === theme);
-    });
-}
-
 function updateViewModeControls(root, state) {
     const mode = normalizeViewMode(state?.viewMode);
 
     root.querySelectorAll('[data-network-view-mode]').forEach((button) => {
         updateButton(button, button.dataset.networkViewMode === mode);
     });
-
-    updateThreeThemeControls(root, state);
 
     root.querySelectorAll('[data-network-layout-mode]').forEach((control) => {
         control.disabled = mode === '3d';
@@ -4065,14 +3907,6 @@ function bindControls(root, cy) {
         });
     });
 
-    root.querySelectorAll('[data-network-three-theme]').forEach((button) => {
-        button.addEventListener('click', () => {
-            state.threeTheme = normalizeThreeTheme(button.dataset.networkThreeTheme);
-            applyThreeTheme(root, state, { persist: true });
-            scheduleThreeRender(root);
-        });
-    });
-
     root.querySelectorAll('[data-network-layout-spacing]').forEach((control) => {
         control.addEventListener('input', () => {
             const previousScale = state.layoutSpacingScale;
@@ -4373,7 +4207,6 @@ async function initNetworkMap(root) {
             graphDataHash: String(root.dataset.networkGraphHash || '').trim(),
             layoutMode: readStoredLayoutMode(root),
             viewMode: readStoredViewMode(root),
-            threeTheme: readStoredThreeTheme(root),
             threeFocusNodeId: null,
             layoutRestored: false,
             hasAppliedLayout: false,

@@ -1,4 +1,4 @@
-<div
+﻿<div
     class="{{ $embedded ? 'bg-transparent' : 'min-h-screen bg-[#fafafa] pb-16' }}"
     data-network-map-root
     data-network-map-id="{{ $mapId }}"
@@ -6,8 +6,8 @@
     data-network-focus-tracked-person-id="{{ $contextTrackedPersonId ?: $primaryTrackedPersonId }}"
     data-network-max-visible-profiles="250"
     data-network-layout-mode="clusters"
-    data-network-three-theme="dark"
     data-network-lazy="true"
+    wire:init="prepareGraph"
     wire:loading.class="cursor-wait"
     x-data="{
         mapFullscreen: false,
@@ -364,19 +364,6 @@
                                     <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 12 4 7.5M12 12l8-4.5M12 12v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                                     3D Prototyp
                                 </button>
-                            </div>
-                            <div class="grid gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                                <div class="text-xs font-bold uppercase tracking-wide text-slate-500">3D-Hintergrund</div>
-                                <div class="grid grid-cols-2 gap-2">
-                                    <button type="button" data-network-three-theme="dark" data-active-classes="border-indigo-400 bg-slate-950 text-white" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 shadow-sm transition" aria-pressed="true">
-                                        <span class="h-3 w-3 rounded-full bg-gradient-to-br from-slate-950 via-indigo-900 to-fuchsia-700 ring-1 ring-white/40"></span>
-                                        Dunkel
-                                    </button>
-                                    <button type="button" data-network-three-theme="light" data-active-classes="border-sky-300 bg-sky-50/90 text-sky-900" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 shadow-sm transition" aria-pressed="false">
-                                        <span class="h-3 w-3 rounded-full bg-gradient-to-br from-white via-sky-100 to-indigo-200 ring-1 ring-sky-200"></span>
-                                        Hell
-                                    </button>
-                                </div>
                             </div>
                             <label class="grid gap-1.5">
                                 <span>Anordnung</span>
@@ -785,7 +772,7 @@
                             class="rounded-r-lg border-l border-slate-700 bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
                             aria-label="Scan-Optionen"
                         >
-                            ?
+                            ▾
                         </button>
                         <div
                             x-cloak
