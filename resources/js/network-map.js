@@ -608,24 +608,242 @@ function destroyThreeScene(state) {
     threeState.container.removeEventListener('pointerup', threeState.pointerUp);
     threeState.container.removeEventListener('pointerleave', threeState.pointerUp);
     threeState.container.removeEventListener('wheel', threeState.wheel);
+    threeState.container.removeEventListener('contextmenu', threeState.contextMenu);
     disposeThreeObject(threeState.scene);
     threeState.renderer.dispose();
     threeState.renderer.domElement.remove();
     state.threeState = null;
 }
 
-function threeNodePosition(cy, node, index) {
-    const extent = cy.nodes().not('.network-filtered').boundingBox();
-    const centerX = extent.x1 + (extent.w / 2);
-    const centerY = extent.y1 + (extent.h / 2);
-    const hash = Number.parseInt(stableHash(node.id()).slice(-4), 36) || index;
-    const z = ((hash % 260) - 130) * 0.75;
+function threeNodePosition(node, index, total, maxDegree, state) {
+    if (node.data('isPrimary') || node.data('isFocus')) {
+        return { x: 0, y: 0, z: 0 };
+    }
+
+    const spacing = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5);
+    const degreeRatio = Math.max(0, Math.min(1, visibleDegreeForState(node, state) / Math.max(1, maxDegree)));
+    const hash = Number.parseInt(stableHash(node.id()).slice(-6), 36) || index + 1;
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    const ordinal = index + 0.5;
+    const inclination = Math.acos(1 - (2 * ordinal / Math.max(1, total)));
+    const azimuth = (ordinal * goldenAngle) + ((hash % 720) * (Math.PI / 360));
+    const radialJitter = ((hash % 100) / 100) * 76;
+    const typeOffset = node.data('type') === 'person' ? -58 : (node.data('type') === 'candidate' ? 48 : 0);
+    const radius = (290 + radialJitter + typeOffset - (degreeRatio * 70)) * Math.max(0.72, Math.min(2.2, spacing));
 
     return {
-        x: (node.position('x') - centerX) * 0.38,
-        y: -(node.position('y') - centerY) * 0.38,
-        z,
+        x: Math.sin(inclination) * Math.cos(azimuth) * radius,
+        y: Math.cos(inclination) * radius,
+        z: Math.sin(inclination) * Math.sin(azimuth) * radius,
     };
+}
+
+function edgeWeightFor3D(edge) {
+    const state = String(edge.data('connectionState') || edge.data('networkType') || '').toLowerCase();
+
+    if (state.includes('mutual')) {
+        return 4;
+    }
+
+    if (state.includes('following') || state.includes('known')) {
+        return 2.8;
+    }
+
+    if (state.includes('reconstructed')) {
+        return 1.55;
+    }
+
+    if (state.includes('suggestion')) {
+        return 1.15;
+    }
+
+    return 1;
+}
+
+function focusNodeFor3D(nodes) {
+    return nodes.find((node) => node.data('isPrimary') || node.data('isFocus'))
+        || nodes.find((node) => node.data('type') === 'person')
+        || nodes[0]
+        || null;
+}
+
+function threeGraphTopology(nodes, edges) {
+    const adjacency = new Map(nodes.map((node) => [node.id(), new Map()]));
+
+    edges.forEach((edge) => {
+        const source = edge.source().id();
+        const target = edge.target().id();
+
+        if (!adjacency.has(source) || !adjacency.has(target) || source === target) {
+            return;
+        }
+
+        const weight = edgeWeightFor3D(edge);
+        adjacency.get(source).set(target, (adjacency.get(source).get(target) || 0) + weight);
+        adjacency.get(target).set(source, (adjacency.get(target).get(source) || 0) + weight);
+    });
+
+    return adjacency;
+}
+
+function threeDistancesFromFocus(adjacency, focusId) {
+    const distances = new Map([[focusId, 0]]);
+    const queue = [focusId];
+
+    for (let index = 0; index < queue.length; index += 1) {
+        const current = queue[index];
+        const nextDistance = distances.get(current) + 1;
+
+        adjacency.get(current)?.forEach((_, neighborId) => {
+            if (distances.has(neighborId)) {
+                return;
+            }
+
+            distances.set(neighborId, nextDistance);
+            queue.push(neighborId);
+        });
+    }
+
+    return distances;
+}
+
+function threeClusterGroups(nodes, adjacency, focusId) {
+    const lookup = new Map(nodes.map((node) => [node.id(), node]));
+    const visited = new Set([focusId]);
+    const groups = [];
+
+    nodes.forEach((node) => {
+        if (visited.has(node.id())) {
+            return;
+        }
+
+        const group = [];
+        const queue = [node.id()];
+        visited.add(node.id());
+
+        for (let index = 0; index < queue.length; index += 1) {
+            const nodeId = queue[index];
+            const item = lookup.get(nodeId);
+
+            if (item) {
+                group.push(item);
+            }
+
+            adjacency.get(nodeId)?.forEach((_, neighborId) => {
+                if (neighborId === focusId || visited.has(neighborId)) {
+                    return;
+                }
+
+                visited.add(neighborId);
+                queue.push(neighborId);
+            });
+        }
+
+        if (group.length) {
+            groups.push(group);
+        }
+    });
+
+    return groups.sort((left, right) => right.length - left.length);
+}
+
+function orthonormalBasis(direction) {
+    const fallback = Math.abs(direction.y) > 0.82
+        ? { x: 1, y: 0, z: 0 }
+        : { x: 0, y: 1, z: 0 };
+    const tangentA = {
+        x: (fallback.y * direction.z) - (fallback.z * direction.y),
+        y: (fallback.z * direction.x) - (fallback.x * direction.z),
+        z: (fallback.x * direction.y) - (fallback.y * direction.x),
+    };
+    const lengthA = Math.hypot(tangentA.x, tangentA.y, tangentA.z) || 1;
+    tangentA.x /= lengthA;
+    tangentA.y /= lengthA;
+    tangentA.z /= lengthA;
+    const tangentB = {
+        x: (direction.y * tangentA.z) - (direction.z * tangentA.y),
+        y: (direction.z * tangentA.x) - (direction.x * tangentA.z),
+        z: (direction.x * tangentA.y) - (direction.y * tangentA.x),
+    };
+
+    return { tangentA, tangentB };
+}
+
+function vectorAdd(a, b) {
+    return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+function vectorScale(vector, scale) {
+    return { x: vector.x * scale, y: vector.y * scale, z: vector.z * scale };
+}
+
+function threeClusterDirection(index, total) {
+    const ordinal = index + 0.5;
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    const inclination = Math.acos(1 - (2 * ordinal / Math.max(1, total)));
+    const azimuth = ordinal * goldenAngle;
+
+    return {
+        x: Math.sin(inclination) * Math.cos(azimuth),
+        y: Math.cos(inclination),
+        z: Math.sin(inclination) * Math.sin(azimuth),
+    };
+}
+
+function threeNetworkPositions(nodes, edges, state) {
+    const focus = focusNodeFor3D(nodes);
+    const positions = new Map();
+
+    if (!focus) {
+        return positions;
+    }
+
+    const spacing = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5);
+    const adjacency = threeGraphTopology(nodes, edges);
+    const distances = threeDistancesFromFocus(adjacency, focus.id());
+    const groups = threeClusterGroups(nodes, adjacency, focus.id());
+
+    positions.set(focus.id(), { x: 0, y: 0, z: 0 });
+
+    groups.forEach((group, groupIndex) => {
+        const direction = threeClusterDirection(groupIndex, groups.length);
+        const { tangentA, tangentB } = orthonormalBasis(direction);
+        const minDistance = Math.min(...group.map((node) => distances.get(node.id()) ?? 5));
+        const clusterRadius = (165 + ((Math.max(1, minDistance) - 1) * 118) + (Math.sqrt(group.length) * 28)) * Math.max(0.72, Math.min(2.1, spacing));
+        const localRadius = Math.max(34, Math.min(155, 22 + (Math.sqrt(group.length) * 24))) * Math.max(0.8, Math.min(1.65, spacing));
+
+        group
+            .sort((left, right) => {
+                const leftFocusWeight = adjacency.get(left.id())?.get(focus.id()) || 0;
+                const rightFocusWeight = adjacency.get(right.id())?.get(focus.id()) || 0;
+
+                return (distances.get(left.id()) ?? 99) - (distances.get(right.id()) ?? 99)
+                    || rightFocusWeight - leftFocusWeight
+                    || visibleDegreeForState(right, state) - visibleDegreeForState(left, state);
+            })
+            .forEach((node, nodeIndex) => {
+                const localOrdinal = nodeIndex + 0.5;
+                const localAngle = localOrdinal * Math.PI * (3 - Math.sqrt(5));
+                const localSpread = localRadius * Math.sqrt(localOrdinal / Math.max(1, group.length));
+                const focusWeight = adjacency.get(node.id())?.get(focus.id()) || 0;
+                const distance = distances.get(node.id()) ?? 4;
+                const radialOffset = ((distance - 1) * 48) - (focusWeight * 18);
+                const depthOffset = (((nodeIndex % 5) - 2) * 22) + (((Number.parseInt(stableHash(node.id()).slice(-3), 36) || 0) % 30) - 15);
+                let position = vectorScale(direction, clusterRadius + radialOffset + depthOffset);
+                position = vectorAdd(position, vectorScale(tangentA, Math.cos(localAngle) * localSpread));
+                position = vectorAdd(position, vectorScale(tangentB, Math.sin(localAngle) * localSpread));
+
+                positions.set(node.id(), position);
+            });
+    });
+
+    nodes.forEach((node, index) => {
+        if (!positions.has(node.id())) {
+            positions.set(node.id(), threeNodePosition(node, index, nodes.length, 1, state));
+        }
+    });
+
+    return positions;
 }
 
 function labelSprite(THREE, text, color = '#f8fafc') {
@@ -662,6 +880,82 @@ function visibleThreeData(cy) {
     return { nodes, edges, visibleNodeIds };
 }
 
+function createProfileAvatarMesh(THREE, threeState, node, radius, position) {
+    const imageUrl = String(node.data('imageUrl') || '').trim();
+
+    if (!imageUrl) {
+        return null;
+    }
+
+    const geometry = new THREE.CircleGeometry(radius * 0.86, 36);
+    const material = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+    });
+    const avatar = new THREE.Mesh(geometry, material);
+    const outward = position.clone().normalize();
+
+    if (!Number.isFinite(outward.x) || outward.lengthSq() < 0.01) {
+        outward.set(0, 0, 1);
+    }
+
+    avatar.position.copy(position).add(outward.multiplyScalar(radius * 0.72));
+    avatar.userData.nodeId = node.id();
+    avatar.userData.kind = 'avatar';
+    threeState.textureLoader.load(
+        imageUrl,
+        (texture) => {
+            texture.colorSpace = THREE.SRGBColorSpace;
+            texture.anisotropy = Math.min(8, threeState.renderer.capabilities.getMaxAnisotropy?.() || 1);
+            material.map = texture;
+            material.opacity = 1;
+            material.needsUpdate = true;
+        },
+        undefined,
+        () => {
+            material.opacity = 0;
+        },
+    );
+
+    return avatar;
+}
+
+function pauseThreeAutoRotate(threeState, duration = 120000) {
+    if (threeState) {
+        threeState.autoRotatePausedUntil = Date.now() + duration;
+    }
+}
+
+function pickThreeNode(root, state, event) {
+    const threeState = state?.threeState;
+
+    if (!threeState) {
+        return null;
+    }
+
+    const rect = threeState.renderer.domElement.getBoundingClientRect();
+    const pointer = new threeState.THREE.Vector2(
+        ((event.clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1,
+        -(((event.clientY - rect.top) / Math.max(1, rect.height)) * 2 - 1),
+    );
+
+    threeState.raycaster.setFromCamera(pointer, threeState.camera);
+    const hit = threeState.raycaster
+        .intersectObjects(threeState.pickables, false)
+        .find((item) => item.object?.userData?.nodeId);
+
+    if (!hit) {
+        return null;
+    }
+
+    const node = state.cy.getElementById(hit.object.userData.nodeId);
+
+    return node.length ? node : null;
+}
+
 function rebuildThreeGraph(root, state) {
     const threeState = state?.threeState;
 
@@ -672,13 +966,17 @@ function rebuildThreeGraph(root, state) {
     const { THREE, group, cy } = threeState;
     disposeThreeObject(group);
     group.clear();
+    threeState.pickables = [];
+    threeState.billboards = [];
 
     const { nodes, edges } = visibleThreeData(cy);
     const positions = new Map();
     const maxDegree = Math.max(1, ...nodes.map((node) => visibleDegreeForState(node, state)));
+    const layoutPositions = threeNetworkPositions(nodes, edges, state);
 
     nodes.forEach((node, index) => {
-        const position = threeNodePosition(cy, node, index);
+        const coordinates = layoutPositions.get(node.id()) || threeNodePosition(node, index, nodes.length, maxDegree, state);
+        const position = new THREE.Vector3(coordinates.x, coordinates.y, coordinates.z);
         const degreeRatio = visibleDegreeForState(node, state) / maxDegree;
         const radius = Math.max(3.2, Math.min(28, (Number(node.data('renderNodeSize')) || baseNodeSizeForData(node.data())) / 10));
         const geometry = new THREE.SphereGeometry(radius * (0.8 + (degreeRatio * 0.45)), 28, 18);
@@ -688,14 +986,26 @@ function rebuildThreeGraph(root, state) {
             metalness: 0.12,
         });
         const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.set(position.x, position.y, position.z);
+        mesh.position.copy(position);
+        mesh.userData.nodeId = node.id();
+        mesh.userData.kind = 'node';
         group.add(mesh);
+        threeState.pickables.push(mesh);
         positions.set(node.id(), mesh.position.clone());
+
+        const avatar = createProfileAvatarMesh(THREE, threeState, node, radius, mesh.position);
+
+        if (avatar) {
+            group.add(avatar);
+            threeState.pickables.push(avatar);
+            threeState.billboards.push(avatar);
+        }
 
         if (node.data('isPrimary') || node.data('isFocus') || visibleDegreeForState(node, state) >= 3) {
             const label = labelSprite(THREE, node.data('fullLabel') || node.data('label'));
             label.position.set(position.x, position.y + radius + 18, position.z);
             group.add(label);
+            threeState.billboards.push(label);
         }
     });
 
@@ -742,9 +1052,14 @@ async function ensureThreeScene(root, state) {
     camera.position.set(0, 0, 980);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.domElement.className = 'h-full w-full';
+    renderer.domElement.style.display = 'block';
     container.replaceChildren(renderer.domElement);
 
     const group = new THREE.Group();
+    const raycaster = new THREE.Raycaster();
+    const textureLoader = new THREE.TextureLoader();
+    textureLoader.setCrossOrigin('anonymous');
     scene.add(group);
     scene.add(new THREE.AmbientLight(0xffffff, 0.78));
     const light = new THREE.DirectionalLight(0xffffff, 1.15);
@@ -762,10 +1077,20 @@ async function ensureThreeScene(root, state) {
     let dragging = false;
     let lastX = 0;
     let lastY = 0;
+    let pointerStartX = 0;
+    let pointerStartY = 0;
+    let pointerMoved = false;
+    let lastTap = null;
+    let interactionMode = 'rotate';
     const pointerDown = (event) => {
         dragging = true;
+        interactionMode = event.shiftKey || event.button === 1 || event.button === 2 ? 'pan' : 'rotate';
         lastX = event.clientX;
         lastY = event.clientY;
+        pointerStartX = event.clientX;
+        pointerStartY = event.clientY;
+        pointerMoved = false;
+        pauseThreeAutoRotate(state.threeState);
         container.setPointerCapture?.(event.pointerId);
     };
     const pointerMove = (event) => {
@@ -775,20 +1100,75 @@ async function ensureThreeScene(root, state) {
 
         const dx = event.clientX - lastX;
         const dy = event.clientY - lastY;
-        group.rotation.y += dx * 0.006;
-        group.rotation.x += dy * 0.004;
+        const totalDx = event.clientX - pointerStartX;
+        const totalDy = event.clientY - pointerStartY;
+
+        if (Math.hypot(totalDx, totalDy) > 5) {
+            pointerMoved = true;
+            pauseThreeAutoRotate(state.threeState);
+        }
+
+        if (interactionMode === 'pan') {
+            const panScale = Math.max(0.45, Math.min(3.5, camera.position.z / 780));
+            camera.position.x -= dx * panScale;
+            camera.position.y += dy * panScale;
+        } else {
+            group.rotation.y += dx * 0.006;
+            group.rotation.x += dy * 0.004;
+        }
+
         lastX = event.clientX;
         lastY = event.clientY;
     };
-    const pointerUp = () => {
+    const pointerUp = (event) => {
         dragging = false;
+
+        if (pointerMoved) {
+            pauseThreeAutoRotate(state.threeState);
+            return;
+        }
+
+        const node = pickThreeNode(root, state, event);
+
+        if (!node) {
+            setSelected(root, state.cy, null);
+            return;
+        }
+
+        const now = Date.now();
+        const isDoubleTap = lastTap?.id === node.id() && now - lastTap.at <= 360;
+        const rect = container.getBoundingClientRect();
+        const menuX = Math.min(window.innerWidth - 240, Math.max(8, rect.left + event.clientX - rect.left + 12));
+        const menuY = Math.min(window.innerHeight - 190, Math.max(8, rect.top + event.clientY - rect.top + 12));
+        setSelected(root, state.cy, node.id());
+        lastTap = { id: node.id(), at: now };
+
+        if (isDoubleTap) {
+            lastTap = null;
+            dispatchOpenNode(root, node);
+            return;
+        }
+
+        dispatchNodeMenu(root, node, menuX, menuY);
     };
     const wheel = (event) => {
         event.preventDefault();
+        pauseThreeAutoRotate(state.threeState);
         camera.position.z = Math.max(260, Math.min(2200, camera.position.z + (event.deltaY * 0.8)));
     };
+    const contextMenu = (event) => {
+        event.preventDefault();
+    };
     const animate = () => {
-        group.rotation.y += dragging ? 0 : 0.0014;
+        const autoRotatePaused = Date.now() < (state.threeState?.autoRotatePausedUntil || 0);
+
+        if (!dragging && !autoRotatePaused) {
+            group.rotation.y += 0.0014;
+        }
+
+        state.threeState?.billboards?.forEach((billboard) => {
+            billboard.lookAt(camera.position);
+        });
         renderer.render(scene, camera);
         state.threeState.frame = window.requestAnimationFrame(animate);
     };
@@ -800,11 +1180,17 @@ async function ensureThreeScene(root, state) {
         camera,
         renderer,
         group,
+        raycaster,
+        textureLoader,
+        pickables: [],
+        billboards: [],
+        autoRotatePausedUntil: 0,
         resize,
         pointerDown,
         pointerMove,
         pointerUp,
         wheel,
+        contextMenu,
         frame: 0,
         cy: state.cy,
     };
@@ -816,6 +1202,7 @@ async function ensureThreeScene(root, state) {
     container.addEventListener('pointerup', pointerUp);
     container.addEventListener('pointerleave', pointerUp);
     container.addEventListener('wheel', wheel, { passive: false });
+    container.addEventListener('contextmenu', contextMenu);
     resize();
     rebuildThreeGraph(root, state);
     threeState.frame = window.requestAnimationFrame(animate);
@@ -1027,6 +1414,13 @@ function updateViewModeControls(root, state) {
 
     root.querySelectorAll('[data-network-view-mode]').forEach((button) => {
         updateButton(button, button.dataset.networkViewMode === mode);
+    });
+
+    root.querySelectorAll('[data-network-layout-mode]').forEach((control) => {
+        control.disabled = mode === '3d';
+        control.title = mode === '3d'
+            ? 'Die 3D-Ansicht nutzt eine feste raeumliche Netzwerk-Anordnung.'
+            : '';
     });
 }
 
