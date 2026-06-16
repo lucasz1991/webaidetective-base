@@ -1682,7 +1682,15 @@ async function setViewMode(root, state, mode) {
         threeCanvas?.classList.remove('hidden');
         await ensureThreeScene(root, state);
         applyNetworkBackground(root, state);
-        scheduleThreeRender(root);
+        const refreshThree = () => {
+            state.threeState?.resize?.();
+            scheduleThreeRender(root);
+        };
+
+        window.requestAnimationFrame(() => {
+            refreshThree();
+            window.requestAnimationFrame(refreshThree);
+        });
         return;
     }
 
@@ -4635,6 +4643,11 @@ async function loadPreparedGraph(root, detail) {
             arrangeVisibleGraph(root, cy, false, state.layoutMode);
         } else {
             schedulePublicBadgeUpdate(root, cy);
+        }
+
+        if (state.viewMode === '3d') {
+            state.threeState?.resize?.();
+            scheduleThreeRender(root);
         }
 
         window.setTimeout(() => updateBuildStatus(root, { visible: false, state: 'done' }), 900);
