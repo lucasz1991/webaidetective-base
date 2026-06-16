@@ -376,6 +376,11 @@
         @endif
     </x-profile.detail-hero>
 
+    <livewire:user.instagram-scan-activity-panel
+        :instagram-profile-id="$profile->id"
+        lazy
+    />
+
     <section class="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div class="flex flex-wrap items-start justify-between gap-4">
             <div>
