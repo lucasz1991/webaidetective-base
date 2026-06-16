@@ -684,7 +684,17 @@ function edgeWeightFor3D(edge) {
     return 1;
 }
 
-function focusNodeFor3D(nodes) {
+function focusNodeFor3D(nodes, state = null) {
+    const requestedFocusId = String(state?.threeFocusNodeId || '').trim();
+
+    if (requestedFocusId) {
+        const focused = nodes.find((node) => node.id() === requestedFocusId);
+
+        if (focused) {
+            return focused;
+        }
+    }
+
     return nodes.find((node) => node.data('isPrimary') || node.data('isFocus'))
         || nodes.find((node) => node.data('type') === 'person')
         || nodes[0]
@@ -815,7 +825,7 @@ function threeClusterDirection(index, total) {
 }
 
 function threeNetworkPositions(nodes, edges, state) {
-    const focus = focusNodeFor3D(nodes);
+    const focus = focusNodeFor3D(nodes, state);
     const positions = new Map();
 
     if (!focus) {
@@ -870,26 +880,71 @@ function threeNetworkPositions(nodes, edges, state) {
     return positions;
 }
 
-function labelSprite(THREE, text, color = '#f8fafc') {
+function drawRoundedRect(context, x, y, width, height, radius) {
+    context.beginPath();
+
+    if (typeof context.roundRect === 'function') {
+        context.roundRect(x, y, width, height, radius);
+    } else {
+        context.moveTo(x + radius, y);
+        context.lineTo(x + width - radius, y);
+        context.quadraticCurveTo(x + width, y, x + width, y + radius);
+        context.lineTo(x + width, y + height - radius);
+        context.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        context.lineTo(x + radius, y + height);
+        context.quadraticCurveTo(x, y + height, x, y + height - radius);
+        context.lineTo(x, y + radius);
+        context.quadraticCurveTo(x, y, x + radius, y);
+    }
+
+    context.closePath();
+}
+
+function focusMetaLines(node, state) {
+    const data = node.data();
+    const handle = data.handle || data.username || data.type || '';
+    const role = data.role || '';
+    const degree = visibleDegreeForState(node, state);
+    const visibility = visibilityLabel(data);
+    const firstLine = [handle, visibility].filter(Boolean).join(' - ');
+    const secondLine = [
+        `${degree.toLocaleString('de-DE')} sichtbare Verbindungen`,
+        role,
+    ].filter(Boolean).join(' - ');
+
+    return [firstLine, secondLine].filter(Boolean);
+}
+
+function labelSprite(THREE, text, color = '#f8fafc', lines = []) {
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
     const label = truncate(text, 22);
+    const subLines = (lines || []).map((line) => truncate(line, 42)).slice(0, 2);
+    const hasMeta = subLines.length > 0;
 
-    canvas.width = 384;
-    canvas.height = 96;
-    context.font = '700 30px Arial, sans-serif';
+    canvas.width = hasMeta ? 640 : 384;
+    canvas.height = hasMeta ? 160 : 96;
     context.textAlign = 'center';
     context.textBaseline = 'middle';
     context.fillStyle = 'rgba(15, 23, 42, 0.72)';
-    context.roundRect?.(18, 18, 348, 60, 18);
+    drawRoundedRect(context, 18, 18, canvas.width - 36, canvas.height - 36, 20);
     context.fill();
     context.fillStyle = color;
-    context.fillText(label, 192, 50, 320);
+    context.font = hasMeta ? '800 32px Arial, sans-serif' : '700 30px Arial, sans-serif';
+    context.fillText(label, canvas.width / 2, hasMeta ? 52 : 50, canvas.width - 72);
+
+    if (hasMeta) {
+        context.font = '600 20px Arial, sans-serif';
+        context.fillStyle = 'rgba(226, 232, 240, 0.96)';
+        subLines.forEach((line, index) => {
+            context.fillText(line, canvas.width / 2, 92 + (index * 28), canvas.width - 84);
+        });
+    }
 
     const texture = new THREE.CanvasTexture(canvas);
     const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
     const sprite = new THREE.Sprite(material);
-    sprite.scale.set(92, 23, 1);
+    sprite.scale.set(hasMeta ? 162 : 92, hasMeta ? 40 : 23, 1);
 
     return sprite;
 }
@@ -904,6 +959,56 @@ function visibleThreeData(cy) {
     return { nodes, edges, visibleNodeIds };
 }
 
+function curvedAvatarGeometry(THREE, radius) {
+    const rings = 7;
+    const segments = 40;
+    const curveDepth = radius * 0.34;
+    const vertices = [0, 0, curveDepth];
+    const uvs = [0.5, 0.5];
+    const indices = [];
+
+    for (let ring = 1; ring <= rings; ring += 1) {
+        const ringRadius = radius * (ring / rings);
+        const normalized = ringRadius / radius;
+        const z = curveDepth * (1 - (normalized * normalized));
+
+        for (let segment = 0; segment < segments; segment += 1) {
+            const angle = (segment / segments) * Math.PI * 2;
+            const x = Math.cos(angle) * ringRadius;
+            const y = Math.sin(angle) * ringRadius;
+            vertices.push(x, y, z);
+            uvs.push(0.5 + (x / (radius * 2)), 0.5 + (y / (radius * 2)));
+        }
+    }
+
+    for (let segment = 0; segment < segments; segment += 1) {
+        const current = 1 + segment;
+        const next = 1 + ((segment + 1) % segments);
+        indices.push(0, current, next);
+    }
+
+    for (let ring = 2; ring <= rings; ring += 1) {
+        const previousStart = 1 + ((ring - 2) * segments);
+        const currentStart = 1 + ((ring - 1) * segments);
+
+        for (let segment = 0; segment < segments; segment += 1) {
+            const previousCurrent = previousStart + segment;
+            const previousNext = previousStart + ((segment + 1) % segments);
+            const current = currentStart + segment;
+            const next = currentStart + ((segment + 1) % segments);
+            indices.push(previousCurrent, current, next, previousCurrent, next, previousNext);
+        }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+
+    return geometry;
+}
+
 function createProfileAvatarMesh(THREE, threeState, node, radius, position) {
     const imageUrl = String(node.data('imageUrl') || '').trim();
 
@@ -911,7 +1016,7 @@ function createProfileAvatarMesh(THREE, threeState, node, radius, position) {
         return null;
     }
 
-    const geometry = new THREE.CircleGeometry(radius * 0.86, 36);
+    const geometry = curvedAvatarGeometry(THREE, radius * 1.34);
     const material = new THREE.MeshBasicMaterial({
         color: 0xffffff,
         transparent: true,
@@ -928,7 +1033,10 @@ function createProfileAvatarMesh(THREE, threeState, node, radius, position) {
 
     avatar.position.copy(position).add(outward.multiplyScalar(radius * 0.72));
     avatar.userData.nodeId = node.id();
+    avatar.userData.anchorId = node.id();
     avatar.userData.kind = 'avatar';
+    avatar.userData.offsetRadius = radius * 1.05;
+    avatar.userData.verticalOffset = 0;
     threeState.textureLoader.load(
         imageUrl,
         (texture) => {
@@ -980,6 +1088,92 @@ function pickThreeNode(root, state, event) {
     return node.length ? node : null;
 }
 
+function easeInOutCubic(progress) {
+    const value = Math.max(0, Math.min(1, progress));
+
+    return value < 0.5
+        ? 4 * value * value * value
+        : 1 - Math.pow(-2 * value + 2, 3) / 2;
+}
+
+function syncThreeEdges(threeState) {
+    threeState?.edgeLines?.forEach((line) => {
+        const source = threeState.nodeGroups?.get(line.userData.sourceId);
+        const target = threeState.nodeGroups?.get(line.userData.targetId);
+
+        if (!source || !target) {
+            return;
+        }
+
+        const attribute = line.geometry.getAttribute('position');
+        attribute.setXYZ(0, source.position.x, source.position.y, source.position.z);
+        attribute.setXYZ(1, target.position.x, target.position.y, target.position.z);
+        attribute.needsUpdate = true;
+    });
+}
+
+function syncThreeBillboards(threeState) {
+    if (!threeState?.billboards?.length) {
+        return;
+    }
+
+    const cameraLocal = threeState.group.worldToLocal(threeState.camera.position.clone());
+    const up = new threeState.THREE.Vector3(0, 1, 0);
+
+    threeState.billboards.forEach((billboard) => {
+        const anchor = threeState.nodeGroups?.get(billboard.userData.anchorId);
+
+        if (!anchor) {
+            return;
+        }
+
+        const direction = cameraLocal.clone().sub(anchor.position);
+
+        if (direction.lengthSq() < 0.01) {
+            direction.set(0, 0, 1);
+        } else {
+            direction.normalize();
+        }
+
+        billboard.position.copy(anchor.position)
+            .add(direction.multiplyScalar(Number(billboard.userData.offsetRadius || 0)))
+            .add(up.clone().multiplyScalar(Number(billboard.userData.verticalOffset || 0)));
+        billboard.lookAt(threeState.camera.position);
+    });
+}
+
+function updateThreePositionTweens(threeState) {
+    if (!threeState?.positionTweens?.length) {
+        return;
+    }
+
+    const now = performance.now();
+    threeState.positionTweens = threeState.positionTweens.filter((tween) => {
+        const progress = easeInOutCubic((now - tween.startedAt) / tween.duration);
+        tween.group.position.lerpVectors(tween.from, tween.to, progress);
+
+        return progress < 1;
+    });
+
+    syncThreeEdges(threeState);
+    syncThreeBillboards(threeState);
+}
+
+function setThreeFocusNode(root, state, nodeId) {
+    if (!state || state.viewMode !== '3d' || !nodeId) {
+        return;
+    }
+
+    if (state.threeFocusNodeId === nodeId) {
+        return;
+    }
+
+    state.threeFocusNodeId = nodeId;
+    state.threeAnimateNextRender = true;
+    pauseThreeAutoRotate(state.threeState);
+    scheduleThreeRender(root);
+}
+
 function rebuildThreeGraph(root, state) {
     const threeState = state?.threeState;
 
@@ -988,36 +1182,65 @@ function rebuildThreeGraph(root, state) {
     }
 
     const { THREE, group, cy } = threeState;
+    const previousPositions = new Map();
+
+    threeState.nodeGroups?.forEach((nodeGroup, nodeId) => {
+        previousPositions.set(nodeId, nodeGroup.position.clone());
+    });
+
+    const animatePositions = Boolean(state.threeAnimateNextRender && previousPositions.size);
+    state.threeAnimateNextRender = false;
     disposeThreeObject(group);
     group.clear();
     threeState.pickables = [];
     threeState.billboards = [];
+    threeState.edgeLines = [];
+    threeState.nodeGroups = new Map();
+    threeState.positionTweens = [];
 
     const { nodes, edges } = visibleThreeData(cy);
-    const positions = new Map();
     const maxDegree = Math.max(1, ...nodes.map((node) => visibleDegreeForState(node, state)));
     const layoutPositions = threeNetworkPositions(nodes, edges, state);
+    const focusNode = focusNodeFor3D(nodes, state);
+    const focusId = focusNode?.id();
 
     nodes.forEach((node, index) => {
         const coordinates = layoutPositions.get(node.id()) || threeNodePosition(node, index, nodes.length, maxDegree, state);
-        const position = new THREE.Vector3(coordinates.x, coordinates.y, coordinates.z);
+        const targetPosition = new THREE.Vector3(coordinates.x, coordinates.y, coordinates.z);
+        const startPosition = animatePositions && previousPositions.has(node.id())
+            ? previousPositions.get(node.id()).clone()
+            : targetPosition.clone();
         const degreeRatio = visibleDegreeForState(node, state) / maxDegree;
         const radius = Math.max(3.2, Math.min(28, (Number(node.data('renderNodeSize')) || baseNodeSizeForData(node.data())) / 10));
+        const renderRadius = radius * (0.8 + (degreeRatio * 0.45));
+        const nodeGroup = new THREE.Group();
+        nodeGroup.position.copy(startPosition);
+
         const geometry = new THREE.SphereGeometry(radius * (0.8 + (degreeRatio * 0.45)), 28, 18);
         const material = new THREE.MeshStandardMaterial({
-            color: nodeColorFor3D(node.data()),
+            color: node.id() === focusId ? 0xfbbf24 : nodeColorFor3D(node.data()),
             roughness: 0.45,
             metalness: 0.12,
         });
         const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.copy(position);
         mesh.userData.nodeId = node.id();
         mesh.userData.kind = 'node';
-        group.add(mesh);
+        nodeGroup.add(mesh);
+        group.add(nodeGroup);
+        threeState.nodeGroups.set(node.id(), nodeGroup);
         threeState.pickables.push(mesh);
-        positions.set(node.id(), mesh.position.clone());
 
-        const avatar = createProfileAvatarMesh(THREE, threeState, node, radius, mesh.position);
+        if (animatePositions && !startPosition.equals(targetPosition)) {
+            threeState.positionTweens.push({
+                group: nodeGroup,
+                from: startPosition.clone(),
+                to: targetPosition.clone(),
+                startedAt: performance.now(),
+                duration: 720,
+            });
+        }
+
+        const avatar = createProfileAvatarMesh(THREE, threeState, node, renderRadius, targetPosition);
 
         if (avatar) {
             group.add(avatar);
@@ -1025,17 +1248,24 @@ function rebuildThreeGraph(root, state) {
             threeState.billboards.push(avatar);
         }
 
-        if (node.data('isPrimary') || node.data('isFocus') || visibleDegreeForState(node, state) >= 3) {
-            const label = labelSprite(THREE, node.data('fullLabel') || node.data('label'));
-            label.position.set(position.x, position.y + radius + 18, position.z);
+        if (node.id() === focusId || node.data('isPrimary') || node.data('isFocus') || visibleDegreeForState(node, state) >= 3) {
+            const label = labelSprite(
+                THREE,
+                node.data('fullLabel') || node.data('label'),
+                node.id() === focusId ? '#fef3c7' : '#f8fafc',
+                node.id() === focusId ? focusMetaLines(node, state) : [],
+            );
+            label.userData.anchorId = node.id();
+            label.userData.offsetRadius = renderRadius + (node.id() === focusId ? 46 : 26);
+            label.userData.verticalOffset = node.id() === focusId ? renderRadius + 18 : renderRadius + 12;
             group.add(label);
             threeState.billboards.push(label);
         }
     });
 
     edges.forEach((edge) => {
-        const from = positions.get(edge.source().id());
-        const to = positions.get(edge.target().id());
+        const from = threeState.nodeGroups.get(edge.source().id())?.position;
+        const to = threeState.nodeGroups.get(edge.target().id())?.position;
 
         if (!from || !to) {
             return;
@@ -1047,9 +1277,15 @@ function rebuildThreeGraph(root, state) {
             transparent: true,
             opacity: Math.max(0.22, Math.min(0.82, Number(edge.data('edgeOpacity')) || 0.48)),
         });
-        group.add(new THREE.Line(geometry, material));
+        const line = new THREE.Line(geometry, material);
+        line.userData.sourceId = edge.source().id();
+        line.userData.targetId = edge.target().id();
+        group.add(line);
+        threeState.edgeLines.push(line);
     });
 
+    syncThreeEdges(threeState);
+    syncThreeBillboards(threeState);
     threeState.needsRender = true;
 }
 
@@ -1190,9 +1426,8 @@ async function ensureThreeScene(root, state) {
             group.rotation.y += 0.0014;
         }
 
-        state.threeState?.billboards?.forEach((billboard) => {
-            billboard.lookAt(camera.position);
-        });
+        updateThreePositionTweens(state.threeState);
+        syncThreeBillboards(state.threeState);
         renderer.render(scene, camera);
         state.threeState.frame = window.requestAnimationFrame(animate);
     };
@@ -1208,6 +1443,9 @@ async function ensureThreeScene(root, state) {
         textureLoader,
         pickables: [],
         billboards: [],
+        nodeGroups: new Map(),
+        edgeLines: [],
+        positionTweens: [],
         autoRotatePausedUntil: 0,
         resize,
         pointerDown,
@@ -3088,6 +3326,10 @@ function setSelected(root, cy, nodeId) {
         const edges = visibleConnectedEdges(node);
         const neighborhood = edges.connectedNodes().union(edges).union(node);
 
+        if (node.length && state.viewMode === '3d') {
+            setThreeFocusNode(root, state, node.id());
+        }
+
         cy.elements().difference(neighborhood).addClass('network-faded');
         node.addClass('network-selected');
         edges.addClass('network-neighbor');
@@ -3791,6 +4033,8 @@ async function initNetworkMap(root) {
             graphDataHash: String(root.dataset.networkGraphHash || '').trim(),
             layoutMode: readStoredLayoutMode(root),
             viewMode: readStoredViewMode(root),
+            threeFocusNodeId: null,
+            threeAnimateNextRender: false,
             layoutRestored: false,
             hasAppliedLayout: false,
             isLoadingGraph: false,
