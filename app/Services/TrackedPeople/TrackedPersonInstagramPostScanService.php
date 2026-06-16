@@ -406,6 +406,7 @@ class TrackedPersonInstagramPostScanService
         }
 
         $normalized = [];
+        $seenContentKeys = [];
 
         foreach ($comments as $comment) {
             if (! is_array($comment)) {
@@ -413,23 +414,37 @@ class TrackedPersonInstagramPostScanService
             }
 
             $instagramCommentId = $this->nullableString($comment['instagramCommentId'] ?? null);
-            $text = $this->nullableString($comment['text'] ?? null);
+            $text = $this->normalizeCommentText($comment['text'] ?? null);
 
-            if (! $instagramCommentId || ! $text) {
+            if (! $instagramCommentId || ! $text || $this->looksLikeNonCommentText($text)) {
                 continue;
             }
+
+            $username = $this->normalizeUsername($comment['username'] ?? null);
+            $publishedAt = $this->parseTimestamp($comment['publishedAt'] ?? null);
+            $contentKey = implode('|', [
+                $username ?: '',
+                $publishedAt?->toIso8601String() ?: '',
+                mb_strtolower(preg_replace('/\s+/u', ' ', $text) ?: $text),
+            ]);
+
+            if (isset($seenContentKeys[$contentKey])) {
+                continue;
+            }
+
+            $seenContentKeys[$contentKey] = true;
 
             $normalized[$instagramCommentId] = [
                 'instagram_comment_id' => $instagramCommentId,
                 'parent_instagram_comment_id' => $this->nullableString($comment['parentInstagramCommentId'] ?? null),
                 'instagram_user_id' => $this->nullableString($comment['instagramUserId'] ?? null),
-                'username' => $this->normalizeUsername($comment['username'] ?? null),
+                'username' => $username,
                 'full_name' => $this->nullableString($comment['fullName'] ?? null),
                 'profile_image_url' => $this->nullableString($comment['profileImageUrl'] ?? null),
                 'comment_text' => $text,
                 'likes_count' => $this->nullableInteger($comment['likesCount'] ?? null),
                 'is_verified' => is_bool($comment['isVerified'] ?? null) ? $comment['isVerified'] : null,
-                'published_at' => $this->parseTimestamp($comment['publishedAt'] ?? null),
+                'published_at' => $publishedAt,
                 'raw_comment' => is_array($comment['rawComment'] ?? null) ? $comment['rawComment'] : $comment,
             ];
         }
@@ -675,6 +690,51 @@ class TrackedPersonInstagramPostScanService
         $username = $this->nullableString($value);
 
         return $username ? strtolower(ltrim($username, '@')) : null;
+    }
+
+    private function normalizeCommentText(mixed $value): ?string
+    {
+        $text = $this->nullableString($value);
+
+        if (! $text) {
+            return null;
+        }
+
+        $text = preg_replace('/\s+/u', ' ', $text) ?: $text;
+        $length = mb_strlen($text);
+
+        if ($length > 0 && $length % 2 === 0) {
+            $midpoint = (int) ($length / 2);
+            $left = trim(mb_substr($text, 0, $midpoint));
+            $right = trim(mb_substr($text, $midpoint));
+
+            if ($left !== '' && mb_strtolower($left) === mb_strtolower($right)) {
+                $text = $left;
+            }
+        }
+
+        $words = preg_split('/\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        if (count($words) >= 2 && count($words) % 2 === 0) {
+            $midpoint = (int) (count($words) / 2);
+            $left = implode(' ', array_slice($words, 0, $midpoint));
+            $right = implode(' ', array_slice($words, $midpoint));
+
+            if (mb_strtolower($left) === mb_strtolower($right)) {
+                $text = $left;
+            }
+        }
+
+        return $this->nullableString($text);
+    }
+
+    private function looksLikeNonCommentText(string $text): bool
+    {
+        $normalized = mb_strtolower(trim($text));
+
+        return (bool) preg_match('/^(antworten|reply|kommentar|comment|translation|uebersetzung|übersetzung|mehr anzeigen|show more|view replies|weitere antworten)(\b|$)/iu', $normalized)
+            || (bool) preg_match('/^(gef[aä]llt|likes?)\b/iu', $normalized)
+            || (bool) preg_match('/^(?:\d+\s*)?(?:antworten|replies|comments?|kommentare)$/iu', $normalized);
     }
 
     private function nullableInteger(mixed $value): ?int

@@ -1558,8 +1558,45 @@ function addLikeToMap(likesByKey, like = {}, maxLikes = 250) {
   return true;
 }
 
+function normalizeCommentTextForComparison(value = '') {
+  return normalizeText(String(value || ''))
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function looksLikeNonCommentText(value = '') {
+  const text = normalizeCommentTextForComparison(value);
+
+  if (!text) {
+    return true;
+  }
+
+  return /^(antworten|reply|kommentar|comment|translation|uebersetzung|übersetzung|mehr anzeigen|show more|view replies|weitere antworten)(?:\b|$)/i.test(text)
+    || /^(gef[aä]llt|likes?)\b/i.test(text)
+    || /^(?:\d+\s*)?(?:antworten|replies|comments?|kommentare)$/i.test(text);
+}
+
 function addCommentToMap(commentsById, comment = {}, maxComments = 250) {
-  if (!comment?.instagramCommentId || !comment?.text || commentsById.has(comment.instagramCommentId) || commentsById.size >= maxComments) {
+  const normalizedText = normalizeCommentTextForComparison(comment?.text || '');
+
+  if (!comment?.instagramCommentId || !normalizedText || looksLikeNonCommentText(normalizedText) || commentsById.has(comment.instagramCommentId) || commentsById.size >= maxComments) {
+    return false;
+  }
+
+  const duplicate = Array.from(commentsById.values()).some((existing) => {
+    if (normalizeCommentTextForComparison(existing?.text || '') !== normalizedText) {
+      return false;
+    }
+
+    const existingUserKey = existing?.instagramUserId || existing?.username || '';
+    const commentUserKey = comment?.instagramUserId || comment?.username || '';
+
+    return existingUserKey === commentUserKey
+      && (existing?.publishedAt || '') === (comment?.publishedAt || '');
+  });
+
+  if (duplicate) {
     return false;
   }
 
@@ -1752,6 +1789,44 @@ async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeCon
 
         return Number.isFinite(parsed) ? Math.round(parsed * multiplier) : null;
       };
+      const isMetaLine = (line = '') => {
+        const text = normalizeElementText(line).toLowerCase();
+
+        return !text
+          || /^(antworten|reply|mehr|more|translation|uebersetzung|übersetzung|original anzeigen|see translation|view replies|weitere antworten)$/i.test(text)
+          || /^(gef[aä]llt|like|likes?)\b/i.test(text)
+          || /^\d+\s*(?:min|std|h|d|tag|tage|w|wo|j|y)\b/i.test(text)
+          || /^(?:antworten|reply)\s*(?:anzeigen|ansehen)?/i.test(text)
+          || /^(?:\d+\s*)?(?:antworten|replies|comments?|kommentare)$/i.test(text);
+      };
+      const compactDuplicatedText = (value = '') => {
+        const text = normalizeElementText(value);
+        const evenLength = text.length % 2 === 0;
+
+        if (evenLength) {
+          const midpoint = text.length / 2;
+          const left = text.slice(0, midpoint).trim();
+          const right = text.slice(midpoint).trim();
+
+          if (left && left.toLowerCase() === right.toLowerCase()) {
+            return left;
+          }
+        }
+
+        const words = text.split(' ');
+
+        if (words.length >= 2 && words.length % 2 === 0) {
+          const midpoint = words.length / 2;
+          const left = words.slice(0, midpoint).join(' ');
+          const right = words.slice(midpoint).join(' ');
+
+          if (left.toLowerCase() === right.toLowerCase()) {
+            return left;
+          }
+        }
+
+        return text;
+      };
       const profileFromAnchor = (anchor) => {
         let pathname = '';
 
@@ -1792,13 +1867,17 @@ async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeCon
         for (let element = anchor; element && element !== dialog; element = element.parentElement) {
           const text = normalizeElementText(element.innerText || element.textContent || '');
           const rect = element.getBoundingClientRect();
+          const linkCount = element.querySelectorAll('a[href]').length;
+          const timeCount = element.querySelectorAll('time').length;
 
           if (
             text.toLowerCase().includes(username)
             && text.length >= username.length + 2
-            && text.length <= 1800
+            && text.length <= 900
             && rect.width >= 120
             && rect.height >= 24
+            && linkCount <= 4
+            && timeCount <= 2
           ) {
             row = element;
             break;
@@ -1810,17 +1889,18 @@ async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeCon
         }
 
         seenRows.add(row);
-        const rowText = normalizeElementText(row.innerText || row.textContent || '');
+        const rawRowText = row.innerText || row.textContent || '';
+        const rowText = normalizeElementText(rawRowText);
 
         if (!rowText || !rowText.toLowerCase().includes(username)) {
           continue;
         }
 
-        if (/^(gef[aä]llt|likes?)\b/i.test(rowText) || /^@\w/.test(rowText) || rowText.length > 1800) {
+        if (/^(gef[aä]llt|likes?)\b/i.test(rowText) || /^@\w/.test(rowText) || rowText.length > 900) {
           continue;
         }
 
-        const textLines = rowText
+        const textLines = String(rawRowText || '')
           .split(/\n| {2,}/)
           .map((line) => normalizeElementText(line))
           .filter(Boolean);
@@ -1828,19 +1908,22 @@ async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeCon
           const normalized = normalizeUsername(line);
 
           return normalized !== username
-            && !/^(antworten|reply|gef[aä]llt|like|mehr|more)$/i.test(line)
-            && !/\d+\s*(?:min|std|h|d|tag|tage|w|wo|j|y)\b/i.test(line)
+            && !isMetaLine(line)
             && line.length <= 120;
         }) || null;
-        const stripped = rowText
+        const lineText = compactDuplicatedText(textLines
+          .filter((line) => normalizeUsername(line) !== username && !isMetaLine(line))
+          .join(' ')
+          .trim());
+        const stripped = compactDuplicatedText(rowText
           .replace(new RegExp(`^${username}\\b`, 'i'), '')
           .replace(/\b(?:antworten|reply)\b.*$/i, '')
-          .replace(/\b(?:gef[aä]llt|like)[^.!?\n]{0,80}$/i, '')
+          .replace(/\b(?:gef[aä]llt|like|likes?)[^.!?\n]{0,80}$/i, '')
           .replace(/\b\d+\s*(?:min|std|h|d|tag|tage|w|wo|j|y)\b/ig, '')
-          .trim();
-        const text = stripped || textLines.filter((line) => normalizeUsername(line) !== username).join(' ').trim();
+          .trim());
+        const text = lineText || stripped;
 
-        if (!text || text.length < 1) {
+        if (!text || text.length < 1 || isMetaLine(text)) {
           continue;
         }
 
