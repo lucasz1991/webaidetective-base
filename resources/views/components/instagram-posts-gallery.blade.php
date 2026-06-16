@@ -51,7 +51,7 @@
                             <span>
                                 {{ $post->media_type ?: 'post' }}
                                 @if($post->media_count > 1)
-                                    · {{ number_format($post->media_count) }} Medien
+                                    &middot; {{ number_format($post->media_count) }} Medien
                                 @endif
                             </span>
                             <span>{{ $post->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>

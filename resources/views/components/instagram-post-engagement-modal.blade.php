@@ -17,8 +17,8 @@
                 <p class="mt-1 text-sm text-slate-500">
                     @if($selectedPost)
                         Beitrag {{ $selectedPost->shortcode }}
-                        · {{ number_format($selectedPost->likes->count()) }} Likes gespeichert
-                        · {{ number_format($selectedPost->comments->count()) }} Kommentare gespeichert
+                        &middot; {{ number_format($selectedPost->likes->count()) }} Likes gespeichert
+                        &middot; {{ number_format($selectedPost->comments->count()) }} Kommentare gespeichert
                     @else
                         Kein Beitrag ausgewaehlt.
                     @endif
@@ -58,9 +58,9 @@
                         <div class="flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                             <span>{{ $selectedPost->media_type ?: 'post' }}</span>
                             @if($selectedPost->media_count > 1)
-                                <span>· {{ number_format($selectedPost->media_count) }} Medien</span>
+                                <span>&middot; {{ number_format($selectedPost->media_count) }} Medien</span>
                             @endif
-                            <span>· {{ $selectedPost->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>
+                            <span>&middot; {{ $selectedPost->published_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</span>
                         </div>
                         @if($selectedPost->caption)
                             <p class="mt-2 max-h-36 overflow-y-auto whitespace-pre-line text-sm leading-6 text-slate-800">{{ $selectedPost->caption }}</p>
