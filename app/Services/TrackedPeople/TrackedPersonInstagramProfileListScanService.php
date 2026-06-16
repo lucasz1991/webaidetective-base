@@ -10,6 +10,7 @@ use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class TrackedPersonInstagramProfileListScanService
@@ -176,6 +177,7 @@ class TrackedPersonInstagramProfileListScanService
             $extracted = $this->extractor->extract($payload);
             $listKey = $relationship === 'followers' ? 'followers_list' : 'following_list';
             $relationshipList = is_array($extracted[$listKey] ?? null) ? $extracted[$listKey] : [];
+            $this->refreshDatabaseConnection();
 
             $profileAttributes = [
                 'display_name' => $extracted['full_name'] ?? $profile->display_name,
@@ -264,6 +266,12 @@ class TrackedPersonInstagramProfileListScanService
             ->orderByDesc('scanned_at')
             ->orderByDesc('id')
             ->first();
+    }
+
+    private function refreshDatabaseConnection(): void
+    {
+        DB::purge();
+        DB::reconnect();
     }
 
     private function lastScanSuggestsResume(InstagramProfileListScan $lastScan, int $expectedCount): bool

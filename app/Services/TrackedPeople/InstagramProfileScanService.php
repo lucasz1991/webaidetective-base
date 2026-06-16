@@ -63,6 +63,7 @@ class InstagramProfileScanService
                     'tracked_person_created' => false,
                 ],
             ]) ?: $profile;
+            $this->profileRelationshipStore->propagateProfileDataToLinkedTrackedPeople($profile);
 
             $listScans = collect();
             $postScan = null;
@@ -105,6 +106,7 @@ class InstagramProfileScanService
                 'last_status_message' => $statusMessage,
                 'last_scanned_at' => now('UTC'),
             ])->save();
+            $this->profileRelationshipStore->propagateProfileDataToLinkedTrackedPeople($profile->fresh() ?: $profile);
             $profileScan = InstagramProfileScan::create([
                 'instagram_profile_id' => $profile->id,
                 'user_id' => $userId,

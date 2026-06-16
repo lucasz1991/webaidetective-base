@@ -145,7 +145,7 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 11;
+        $data['graph_version'] = 12;
         $data['graph_node_limit'] = self::MAX_GRAPH_NODES;
         $data['contact_image_limit'] = self::MAX_CONTACT_IMAGES;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;
@@ -1508,6 +1508,124 @@ class NetworkMap extends Component
             );
             $edges[$edge['id']] = $edge;
         }
+
+        $this->addSuggestionInterconnections(
+            $peopleByInstagram,
+            $nodesByInstagram,
+            $nodes,
+            $edges,
+        );
+    }
+
+    private function addSuggestionInterconnections(
+        Collection $peopleByInstagram,
+        Collection $nodesByInstagram,
+        array &$nodes,
+        array &$edges,
+    ): void {
+        $visibleUsernames = $this->graphInstagramUsernames($nodes);
+
+        if ($visibleUsernames->isEmpty()) {
+            return;
+        }
+
+        $connections = TrackedPersonInstagramInferredConnection::query()
+            ->where('status', 'active')
+            ->where('relationship_type', 'suggestion_connection')
+            ->where(function ($query) use ($visibleUsernames): void {
+                $query
+                    ->whereIn('source_public_username', $visibleUsernames->all())
+                    ->orWhereIn('candidate_username', $visibleUsernames->all())
+                    ->orWhereHas('trackedPerson', function ($trackedPersonQuery) use ($visibleUsernames): void {
+                        $trackedPersonQuery->whereIn('instagram_username', $visibleUsernames->all());
+                    });
+            })
+            ->with([
+                'trackedPerson.currentInstagramProfile',
+                'sourcePublicInstagramProfile',
+                'candidateInstagramProfile',
+            ])
+            ->latest('last_seen_at')
+            ->limit(self::MAX_SYSTEM_RELATIONSHIPS)
+            ->get();
+
+        foreach ($connections as $connection) {
+            $sourceUsername = $this->normalizeUsername($connection->source_public_username)
+                ?: $this->normalizeUsername($connection->sourcePublicInstagramProfile?->username)
+                ?: $this->normalizeUsername($connection->trackedPerson?->instagram_username);
+            $candidateUsername = $this->normalizeUsername($connection->candidate_username)
+                ?: $this->normalizeUsername($connection->candidateInstagramProfile?->username);
+
+            if ($sourceUsername === '' || $candidateUsername === '' || $sourceUsername === $candidateUsername) {
+                continue;
+            }
+
+            $sourceAlreadyVisible = $visibleUsernames->contains($sourceUsername);
+            $candidateAlreadyVisible = $visibleUsernames->contains($candidateUsername);
+
+            if (! $sourceAlreadyVisible && ! $candidateAlreadyVisible) {
+                continue;
+            }
+
+            $sourceProfile = $connection->sourcePublicInstagramProfile
+                ?: $connection->trackedPerson?->currentInstagramProfile;
+            $sourceId = $sourceProfile
+                ? $this->ensureInstagramProfileNode(
+                    $nodes,
+                    $nodesByInstagram,
+                    $peopleByInstagram,
+                    $sourceProfile,
+                    'Vorschlagsquelle',
+                )
+                : $this->ensureSuggestionCandidateNode(
+                    $nodes,
+                    $nodesByInstagram,
+                    $peopleByInstagram,
+                    $sourceUsername,
+                    null,
+                    'Vorschlagsquelle',
+                );
+
+            $candidateId = $connection->candidateInstagramProfile
+                ? $this->ensureInstagramProfileNode(
+                    $nodes,
+                    $nodesByInstagram,
+                    $peopleByInstagram,
+                    $connection->candidateInstagramProfile,
+                    'Vorschlag aus Netzwerk',
+                )
+                : $this->ensureSuggestionCandidateNode(
+                    $nodes,
+                    $nodesByInstagram,
+                    $peopleByInstagram,
+                    $candidateUsername,
+                    $connection->candidate_display_name,
+                    'Vorschlag aus Netzwerk',
+                );
+
+            if (! $sourceId || ! $candidateId || $sourceId === $candidateId) {
+                continue;
+            }
+
+            $sourceHandle = isset($nodes[$sourceId])
+                ? ($nodes[$sourceId]['handle'] ?? '@'.$sourceUsername)
+                : '@'.$sourceUsername;
+            $candidateHandle = isset($nodes[$candidateId])
+                ? ($nodes[$candidateId]['handle'] ?? '@'.$candidateUsername)
+                : '@'.$candidateUsername;
+            $ownEvidence = (int) $connection->user_id === (int) Auth::id();
+            $edge = $this->suggestionConnectionEdge(
+                (int) $connection->id,
+                $sourceId,
+                $candidateId,
+                $sourceHandle,
+                sprintf('%s enthaelt %s in gespeicherten Instagram-Vorschlaegen.', $sourceHandle, $candidateHandle),
+                $ownEvidence,
+            );
+
+            $edges[$edge['id']] = $edge;
+            $visibleUsernames = $visibleUsernames->merge([$sourceUsername, $candidateUsername])->unique()->values();
+        }
     }
 
     private function suggestionConnectionEdge(
@@ -1532,6 +1650,15 @@ class NetworkMap extends Component
             'systemEvidenceScanCount' => 1,
             'systemEvidenceUserCount' => 1,
         ];
+    }
+
+    private function graphInstagramUsernames(array $nodes): Collection
+    {
+        return collect($nodes)
+            ->map(fn (array $node): string => $this->normalizeUsername($node['username'] ?? $node['handle'] ?? ''))
+            ->filter()
+            ->unique()
+            ->values();
     }
 
     private function focusedObservedTargetUsernames(TrackedPerson $primaryPerson): Collection
@@ -1648,6 +1775,58 @@ class NetworkMap extends Component
             'status' => $this->profileStatusForInstagramProfile($profile),
             'profileVisibility' => $this->profileStatusForInstagramProfile($profile),
             'detail' => $this->profileDetailForInstagramProfile($profile),
+            'isKnownProfile' => false,
+        ];
+
+        $nodes[$node['id']] = $node;
+        $nodesByInstagram->put($username, $node);
+
+        return $node['id'];
+    }
+
+    private function ensureSuggestionCandidateNode(
+        array &$nodes,
+        Collection $nodesByInstagram,
+        Collection $peopleByInstagram,
+        string $username,
+        ?string $displayName,
+        string $role,
+    ): ?string {
+        $username = $this->normalizeUsername($username);
+
+        if ($username === '') {
+            return null;
+        }
+
+        $existing = $nodesByInstagram->get($username);
+
+        if ($existing) {
+            return $existing['id'] ?? null;
+        }
+
+        $person = $peopleByInstagram->get($username);
+
+        if ($person) {
+            $nodeId = $this->ensureTrackedPersonNode($nodes, $person);
+            $nodesByInstagram->put($username, $nodes[$nodeId]);
+
+            return $nodeId;
+        }
+
+        $node = [
+            'id' => 'candidate-'.$username,
+            'type' => 'candidate',
+            'label' => filled($displayName) ? $displayName : '@'.$username,
+            'handle' => '@'.$username,
+            'username' => $username,
+            'platform' => 'instagram',
+            'imageUrl' => null,
+            'hasImage' => false,
+            'isPrimary' => false,
+            'role' => $role,
+            'status' => 'inferred',
+            'profileVisibility' => 'unknown',
+            'detail' => 'Ueber gespeicherte Instagram-Vorschlaege verbunden.',
             'isKnownProfile' => false,
         ];
 

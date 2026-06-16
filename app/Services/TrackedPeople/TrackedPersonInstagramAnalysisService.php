@@ -342,6 +342,7 @@ class TrackedPersonInstagramAnalysisService
             95,
         );
         $extracted = $this->extractor->extract($payload);
+        $this->refreshDatabaseConnection();
         $analyzedAt = now('UTC')->format('Y-m-d H:i:s');
         $persistedWarnings = [];
 
@@ -759,6 +760,12 @@ class TrackedPersonInstagramAnalysisService
         ];
 
         return true;
+    }
+
+    private function refreshDatabaseConnection(): void
+    {
+        DB::purge();
+        DB::reconnect();
     }
 
     private function normalizeProgressRelationshipItems(mixed $items): array

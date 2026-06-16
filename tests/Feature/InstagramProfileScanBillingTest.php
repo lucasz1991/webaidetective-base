@@ -9,9 +9,11 @@ use App\Models\InstagramProfileRelationship;
 use App\Models\InstagramProfileScan;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
+use App\Models\TrackedPersonInstagramProfileLink;
 use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Models\User;
 use App\Services\Billing\ScanCreditService;
+use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use ReflectionMethod;
@@ -64,6 +66,57 @@ class InstagramProfileScanBillingTest extends TestCase
             ->where('reference_type', $scan->getMorphClass())
             ->where('reference_id', $scan->id)
             ->count());
+    }
+
+    public function test_profile_data_is_propagated_to_linked_tracked_people(): void
+    {
+        $user = User::factory()->create();
+        $profile = InstagramProfile::create([
+            'username' => 'linked_profile_test',
+            'profile_image_path' => 'instagram/profiles/linked.jpg',
+            'profile_image_hash' => 'hash-linked',
+            'followers_count' => 1234,
+            'following_count' => 321,
+            'posts_count' => 45,
+            'last_status_level' => 'success',
+            'last_status_message' => 'Mini scan done.',
+            'last_scanned_at' => now('UTC'),
+        ]);
+        $currentPerson = TrackedPerson::create([
+            'user_id' => $user->id,
+            'first_name' => 'Current',
+            'last_name' => 'Person',
+            'instagram_username' => 'old_name',
+            'current_instagram_profile_id' => $profile->id,
+        ]);
+        $linkedPerson = TrackedPerson::create([
+            'user_id' => $user->id,
+            'first_name' => 'Linked',
+            'last_name' => 'Person',
+            'instagram_username' => 'old_linked',
+        ]);
+        TrackedPersonInstagramProfileLink::create([
+            'tracked_person_id' => $linkedPerson->id,
+            'instagram_profile_id' => $profile->id,
+            'user_id' => $user->id,
+            'relation_type' => 'observed',
+            'is_current' => true,
+            'linked_at' => now('UTC'),
+        ]);
+
+        app(InstagramProfileRelationshipStore::class)
+            ->propagateProfileDataToLinkedTrackedPeople($profile);
+
+        foreach ([$currentPerson->fresh(), $linkedPerson->fresh()] as $person) {
+            $this->assertSame('linked_profile_test', $person->instagram_username);
+            $this->assertSame('instagram/profiles/linked.jpg', $person->instagram_profile_image_path);
+            $this->assertSame('hash-linked', $person->instagram_profile_image_hash);
+            $this->assertSame(1234, $person->instagram_followers_count);
+            $this->assertSame(321, $person->instagram_following_count);
+            $this->assertSame(45, $person->instagram_posts_count);
+            $this->assertSame('success', $person->last_instagram_status_level);
+            $this->assertSame('Mini scan done.', $person->last_instagram_status_message);
+        }
     }
 
     public function test_suggestion_scan_can_be_stored_without_tracked_person(): void

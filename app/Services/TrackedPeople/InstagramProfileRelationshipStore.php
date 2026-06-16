@@ -12,6 +12,7 @@ use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\TrackedPersonPublicProfile;
 use App\Services\Social\InstagramProfileImageStorage;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -235,6 +236,9 @@ class InstagramProfileRelationshipStore
         if (! $this->isReady() || ! in_array($listType, ['followers', 'following'], true)) {
             return null;
         }
+
+        DB::purge();
+        DB::reconnect();
 
         $scannedAt = $this->parseTimestamp($payload['analyzedAt'] ?? null) ?: now('UTC');
         $scan = InstagramProfileListScan::create([
@@ -463,7 +467,7 @@ class InstagramProfileRelationshipStore
         }
     }
 
-    private function propagateProfileDataToLinkedTrackedPeople(InstagramProfile $profile, ?TrackedPerson $scannedTrackedPerson = null): void
+    public function propagateProfileDataToLinkedTrackedPeople(InstagramProfile $profile, ?TrackedPerson $scannedTrackedPerson = null): void
     {
         if (! $this->isReady() || ! $this->hasColumn('tracked_people', 'current_instagram_profile_id')) {
             return;
@@ -488,8 +492,20 @@ class InstagramProfileRelationshipStore
             return;
         }
 
+        $linkedTrackedPersonIds = TrackedPersonInstagramProfileLink::query()
+            ->where('instagram_profile_id', $profile->id)
+            ->where('is_current', true)
+            ->pluck('tracked_person_id')
+            ->all();
+
         TrackedPerson::query()
-            ->where('current_instagram_profile_id', $profile->id)
+            ->where(function ($query) use ($profile, $linkedTrackedPersonIds): void {
+                $query->where('current_instagram_profile_id', $profile->id);
+
+                if ($linkedTrackedPersonIds !== []) {
+                    $query->orWhereIn('id', $linkedTrackedPersonIds);
+                }
+            })
             ->when($scannedTrackedPerson, fn ($query) => $query->whereKeyNot($scannedTrackedPerson->id))
             ->update($updates);
     }

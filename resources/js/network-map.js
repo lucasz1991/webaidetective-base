@@ -4,11 +4,18 @@ const DEFAULT_LAYOUT_MODE = 'clusters';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
 const LAYOUT_STORAGE_PREFIX = 'network-map-render:v8';
 let cytoscapeLoader;
+let threeLoader;
 
 function loadCytoscape() {
     cytoscapeLoader ??= import('cytoscape').then((module) => module.default || module);
 
     return cytoscapeLoader;
+}
+
+function loadThree() {
+    threeLoader ??= import('three').then((module) => module.default || module);
+
+    return threeLoader;
 }
 
 function truncate(value, length = 28) {
@@ -538,6 +545,327 @@ function applyVisualSettings(root, cy, nodes = null) {
     });
 
     schedulePublicBadgeUpdate(root, cy);
+    scheduleThreeRender(root);
+}
+
+function nodeColorFor3D(data) {
+    if (data?.isPrimary || data?.isFocus) {
+        return 0xf59e0b;
+    }
+
+    if (data?.type === 'person') {
+        return 0x0f172a;
+    }
+
+    if (visibilityValue(data) === 'public') {
+        return 0x22c55e;
+    }
+
+    if (data?.type === 'candidate') {
+        return 0xf59e0b;
+    }
+
+    return 0x38bdf8;
+}
+
+function edgeColorFor3D(data) {
+    const color = String(data?.lineColor || '').trim();
+
+    if (/^#[0-9a-f]{6}$/i.test(color)) {
+        return Number.parseInt(color.slice(1), 16);
+    }
+
+    return 0x94a3b8;
+}
+
+function disposeThreeObject(object) {
+    object?.traverse?.((child) => {
+        child.geometry?.dispose?.();
+
+        if (Array.isArray(child.material)) {
+            child.material.forEach((material) => {
+                material.map?.dispose?.();
+                material.dispose?.();
+            });
+        } else {
+            child.material?.map?.dispose?.();
+            child.material?.dispose?.();
+        }
+    });
+}
+
+function destroyThreeScene(state) {
+    const threeState = state?.threeState;
+
+    if (!threeState) {
+        return;
+    }
+
+    window.cancelAnimationFrame(threeState.frame);
+    window.removeEventListener('resize', threeState.resize);
+    threeState.container.removeEventListener('pointerdown', threeState.pointerDown);
+    threeState.container.removeEventListener('pointermove', threeState.pointerMove);
+    threeState.container.removeEventListener('pointerup', threeState.pointerUp);
+    threeState.container.removeEventListener('pointerleave', threeState.pointerUp);
+    threeState.container.removeEventListener('wheel', threeState.wheel);
+    disposeThreeObject(threeState.scene);
+    threeState.renderer.dispose();
+    threeState.renderer.domElement.remove();
+    state.threeState = null;
+}
+
+function threeNodePosition(cy, node, index) {
+    const extent = cy.nodes().not('.network-filtered').boundingBox();
+    const centerX = extent.x1 + (extent.w / 2);
+    const centerY = extent.y1 + (extent.h / 2);
+    const hash = Number.parseInt(stableHash(node.id()).slice(-4), 36) || index;
+    const z = ((hash % 260) - 130) * 0.75;
+
+    return {
+        x: (node.position('x') - centerX) * 0.38,
+        y: -(node.position('y') - centerY) * 0.38,
+        z,
+    };
+}
+
+function labelSprite(THREE, text, color = '#f8fafc') {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    const label = truncate(text, 22);
+
+    canvas.width = 384;
+    canvas.height = 96;
+    context.font = '700 30px Arial, sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillStyle = 'rgba(15, 23, 42, 0.72)';
+    context.roundRect?.(18, 18, 348, 60, 18);
+    context.fill();
+    context.fillStyle = color;
+    context.fillText(label, 192, 50, 320);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(92, 23, 1);
+
+    return sprite;
+}
+
+function visibleThreeData(cy) {
+    const nodes = cy.nodes().not('.network-filtered').toArray();
+    const visibleNodeIds = new Set(nodes.map((node) => node.id()));
+    const edges = cy.edges().not('.network-filtered')
+        .filter((edge) => visibleNodeIds.has(edge.source().id()) && visibleNodeIds.has(edge.target().id()))
+        .toArray();
+
+    return { nodes, edges, visibleNodeIds };
+}
+
+function rebuildThreeGraph(root, state) {
+    const threeState = state?.threeState;
+
+    if (!threeState || !state?.cy) {
+        return;
+    }
+
+    const { THREE, group, cy } = threeState;
+    disposeThreeObject(group);
+    group.clear();
+
+    const { nodes, edges } = visibleThreeData(cy);
+    const positions = new Map();
+    const maxDegree = Math.max(1, ...nodes.map((node) => visibleDegreeForState(node, state)));
+
+    nodes.forEach((node, index) => {
+        const position = threeNodePosition(cy, node, index);
+        const degreeRatio = visibleDegreeForState(node, state) / maxDegree;
+        const radius = Math.max(3.2, Math.min(28, (Number(node.data('renderNodeSize')) || baseNodeSizeForData(node.data())) / 10));
+        const geometry = new THREE.SphereGeometry(radius * (0.8 + (degreeRatio * 0.45)), 28, 18);
+        const material = new THREE.MeshStandardMaterial({
+            color: nodeColorFor3D(node.data()),
+            roughness: 0.45,
+            metalness: 0.12,
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(position.x, position.y, position.z);
+        group.add(mesh);
+        positions.set(node.id(), mesh.position.clone());
+
+        if (node.data('isPrimary') || node.data('isFocus') || visibleDegreeForState(node, state) >= 3) {
+            const label = labelSprite(THREE, node.data('fullLabel') || node.data('label'));
+            label.position.set(position.x, position.y + radius + 18, position.z);
+            group.add(label);
+        }
+    });
+
+    edges.forEach((edge) => {
+        const from = positions.get(edge.source().id());
+        const to = positions.get(edge.target().id());
+
+        if (!from || !to) {
+            return;
+        }
+
+        const geometry = new THREE.BufferGeometry().setFromPoints([from, to]);
+        const material = new THREE.LineBasicMaterial({
+            color: edgeColorFor3D(edge.data()),
+            transparent: true,
+            opacity: Math.max(0.22, Math.min(0.82, Number(edge.data('edgeOpacity')) || 0.48)),
+        });
+        group.add(new THREE.Line(geometry, material));
+    });
+
+    threeState.needsRender = true;
+}
+
+async function ensureThreeScene(root, state) {
+    if (state?.threeState) {
+        return state.threeState;
+    }
+
+    const container = root.querySelector('[data-network-3d-canvas]');
+
+    if (!container || !state?.cy) {
+        return null;
+    }
+
+    const THREE = await loadThree();
+
+    if (state.viewMode !== '3d') {
+        return null;
+    }
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020617);
+    const camera = new THREE.PerspectiveCamera(54, 1, 1, 10000);
+    camera.position.set(0, 0, 980);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    container.replaceChildren(renderer.domElement);
+
+    const group = new THREE.Group();
+    scene.add(group);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.78));
+    const light = new THREE.DirectionalLight(0xffffff, 1.15);
+    light.position.set(240, 320, 520);
+    scene.add(light);
+
+    const resize = () => {
+        const rect = container.getBoundingClientRect();
+        const width = Math.max(1, Math.floor(rect.width));
+        const height = Math.max(1, Math.floor(rect.height));
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height, false);
+    };
+    let dragging = false;
+    let lastX = 0;
+    let lastY = 0;
+    const pointerDown = (event) => {
+        dragging = true;
+        lastX = event.clientX;
+        lastY = event.clientY;
+        container.setPointerCapture?.(event.pointerId);
+    };
+    const pointerMove = (event) => {
+        if (!dragging) {
+            return;
+        }
+
+        const dx = event.clientX - lastX;
+        const dy = event.clientY - lastY;
+        group.rotation.y += dx * 0.006;
+        group.rotation.x += dy * 0.004;
+        lastX = event.clientX;
+        lastY = event.clientY;
+    };
+    const pointerUp = () => {
+        dragging = false;
+    };
+    const wheel = (event) => {
+        event.preventDefault();
+        camera.position.z = Math.max(260, Math.min(2200, camera.position.z + (event.deltaY * 0.8)));
+    };
+    const animate = () => {
+        group.rotation.y += dragging ? 0 : 0.0014;
+        renderer.render(scene, camera);
+        state.threeState.frame = window.requestAnimationFrame(animate);
+    };
+
+    const threeState = {
+        THREE,
+        container,
+        scene,
+        camera,
+        renderer,
+        group,
+        resize,
+        pointerDown,
+        pointerMove,
+        pointerUp,
+        wheel,
+        frame: 0,
+        cy: state.cy,
+    };
+
+    state.threeState = threeState;
+    window.addEventListener('resize', resize);
+    container.addEventListener('pointerdown', pointerDown);
+    container.addEventListener('pointermove', pointerMove);
+    container.addEventListener('pointerup', pointerUp);
+    container.addEventListener('pointerleave', pointerUp);
+    container.addEventListener('wheel', wheel, { passive: false });
+    resize();
+    rebuildThreeGraph(root, state);
+    threeState.frame = window.requestAnimationFrame(animate);
+
+    return threeState;
+}
+
+function scheduleThreeRender(root) {
+    const state = instances.get(root);
+
+    if (!state || state.viewMode !== '3d' || state.threeRenderQueued) {
+        return;
+    }
+
+    state.threeRenderQueued = true;
+    window.requestAnimationFrame(() => {
+        state.threeRenderQueued = false;
+        rebuildThreeGraph(root, state);
+    });
+}
+
+async function setViewMode(root, state, mode) {
+    if (!state) {
+        return;
+    }
+
+    state.viewMode = normalizeViewMode(mode);
+    root.dataset.networkViewMode = state.viewMode;
+    writeStoredViewMode(root, state.viewMode);
+    updateViewModeControls(root, state);
+
+    const canvas = root.querySelector('[data-network-canvas]');
+    const threeCanvas = root.querySelector('[data-network-3d-canvas]');
+    const overlays = root.querySelector('[data-network-profile-overlays]');
+
+    if (state.viewMode === '3d') {
+        canvas?.classList.add('hidden');
+        overlays?.classList.add('hidden');
+        threeCanvas?.classList.remove('hidden');
+        await ensureThreeScene(root, state);
+        scheduleThreeRender(root);
+        return;
+    }
+
+    threeCanvas?.classList.add('hidden');
+    canvas?.classList.remove('hidden');
+    overlays?.classList.remove('hidden');
+    destroyThreeScene(state);
+    state.cy.resize();
+    fitGraph(state.cy, { tight: true });
 }
 
 function updateButton(button, active) {
@@ -597,6 +925,30 @@ function normalizeLayoutMode(value) {
     const mode = String(value || '').trim();
 
     return LAYOUT_MODES.has(mode) ? mode : DEFAULT_LAYOUT_MODE;
+}
+
+function normalizeViewMode(value) {
+    return String(value || '').trim() === '3d' ? '3d' : '2d';
+}
+
+function viewModeStorageKey(root) {
+    return `network-map-view-mode:${root.dataset.networkFilterScope || root.dataset.networkMapId || 'default'}`;
+}
+
+function readStoredViewMode(root) {
+    try {
+        return normalizeViewMode(localStorage.getItem(viewModeStorageKey(root)) || root.dataset.networkViewMode);
+    } catch {
+        return normalizeViewMode(root.dataset.networkViewMode);
+    }
+}
+
+function writeStoredViewMode(root, mode) {
+    try {
+        localStorage.setItem(viewModeStorageKey(root), normalizeViewMode(mode));
+    } catch {
+        // localStorage can be unavailable in hardened browser contexts.
+    }
 }
 
 function layoutModeStorageKey(root) {
@@ -668,6 +1020,26 @@ function updateLayoutControls(root, state) {
     root.querySelectorAll('[data-network-size-variance-value]').forEach((element) => {
         element.textContent = percentLabel(normalizedScale(state?.nodeSizeVariance, 1, 0, 4));
     });
+}
+
+function updateViewModeControls(root, state) {
+    const mode = normalizeViewMode(state?.viewMode);
+
+    root.querySelectorAll('[data-network-view-mode]').forEach((button) => {
+        updateButton(button, button.dataset.networkViewMode === mode);
+    });
+}
+
+function rootStateForCy(cy) {
+    for (const root of activeRoots) {
+        const state = instances.get(root);
+
+        if (state?.cy === cy) {
+            return { root, state };
+        }
+    }
+
+    return null;
 }
 
 function setLayoutStatus(root, text) {
@@ -2275,6 +2647,7 @@ function arrangeVisibleGraph(root, cy, animate = true, mode = null, options = {}
             schedulePublicBadgeUpdate(root, cy);
         }
         scheduleStoredLayoutSave(root, cy, 120);
+        scheduleThreeRender(root);
     }, shouldAnimate ? 360 : 30);
 }
 
@@ -2506,9 +2879,14 @@ function applyFilters(root, cy, options = {}) {
 
     updateSelectionPanel(root, cy);
     schedulePublicBadgeUpdate(root, cy);
+    scheduleThreeRender(root);
 }
 
 function fitGraph(cy, options = {}) {
+    if (rootStateForCy(cy)?.state?.viewMode === '3d') {
+        return;
+    }
+
     cy.resize();
     const visibleNodes = cy.nodes().not('.network-filtered');
 
@@ -2565,6 +2943,7 @@ function resolveVisualOverlaps(root, cy, animate = true) {
     window.setTimeout(() => {
         schedulePublicBadgeUpdate(root, cy);
         scheduleStoredLayoutSave(root, cy, 120);
+        scheduleThreeRender(root);
     }, shouldAnimate ? 250 : 30);
 }
 
@@ -2607,6 +2986,7 @@ function applySpacingScale(root, cy, previousScale) {
     });
     schedulePublicBadgeUpdate(root, cy);
     scheduleStoredLayoutSave(root, cy, 120);
+    scheduleThreeRender(root);
 }
 
 function scheduleVisualSettingsRefresh(root, cy) {
@@ -2640,7 +3020,11 @@ function bindControls(root, cy) {
             }
 
             applyFilters(root, cy);
-            fitGraph(cy, { tight: true });
+            if (state.viewMode === '3d') {
+                scheduleThreeRender(root);
+            } else {
+                fitGraph(cy, { tight: true });
+            }
         });
     });
 
@@ -2648,13 +3032,21 @@ function bindControls(root, cy) {
         state.minDegree = Math.max(0, Number(event.target.value) || 0);
         state.hasStoredMinDegree = true;
         applyFilters(root, cy);
-        fitGraph(cy, { tight: true });
+        if (state.viewMode === '3d') {
+            scheduleThreeRender(root);
+        } else {
+            fitGraph(cy, { tight: true });
+        }
     });
 
     root.querySelector('[data-network-filter-max-profiles]')?.addEventListener('change', (event) => {
         state.maxVisibleProfiles = Math.max(0, Number(event.target.value) || 0);
         applyFilters(root, cy);
-        fitGraph(cy, { tight: true });
+        if (state.viewMode === '3d') {
+            scheduleThreeRender(root);
+        } else {
+            fitGraph(cy, { tight: true });
+        }
     });
 
     root.querySelectorAll('[data-network-layout-mode]').forEach((control) => {
@@ -2662,14 +3054,22 @@ function bindControls(root, cy) {
             state.layoutMode = normalizeLayoutMode(event.target.value);
             writeStoredLayoutMode(root, state.layoutMode);
             clearStoredLayout(root, cy);
-            arrangeVisibleGraph(root, cy, true, state.layoutMode);
+            arrangeVisibleGraph(root, cy, true, state.layoutMode, { fit: state.viewMode !== '3d' });
+            scheduleThreeRender(root);
         });
     });
 
     root.querySelectorAll('[data-network-layout-reset]').forEach((button) => {
         button.addEventListener('click', () => {
             clearStoredLayout(root, cy);
-            arrangeVisibleGraph(root, cy, true, state.layoutMode);
+            arrangeVisibleGraph(root, cy, true, state.layoutMode, { fit: state.viewMode !== '3d' });
+            scheduleThreeRender(root);
+        });
+    });
+
+    root.querySelectorAll('[data-network-view-mode]').forEach((button) => {
+        button.addEventListener('click', () => {
+            setViewMode(root, state, button.dataset.networkViewMode);
         });
     });
 
@@ -2972,12 +3372,15 @@ async function initNetworkMap(root) {
             graphToken: String(root.dataset.networkGraphToken || '').trim(),
             graphDataHash: String(root.dataset.networkGraphHash || '').trim(),
             layoutMode: readStoredLayoutMode(root),
+            viewMode: readStoredViewMode(root),
             layoutRestored: false,
             hasAppliedLayout: false,
             isLoadingGraph: false,
             suppressLayoutSave: false,
             layoutSaveTimer: null,
             layoutSettingsTimer: null,
+            threeState: null,
+            threeRenderQueued: false,
         };
 
         instances.set(root, state);
@@ -2988,10 +3391,12 @@ async function initNetworkMap(root) {
         bindPublicBadges(root, cy);
         bindLayoutPersistence(root, cy);
         updateLayoutControls(root, state);
+        updateViewModeControls(root, state);
         setLayoutStatus(root, 'Noch nicht gespeichert');
         applyVisualSettings(root, cy);
         applyAutoMinDegreeIfNeeded(root, cy);
         applyFilters(root, cy);
+        setViewMode(root, state, state.viewMode);
 
         cy.on('tap', 'node', (event) => {
             const node = event.target;
@@ -3192,6 +3597,7 @@ function resetGraph(root) {
     state.cy.elements().remove();
     updateSelectionPanel(root, state.cy);
     schedulePublicBadgeUpdate(root, state.cy);
+    scheduleThreeRender(root);
     updateBuildStatus(root, {
         visible: true,
         label: 'Netzwerk wird vorbereitet',
@@ -3346,6 +3752,7 @@ export function destroyNetworkMaps() {
         window.clearTimeout(state.nodeTapTimer);
         window.clearTimeout(state.layoutSaveTimer);
         window.clearTimeout(state.layoutSettingsTimer);
+        destroyThreeScene(state);
         state.cy.destroy();
         instances.delete(root);
     });
@@ -3370,6 +3777,13 @@ window.addEventListener('network-map-layout-refresh', (event) => {
     }
 
     const refreshAndFit = () => {
+        if (state.viewMode === '3d') {
+            state.threeState?.resize?.();
+            scheduleThreeRender(root);
+
+            return;
+        }
+
         state.cy.resize();
         fitGraph(state.cy, { tight: true });
         schedulePublicBadgeUpdate(root, state.cy);
