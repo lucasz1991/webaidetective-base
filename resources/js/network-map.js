@@ -651,9 +651,9 @@ function threeNodePosition(node, index, total, maxDegree, state) {
     const ordinal = index + 0.5;
     const inclination = Math.acos(1 - (2 * ordinal / Math.max(1, total)));
     const azimuth = (ordinal * goldenAngle) + ((hash % 720) * (Math.PI / 360));
-    const radialJitter = ((hash % 100) / 100) * 76;
-    const typeOffset = node.data('type') === 'person' ? -58 : (node.data('type') === 'candidate' ? 48 : 0);
-    const radius = (290 + radialJitter + typeOffset - (degreeRatio * 70)) * Math.max(0.72, Math.min(2.2, spacing));
+    const radialJitter = ((hash % 100) / 100) * 124;
+    const typeOffset = node.data('type') === 'person' ? -72 : (node.data('type') === 'candidate' ? 78 : 0);
+    const radius = (420 + radialJitter + typeOffset - (degreeRatio * 90)) * Math.max(0.82, Math.min(2.4, spacing));
 
     return {
         x: Math.sin(inclination) * Math.cos(azimuth) * radius,
@@ -684,7 +684,14 @@ function edgeWeightFor3D(edge) {
     return 1;
 }
 
-function focusNodeFor3D(nodes, state = null) {
+function focusNodeFor3D(nodes) {
+    return nodes.find((node) => node.data('isPrimary') || node.data('isFocus'))
+        || nodes.find((node) => node.data('type') === 'person')
+        || nodes[0]
+        || null;
+}
+
+function activeThreeFocusNode(nodes, state) {
     const requestedFocusId = String(state?.threeFocusNodeId || '').trim();
 
     if (requestedFocusId) {
@@ -695,10 +702,7 @@ function focusNodeFor3D(nodes, state = null) {
         }
     }
 
-    return nodes.find((node) => node.data('isPrimary') || node.data('isFocus'))
-        || nodes.find((node) => node.data('type') === 'person')
-        || nodes[0]
-        || null;
+    return focusNodeFor3D(nodes);
 }
 
 function threeGraphTopology(nodes, edges) {
@@ -825,7 +829,7 @@ function threeClusterDirection(index, total) {
 }
 
 function threeNetworkPositions(nodes, edges, state) {
-    const focus = focusNodeFor3D(nodes, state);
+    const focus = focusNodeFor3D(nodes);
     const positions = new Map();
 
     if (!focus) {
@@ -843,8 +847,8 @@ function threeNetworkPositions(nodes, edges, state) {
         const direction = threeClusterDirection(groupIndex, groups.length);
         const { tangentA, tangentB } = orthonormalBasis(direction);
         const minDistance = Math.min(...group.map((node) => distances.get(node.id()) ?? 5));
-        const clusterRadius = (165 + ((Math.max(1, minDistance) - 1) * 118) + (Math.sqrt(group.length) * 28)) * Math.max(0.72, Math.min(2.1, spacing));
-        const localRadius = Math.max(34, Math.min(155, 22 + (Math.sqrt(group.length) * 24))) * Math.max(0.8, Math.min(1.65, spacing));
+        const clusterRadius = (255 + ((Math.max(1, minDistance) - 1) * 172) + (Math.sqrt(group.length) * 44)) * Math.max(0.82, Math.min(2.35, spacing));
+        const localRadius = Math.max(70, Math.min(280, 42 + (Math.sqrt(group.length) * 38))) * Math.max(0.9, Math.min(1.9, spacing));
 
         group
             .sort((left, right) => {
@@ -861,8 +865,8 @@ function threeNetworkPositions(nodes, edges, state) {
                 const localSpread = localRadius * Math.sqrt(localOrdinal / Math.max(1, group.length));
                 const focusWeight = adjacency.get(node.id())?.get(focus.id()) || 0;
                 const distance = distances.get(node.id()) ?? 4;
-                const radialOffset = ((distance - 1) * 48) - (focusWeight * 18);
-                const depthOffset = (((nodeIndex % 5) - 2) * 22) + (((Number.parseInt(stableHash(node.id()).slice(-3), 36) || 0) % 30) - 15);
+                const radialOffset = ((distance - 1) * 76) - (focusWeight * 24);
+                const depthOffset = (((nodeIndex % 7) - 3) * 34) + (((Number.parseInt(stableHash(node.id()).slice(-3), 36) || 0) % 46) - 23);
                 let position = vectorScale(direction, clusterRadius + radialOffset + depthOffset);
                 position = vectorAdd(position, vectorScale(tangentA, Math.cos(localAngle) * localSpread));
                 position = vectorAdd(position, vectorScale(tangentB, Math.sin(localAngle) * localSpread));
@@ -1159,19 +1163,65 @@ function updateThreePositionTweens(threeState) {
     syncThreeBillboards(threeState);
 }
 
+function updateThreeCameraTween(threeState) {
+    if (!threeState?.cameraTween) {
+        return;
+    }
+
+    const tween = threeState.cameraTween;
+    const progress = easeInOutCubic((performance.now() - tween.startedAt) / tween.duration);
+    threeState.camera.position.lerpVectors(tween.from, tween.to, progress);
+
+    if (progress >= 1) {
+        threeState.cameraTween = null;
+    }
+}
+
+function cancelThreeCameraTween(threeState) {
+    if (threeState) {
+        threeState.cameraTween = null;
+    }
+}
+
+function flyThreeCameraToNode(state, nodeId) {
+    const threeState = state?.threeState;
+    const nodeGroup = threeState?.nodeGroups?.get(nodeId);
+
+    if (!threeState || !nodeGroup) {
+        return;
+    }
+
+    const THREE = threeState.THREE;
+    const worldPosition = nodeGroup.getWorldPosition(new THREE.Vector3());
+    const current = threeState.camera.position.clone();
+    const targetDistance = Math.max(440, Math.min(760, Math.abs(current.z - worldPosition.z) || 560));
+    const target = new THREE.Vector3(
+        worldPosition.x,
+        worldPosition.y,
+        Math.max(320, Math.min(2400, worldPosition.z + targetDistance)),
+    );
+
+    threeState.cameraTween = {
+        from: current,
+        to: target,
+        startedAt: performance.now(),
+        duration: 760,
+    };
+}
+
 function setThreeFocusNode(root, state, nodeId) {
     if (!state || state.viewMode !== '3d' || !nodeId) {
         return;
     }
 
-    if (state.threeFocusNodeId === nodeId) {
-        return;
-    }
-
+    const focusChanged = state.threeFocusNodeId !== nodeId;
     state.threeFocusNodeId = nodeId;
-    state.threeAnimateNextRender = true;
-    pauseThreeAutoRotate(state.threeState);
-    scheduleThreeRender(root);
+    pauseThreeAutoRotate(state.threeState, Number.POSITIVE_INFINITY);
+    flyThreeCameraToNode(state, nodeId);
+
+    if (focusChanged) {
+        scheduleThreeRender(root);
+    }
 }
 
 function rebuildThreeGraph(root, state) {
@@ -1182,14 +1232,6 @@ function rebuildThreeGraph(root, state) {
     }
 
     const { THREE, group, cy } = threeState;
-    const previousPositions = new Map();
-
-    threeState.nodeGroups?.forEach((nodeGroup, nodeId) => {
-        previousPositions.set(nodeId, nodeGroup.position.clone());
-    });
-
-    const animatePositions = Boolean(state.threeAnimateNextRender && previousPositions.size);
-    state.threeAnimateNextRender = false;
     disposeThreeObject(group);
     group.clear();
     threeState.pickables = [];
@@ -1201,20 +1243,17 @@ function rebuildThreeGraph(root, state) {
     const { nodes, edges } = visibleThreeData(cy);
     const maxDegree = Math.max(1, ...nodes.map((node) => visibleDegreeForState(node, state)));
     const layoutPositions = threeNetworkPositions(nodes, edges, state);
-    const focusNode = focusNodeFor3D(nodes, state);
+    const focusNode = activeThreeFocusNode(nodes, state);
     const focusId = focusNode?.id();
 
     nodes.forEach((node, index) => {
         const coordinates = layoutPositions.get(node.id()) || threeNodePosition(node, index, nodes.length, maxDegree, state);
         const targetPosition = new THREE.Vector3(coordinates.x, coordinates.y, coordinates.z);
-        const startPosition = animatePositions && previousPositions.has(node.id())
-            ? previousPositions.get(node.id()).clone()
-            : targetPosition.clone();
         const degreeRatio = visibleDegreeForState(node, state) / maxDegree;
         const radius = Math.max(3.2, Math.min(28, (Number(node.data('renderNodeSize')) || baseNodeSizeForData(node.data())) / 10));
         const renderRadius = radius * (0.8 + (degreeRatio * 0.45));
         const nodeGroup = new THREE.Group();
-        nodeGroup.position.copy(startPosition);
+        nodeGroup.position.copy(targetPosition);
 
         const geometry = new THREE.SphereGeometry(radius * (0.8 + (degreeRatio * 0.45)), 28, 18);
         const material = new THREE.MeshStandardMaterial({
@@ -1229,16 +1268,6 @@ function rebuildThreeGraph(root, state) {
         group.add(nodeGroup);
         threeState.nodeGroups.set(node.id(), nodeGroup);
         threeState.pickables.push(mesh);
-
-        if (animatePositions && !startPosition.equals(targetPosition)) {
-            threeState.positionTweens.push({
-                group: nodeGroup,
-                from: startPosition.clone(),
-                to: targetPosition.clone(),
-                startedAt: performance.now(),
-                duration: 720,
-            });
-        }
 
         const avatar = createProfileAvatarMesh(THREE, threeState, node, renderRadius, targetPosition);
 
@@ -1351,6 +1380,7 @@ async function ensureThreeScene(root, state) {
         pointerStartY = event.clientY;
         pointerMoved = false;
         pauseThreeAutoRotate(state.threeState);
+        cancelThreeCameraTween(state.threeState);
         container.setPointerCapture?.(event.pointerId);
     };
     const pointerMove = (event) => {
@@ -1414,6 +1444,7 @@ async function ensureThreeScene(root, state) {
     const wheel = (event) => {
         event.preventDefault();
         pauseThreeAutoRotate(state.threeState);
+        cancelThreeCameraTween(state.threeState);
         camera.position.z = Math.max(260, Math.min(2200, camera.position.z + (event.deltaY * 0.8)));
     };
     const contextMenu = (event) => {
@@ -1426,6 +1457,7 @@ async function ensureThreeScene(root, state) {
             group.rotation.y += 0.0014;
         }
 
+        updateThreeCameraTween(state.threeState);
         updateThreePositionTweens(state.threeState);
         syncThreeBillboards(state.threeState);
         renderer.render(scene, camera);
@@ -1446,6 +1478,7 @@ async function ensureThreeScene(root, state) {
         nodeGroups: new Map(),
         edgeLines: [],
         positionTweens: [],
+        cameraTween: null,
         autoRotatePausedUntil: 0,
         resize,
         pointerDown,
@@ -4034,7 +4067,6 @@ async function initNetworkMap(root) {
             layoutMode: readStoredLayoutMode(root),
             viewMode: readStoredViewMode(root),
             threeFocusNodeId: null,
-            threeAnimateNextRender: false,
             layoutRestored: false,
             hasAppliedLayout: false,
             isLoadingGraph: false,
