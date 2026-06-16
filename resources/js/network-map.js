@@ -578,6 +578,30 @@ function edgeColorFor3D(data) {
     return 0x94a3b8;
 }
 
+function fitTextureCover(THREE, texture) {
+    const width = Number(texture?.image?.naturalWidth || texture?.image?.width || 0);
+    const height = Number(texture?.image?.naturalHeight || texture?.image?.height || 0);
+
+    if (!width || !height || width === height) {
+        return texture;
+    }
+
+    texture.wrapS = THREE.ClampToEdgeWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+
+    if (width > height) {
+        const repeatX = height / width;
+        texture.repeat.set(repeatX, 1);
+        texture.offset.set((1 - repeatX) / 2, 0);
+    } else {
+        const repeatY = width / height;
+        texture.repeat.set(1, repeatY);
+        texture.offset.set(0, (1 - repeatY) / 2);
+    }
+
+    return texture;
+}
+
 function disposeThreeObject(object) {
     object?.traverse?.((child) => {
         child.geometry?.dispose?.();
@@ -910,7 +934,7 @@ function createProfileAvatarMesh(THREE, threeState, node, radius, position) {
         (texture) => {
             texture.colorSpace = THREE.SRGBColorSpace;
             texture.anisotropy = Math.min(8, threeState.renderer.capabilities.getMaxAnisotropy?.() || 1);
-            material.map = texture;
+            material.map = fitTextureCover(THREE, texture);
             material.opacity = 1;
             material.needsUpdate = true;
         },
