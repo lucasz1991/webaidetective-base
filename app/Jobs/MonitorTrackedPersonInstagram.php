@@ -236,15 +236,7 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
 
     public function uniqueId(): string
     {
-        $trackedPerson = TrackedPerson::query()
-            ->select(['id', 'instagram_username', 'current_instagram_profile_id'])
-            ->find($this->trackedPersonId);
-
-        $profileKey = $trackedPerson?->current_instagram_profile_id
-            ? 'profile:'.$trackedPerson->current_instagram_profile_id
-            : 'username:'.strtolower(ltrim((string) $trackedPerson?->instagram_username, '@'));
-
-        return $profileKey.':'.($this->isFullScan() ? 'full' : 'mini');
+        return 'tracked-person:'.$this->trackedPersonId.':'.($this->isFullScan() ? 'full' : 'mini');
     }
 
     private function isFullScan(): bool

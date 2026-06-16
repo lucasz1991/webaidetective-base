@@ -2,6 +2,7 @@
 
 namespace Tests\Unit;
 
+use App\Models\TrackedPerson;
 use App\Services\TrackedPeople\InstagramScanPolicyService;
 use PHPUnit\Framework\TestCase;
 
@@ -47,5 +48,25 @@ class InstagramScanPolicyServiceTest extends TestCase
         $this->assertSame('suggestion_deep_search', $service->scanTypeForOperation('suggestion-connections'));
         $this->assertSame('public_connections', $service->scanTypeForOperation('public-profile-connections'));
         $this->assertSame('profile', $service->scanTypeForOperation('profile'));
+    }
+
+    public function test_tracked_person_instagram_scan_preferences_are_normalized(): void
+    {
+        $preferences = TrackedPerson::normalizeInstagramScanPreferences([
+            'monitoring_scan_mode' => 'full',
+            'auto_scan_followers' => false,
+            'auto_scan_posts' => 0,
+            'auto_scan_min_interval_minutes' => 999999,
+            'auto_scan_count_change_threshold' => -4,
+            'unknown' => true,
+        ]);
+
+        $this->assertSame('full', $preferences['monitoring_scan_mode']);
+        $this->assertFalse($preferences['auto_scan_followers']);
+        $this->assertFalse($preferences['auto_scan_posts']);
+        $this->assertTrue($preferences['auto_scan_following']);
+        $this->assertSame(10080, $preferences['auto_scan_min_interval_minutes']);
+        $this->assertSame(1, $preferences['auto_scan_count_change_threshold']);
+        $this->assertArrayNotHasKey('unknown', $preferences);
     }
 }

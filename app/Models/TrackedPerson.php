@@ -15,6 +15,18 @@ class TrackedPerson extends Model
 {
     use HasFactory;
 
+    public const INSTAGRAM_SCAN_PREFERENCE_DEFAULTS = [
+        'monitoring_scan_mode' => 'mini',
+        'auto_scan_followers' => true,
+        'auto_scan_following' => true,
+        'auto_scan_posts' => true,
+        'auto_scan_suggestions' => true,
+        'auto_scan_on_changes' => true,
+        'auto_scan_on_interval' => false,
+        'auto_scan_min_interval_minutes' => 60,
+        'auto_scan_count_change_threshold' => 1,
+    ];
+
     protected $fillable = [
         'user_id',
         'first_name',
@@ -41,6 +53,7 @@ class TrackedPerson extends Model
         'notify_snapchat_changes',
         'monitoring_enabled',
         'monitoring_interval_minutes',
+        'instagram_scan_preferences',
         'is_primary',
         'profile_image_path',
         'profile_image_hash',
@@ -66,6 +79,7 @@ class TrackedPerson extends Model
         'notify_snapchat_changes' => 'boolean',
         'monitoring_enabled' => 'boolean',
         'monitoring_interval_minutes' => 'integer',
+        'instagram_scan_preferences' => 'array',
         'is_primary' => 'boolean',
     ];
 
@@ -215,6 +229,47 @@ class TrackedPerson extends Model
     public function analyzeInstagram(?callable $progress = null, bool $fullScan = false): TrackedPersonInstagramSnapshot
     {
         return app(TrackedPersonInstagramAnalysisService::class)->analyze($this, $progress, $fullScan);
+    }
+
+    public function instagramScanPreferences(): array
+    {
+        return self::normalizeInstagramScanPreferences(
+            is_array($this->instagram_scan_preferences) ? $this->instagram_scan_preferences : [],
+        );
+    }
+
+    public static function normalizeInstagramScanPreferences(array $preferences): array
+    {
+        $normalized = [
+            ...self::INSTAGRAM_SCAN_PREFERENCE_DEFAULTS,
+            ...array_intersect_key($preferences, self::INSTAGRAM_SCAN_PREFERENCE_DEFAULTS),
+        ];
+
+        $normalized['monitoring_scan_mode'] = in_array($normalized['monitoring_scan_mode'], ['mini', 'full'], true)
+            ? $normalized['monitoring_scan_mode']
+            : self::INSTAGRAM_SCAN_PREFERENCE_DEFAULTS['monitoring_scan_mode'];
+
+        foreach ([
+            'auto_scan_followers',
+            'auto_scan_following',
+            'auto_scan_posts',
+            'auto_scan_suggestions',
+            'auto_scan_on_changes',
+            'auto_scan_on_interval',
+        ] as $key) {
+            $normalized[$key] = (bool) $normalized[$key];
+        }
+
+        $normalized['auto_scan_min_interval_minutes'] = max(
+            0,
+            min(10080, (int) $normalized['auto_scan_min_interval_minutes']),
+        );
+        $normalized['auto_scan_count_change_threshold'] = max(
+            1,
+            min(1000000, (int) $normalized['auto_scan_count_change_threshold']),
+        );
+
+        return $normalized;
     }
 
     private function normalizeSocialUsername(mixed $value): ?string

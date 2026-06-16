@@ -3,6 +3,7 @@
 namespace App\Services\TrackedPeople;
 
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
+use App\Models\InstagramProfileListScan;
 use App\Models\InstagramPostScan;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
@@ -43,8 +44,12 @@ class TrackedPersonInstagramWorkflowService
         $postScan = null;
         $followUpFailures = [];
         $followUpMessages = [];
+        $preferences = $trackedPerson->instagramScanPreferences();
         $visibility = $this->snapshotProfileVisibility($snapshot);
-        $changedFields = $this->changedFields($snapshot);
+        $changedFields = $this->changedFields(
+            $snapshot,
+            (int) $preferences['auto_scan_count_change_threshold'],
+        );
         $metricFields = array_values(array_intersect($changedFields, [
             'followers_count',
             'following_count',
@@ -53,17 +58,17 @@ class TrackedPersonInstagramWorkflowService
 
         if (
             $visibility === 'private'
+            && $preferences['auto_scan_suggestions']
             && (
-                $fullScan
-                || (! $fullScan && $metricFields !== [])
+                $this->shouldTriggerFollowUpForField($preferences, $metricFields !== [])
+                || ($fullScan && $preferences['auto_scan_on_changes'])
+                || $this->followUpScanIsDue($trackedPerson, 'suggestions', $preferences)
             )
         ) {
-            $recentSuggestionScan = ! $fullScan
-                ? $this->recentSuggestionScanWithinLastHour($trackedPerson)
-                : null;
+            $recentSuggestionScan = $this->recentSuggestionScanWithinPreferenceWindow($trackedPerson, $preferences);
 
             if ($recentSuggestionScan) {
-                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlaege-Scan uebersprungen, weil der letzte Lauf erst vor weniger als 60 Minuten stattfand.';
+                $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlaege-Scan uebersprungen, weil der letzte Lauf noch innerhalb des Mindestabstands liegt.';
                 $followUpMessages[] = trim($privateSuggestionScanMessage);
             } else {
                 if ($progress) {
@@ -102,10 +107,13 @@ class TrackedPersonInstagramWorkflowService
 
         if (! $fullScan && $visibility === 'public') {
             foreach ([
-                'followers_count' => ['relationship' => 'followers', 'label' => 'Followerliste'],
-                'following_count' => ['relationship' => 'following', 'label' => 'Gefolgt-Liste'],
+                'followers_count' => ['relationship' => 'followers', 'preference' => 'auto_scan_followers', 'label' => 'Followerliste'],
+                'following_count' => ['relationship' => 'following', 'preference' => 'auto_scan_following', 'label' => 'Gefolgt-Liste'],
             ] as $field => $config) {
-                if (! in_array($field, $metricFields, true)) {
+                if (
+                    ! $preferences[$config['preference']]
+                    || ! $this->shouldRunMetricFollowUp($trackedPerson, $config['relationship'], $field, $metricFields, $preferences)
+                ) {
                     continue;
                 }
 
@@ -123,7 +131,10 @@ class TrackedPersonInstagramWorkflowService
                 }
             }
 
-            if (in_array('posts_count', $metricFields, true)) {
+            if (
+                $preferences['auto_scan_posts']
+                && $this->shouldRunMetricFollowUp($trackedPerson, 'posts', 'posts_count', $metricFields, $preferences)
+            ) {
                 try {
                     $postScan = $this->runPostScan(
                         $trackedPerson->fresh() ?: $trackedPerson,
@@ -142,7 +153,15 @@ class TrackedPersonInstagramWorkflowService
             }
         }
 
-        if ($fullScan && $visibility === 'public') {
+        if (
+            $fullScan
+            && $visibility === 'public'
+            && $preferences['auto_scan_posts']
+            && (
+                $preferences['auto_scan_on_changes']
+                || $this->followUpScanIsDue($trackedPerson, 'posts', $preferences)
+            )
+        ) {
             try {
                 $postScan = $this->runPostScan(
                     $trackedPerson->fresh() ?: $trackedPerson,
@@ -214,25 +233,102 @@ class TrackedPersonInstagramWorkflowService
         return $this->postScanService->scan($trackedPerson, $snapshot, $progress);
     }
 
-    private function changedFields(TrackedPersonInstagramSnapshot $snapshot): array
+    private function changedFields(TrackedPersonInstagramSnapshot $snapshot, int $minimumCountDelta = 1): array
     {
         return collect($snapshot->detected_changes ?? [])
             ->filter(fn ($change): bool => is_array($change) && is_string($change['field'] ?? null))
+            ->filter(function (array $change) use ($minimumCountDelta): bool {
+                $field = (string) $change['field'];
+
+                if (! in_array($field, ['followers_count', 'following_count', 'posts_count'], true)) {
+                    return true;
+                }
+
+                if (! is_numeric($change['before'] ?? null) || ! is_numeric($change['after'] ?? null)) {
+                    return true;
+                }
+
+                return abs((int) $change['after'] - (int) $change['before']) >= max(1, $minimumCountDelta);
+            })
             ->pluck('field')
             ->unique()
             ->values()
             ->all();
     }
 
-    private function recentSuggestionScanWithinLastHour(TrackedPerson $trackedPerson): ?TrackedPersonInstagramSuggestionScan
+    private function shouldRunMetricFollowUp(
+        TrackedPerson $trackedPerson,
+        string $scanType,
+        string $field,
+        array $metricFields,
+        array $preferences,
+    ): bool {
+        return (
+            $this->shouldTriggerFollowUpForField($preferences, in_array($field, $metricFields, true))
+            || $this->followUpScanIsDue($trackedPerson, $scanType, $preferences)
+        )
+            && ! $this->recentFollowUpScanWithinPreferenceWindow($trackedPerson, $scanType, $preferences);
+    }
+
+    private function shouldTriggerFollowUpForField(array $preferences, bool $fieldChanged): bool
     {
+        return (bool) $preferences['auto_scan_on_changes'] && $fieldChanged;
+    }
+
+    private function followUpScanIsDue(TrackedPerson $trackedPerson, string $scanType, array $preferences): bool
+    {
+        if (! (bool) $preferences['auto_scan_on_interval']) {
+            return false;
+        }
+
+        return ! $this->recentFollowUpScanWithinPreferenceWindow($trackedPerson, $scanType, $preferences);
+    }
+
+    private function recentSuggestionScanWithinPreferenceWindow(
+        TrackedPerson $trackedPerson,
+        array $preferences,
+    ): ?TrackedPersonInstagramSuggestionScan {
+        $minutes = (int) $preferences['auto_scan_min_interval_minutes'];
+
+        if ($minutes <= 0) {
+            return null;
+        }
+
         return $trackedPerson->instagramSuggestionScans()
-            ->where('analyzed_at', '>=', Carbon::now('UTC')->subHour())
+            ->where('analyzed_at', '>=', Carbon::now('UTC')->subMinutes($minutes))
             ->latest('analyzed_at')
             ->get()
             ->first(fn (TrackedPersonInstagramSuggestionScan $scan): bool => (
                 data_get($scan->raw_payload, 'operationMode') !== 'suggestion-connections'
             ));
+    }
+
+    private function recentFollowUpScanWithinPreferenceWindow(
+        TrackedPerson $trackedPerson,
+        string $scanType,
+        array $preferences,
+    ): bool {
+        $minutes = (int) $preferences['auto_scan_min_interval_minutes'];
+
+        if ($minutes <= 0) {
+            return false;
+        }
+
+        $threshold = Carbon::now('UTC')->subMinutes($minutes);
+
+        return match ($scanType) {
+            'followers', 'following' => InstagramProfileListScan::query()
+                ->where('tracked_person_id', $trackedPerson->id)
+                ->where('user_id', $trackedPerson->user_id)
+                ->where('list_type', $scanType)
+                ->where('scanned_at', '>=', $threshold)
+                ->exists(),
+            'posts' => $trackedPerson->instagramPostScans()
+                ->where('scanned_at', '>=', $threshold)
+                ->exists(),
+            'suggestions' => $this->recentSuggestionScanWithinPreferenceWindow($trackedPerson, $preferences) !== null,
+            default => false,
+        };
     }
 
     private function snapshotProfileVisibility(?TrackedPersonInstagramSnapshot $snapshot): string

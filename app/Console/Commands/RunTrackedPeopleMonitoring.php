@@ -33,7 +33,14 @@ class RunTrackedPeopleMonitoring extends Command
                     continue;
                 }
 
-                MonitorTrackedPersonInstagram::dispatch($trackedPerson->id);
+                $preferences = $trackedPerson->instagramScanPreferences();
+
+                MonitorTrackedPersonInstagram::dispatch(
+                    $trackedPerson->id,
+                    false,
+                    true,
+                    $preferences['monitoring_scan_mode'] === 'full',
+                );
                 $count++;
             }
         });

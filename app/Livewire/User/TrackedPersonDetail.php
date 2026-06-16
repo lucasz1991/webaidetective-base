@@ -65,6 +65,24 @@ class TrackedPersonDetail extends Component
 
     public $monitoring_interval_minutes = 60;
 
+    public $instagram_monitoring_scan_mode = 'mini';
+
+    public $instagram_auto_scan_followers = true;
+
+    public $instagram_auto_scan_following = true;
+
+    public $instagram_auto_scan_posts = true;
+
+    public $instagram_auto_scan_suggestions = true;
+
+    public $instagram_auto_scan_on_changes = true;
+
+    public $instagram_auto_scan_on_interval = false;
+
+    public $instagram_auto_scan_min_interval_minutes = 60;
+
+    public $instagram_auto_scan_count_change_threshold = 1;
+
     public $notify_social_changes = false;
 
     public $notify_instagram_changes = true;
@@ -135,6 +153,15 @@ class TrackedPersonDetail extends Component
             'notification_delivery_type' => ['required', 'string', 'in:message,mail,both'],
             'monitoring_enabled' => ['boolean'],
             'monitoring_interval_minutes' => ['required', 'integer', 'min:1', 'max:10080'],
+            'instagram_monitoring_scan_mode' => ['required', 'string', 'in:mini,full'],
+            'instagram_auto_scan_followers' => ['boolean'],
+            'instagram_auto_scan_following' => ['boolean'],
+            'instagram_auto_scan_posts' => ['boolean'],
+            'instagram_auto_scan_suggestions' => ['boolean'],
+            'instagram_auto_scan_on_changes' => ['boolean'],
+            'instagram_auto_scan_on_interval' => ['boolean'],
+            'instagram_auto_scan_min_interval_minutes' => ['required', 'integer', 'min:0', 'max:10080'],
+            'instagram_auto_scan_count_change_threshold' => ['required', 'integer', 'min:1', 'max:1000000'],
             'notify_social_changes' => ['boolean'],
             'notify_instagram_changes' => ['boolean'],
             'notify_tiktok_changes' => ['boolean'],
@@ -167,6 +194,17 @@ class TrackedPersonDetail extends Component
             'notification_delivery_type' => $validated['notification_delivery_type'],
             'monitoring_enabled' => (bool) $this->monitoring_enabled,
             'monitoring_interval_minutes' => (int) $validated['monitoring_interval_minutes'],
+            'instagram_scan_preferences' => TrackedPerson::normalizeInstagramScanPreferences([
+                'monitoring_scan_mode' => $validated['instagram_monitoring_scan_mode'],
+                'auto_scan_followers' => (bool) $this->instagram_auto_scan_followers,
+                'auto_scan_following' => (bool) $this->instagram_auto_scan_following,
+                'auto_scan_posts' => (bool) $this->instagram_auto_scan_posts,
+                'auto_scan_suggestions' => (bool) $this->instagram_auto_scan_suggestions,
+                'auto_scan_on_changes' => (bool) $this->instagram_auto_scan_on_changes,
+                'auto_scan_on_interval' => (bool) $this->instagram_auto_scan_on_interval,
+                'auto_scan_min_interval_minutes' => (int) $validated['instagram_auto_scan_min_interval_minutes'],
+                'auto_scan_count_change_threshold' => (int) $validated['instagram_auto_scan_count_change_threshold'],
+            ]),
             'notify_social_changes' => (bool) $this->notify_social_changes,
             'notify_instagram_changes' => (bool) $this->notify_instagram_changes,
             'notify_tiktok_changes' => (bool) $this->notify_tiktok_changes,
@@ -2172,6 +2210,16 @@ class TrackedPersonDetail extends Component
             : 'both';
         $this->monitoring_enabled = (bool) $trackedPerson->monitoring_enabled;
         $this->monitoring_interval_minutes = max(1, (int) ($trackedPerson->monitoring_interval_minutes ?: 60));
+        $instagramScanPreferences = $trackedPerson->instagramScanPreferences();
+        $this->instagram_monitoring_scan_mode = $instagramScanPreferences['monitoring_scan_mode'];
+        $this->instagram_auto_scan_followers = (bool) $instagramScanPreferences['auto_scan_followers'];
+        $this->instagram_auto_scan_following = (bool) $instagramScanPreferences['auto_scan_following'];
+        $this->instagram_auto_scan_posts = (bool) $instagramScanPreferences['auto_scan_posts'];
+        $this->instagram_auto_scan_suggestions = (bool) $instagramScanPreferences['auto_scan_suggestions'];
+        $this->instagram_auto_scan_on_changes = (bool) $instagramScanPreferences['auto_scan_on_changes'];
+        $this->instagram_auto_scan_on_interval = (bool) $instagramScanPreferences['auto_scan_on_interval'];
+        $this->instagram_auto_scan_min_interval_minutes = (int) $instagramScanPreferences['auto_scan_min_interval_minutes'];
+        $this->instagram_auto_scan_count_change_threshold = (int) $instagramScanPreferences['auto_scan_count_change_threshold'];
         $this->notify_social_changes = (bool) $trackedPerson->notify_social_changes;
         $this->notify_instagram_changes = (bool) $trackedPerson->notify_instagram_changes;
         $this->notify_tiktok_changes = (bool) $trackedPerson->notify_tiktok_changes;

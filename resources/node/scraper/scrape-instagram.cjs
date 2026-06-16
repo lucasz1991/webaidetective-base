@@ -467,6 +467,15 @@ function setActiveScraperProfile(runtimeConfig = {}) {
   activeScraperProfile = summarizeScraperProfile(runtimeConfig);
 }
 
+function activeScraperProfilePayload() {
+  return activeScraperProfile ? {
+    scraperProfile: activeScraperProfile,
+    scraperProfileLabel: activeScraperProfile.label,
+    scraperProfileLoginUsername: activeScraperProfile.loginUsername,
+    scraperProfileId: activeScraperProfile.id,
+  } : {};
+}
+
 function setGracefulStopFilePath(runtimeConfig = {}) {
   activeGracefulStopFilePath = normalizeText(String(
     runtimeConfig.gracefulStopFilePath || runtimeConfig.graceful_stop_file_path || '',
@@ -481,12 +490,7 @@ function progressLog(stage, data = {}) {
     at: new Date().toISOString(),
     mode: operationMode,
     stage,
-    ...(activeScraperProfile ? {
-      scraperProfile: activeScraperProfile,
-      scraperProfileLabel: activeScraperProfile.label,
-      scraperProfileLoginUsername: activeScraperProfile.loginUsername,
-      scraperProfileId: activeScraperProfile.id,
-    } : {}),
+    ...activeScraperProfilePayload(),
     ...data,
   })}\n`);
 }
@@ -1538,6 +1542,32 @@ function flattenInstagramComments(comments = []) {
   return flattened;
 }
 
+function uniqueEngagementKey(user = {}) {
+  return user?.instagramUserId || user?.username || null;
+}
+
+function addLikeToMap(likesByKey, like = {}, maxLikes = 250) {
+  const key = uniqueEngagementKey(like);
+
+  if (!key || likesByKey.has(key) || likesByKey.size >= maxLikes) {
+    return false;
+  }
+
+  likesByKey.set(key, like);
+
+  return true;
+}
+
+function addCommentToMap(commentsById, comment = {}, maxComments = 250) {
+  if (!comment?.instagramCommentId || !comment?.text || commentsById.has(comment.instagramCommentId) || commentsById.size >= maxComments) {
+    return false;
+  }
+
+  commentsById.set(comment.instagramCommentId, comment);
+
+  return true;
+}
+
 async function fetchInstagramApiJson(page, endpoint) {
   return page.evaluate(async (requestEndpoint) => {
     try {
@@ -1604,6 +1634,585 @@ async function resolveInstagramPostMediaPk(page, post = {}) {
     : null;
 }
 
+async function expandVisibleInstagramPostReplies(page, maxRounds = 8) {
+  let clickedTotal = 0;
+
+  for (let round = 0; round < maxRounds; round += 1) {
+    const clicked = await page.evaluate(() => {
+      const normalizeElementText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return rect.width > 2
+          && rect.height > 2
+          && style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && style.opacity !== '0';
+      };
+      const replyPattern = /antwort(?:en)?\s+(?:anzeigen|ansehen)|weitere\s+antwort|view\s+(?:all\s+)?(?:\d+\s+)?repl|show\s+(?:all\s+)?(?:\d+\s+)?repl/i;
+      const button = Array.from(document.querySelectorAll('button, [role="button"], span, div'))
+        .find((element) => isVisible(element) && replyPattern.test(normalizeElementText(element.innerText || element.textContent || '')));
+
+      if (!button) {
+        return false;
+      }
+
+      button.click();
+
+      return true;
+    }).catch(() => false);
+
+    if (!clicked) {
+      break;
+    }
+
+    clickedTotal++;
+    await sleep(650);
+  }
+
+  return clickedTotal;
+}
+
+async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeConfig = {}) {
+  const maxComments = Math.max(1, Number(runtimeConfig.postScanMaxCommentsPerPost || 250));
+  const commentsById = new Map();
+  let complete = false;
+  let truncated = false;
+  let previousCount = -1;
+  let staleRounds = 0;
+  const maxRounds = Math.max(8, Math.min(80, Number(runtimeConfig.postScanCommentDialogMaxScrollRounds || 40)));
+
+  await expandVisibleInstagramPostReplies(page, 6);
+
+  for (let round = 0; round < maxRounds && commentsById.size < maxComments; round += 1) {
+    const collected = await page.evaluate(({ limit, shortcode }) => {
+      const normalizeElementText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+      const normalizeUsername = (value = '') => normalizeElementText(value).replace(/^@+/, '').toLowerCase();
+      const reservedPaths = new Set([
+        'accounts',
+        'direct',
+        'explore',
+        'p',
+        'reel',
+        'reels',
+        'stories',
+        'tv',
+      ]);
+      const simpleHash = (value = '') => {
+        let hash = 0;
+        const text = String(value || '');
+
+        for (let index = 0; index < text.length; index += 1) {
+          hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
+        }
+
+        return Math.abs(hash).toString(36);
+      };
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return rect.width > 4
+          && rect.height > 4
+          && style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && style.opacity !== '0';
+      };
+      const parseCount = (rawValue = '') => {
+        const value = normalizeElementText(rawValue).toLowerCase();
+        const match = value.match(/([\d.,\s]+(?:k|m|mio|tsd)?)\s*(?:gef[aä]llt|likes?)/i);
+
+        if (!match) {
+          return null;
+        }
+
+        let multiplier = 1;
+        const token = match[1].toLowerCase();
+
+        if (/\bmio\b|\bm\b/.test(token)) {
+          multiplier = 1000000;
+        } else if (/\bk\b|\btsd\b/.test(token)) {
+          multiplier = 1000;
+        }
+
+        const numericPart = token.replace(/[^\d.,]/g, '');
+
+        if (!numericPart) {
+          return null;
+        }
+
+        if (multiplier === 1) {
+          const digits = numericPart.replace(/[^\d]/g, '');
+
+          return digits ? Number.parseInt(digits, 10) : null;
+        }
+
+        const parsed = Number.parseFloat(numericPart.replace(',', '.'));
+
+        return Number.isFinite(parsed) ? Math.round(parsed * multiplier) : null;
+      };
+      const profileFromAnchor = (anchor) => {
+        let pathname = '';
+
+        try {
+          pathname = new URL(anchor.getAttribute('href'), window.location.origin).pathname;
+        } catch (error) {
+          return null;
+        }
+
+        const parts = pathname.split('/').filter(Boolean);
+
+        if (parts.length !== 1 || reservedPaths.has(parts[0])) {
+          return null;
+        }
+
+        const username = normalizeUsername(parts[0]);
+
+        return /^[a-z0-9._]+$/i.test(username) ? username : null;
+      };
+      const dialog = document.querySelector('div[role="dialog"]') || document.body;
+      const anchors = Array.from(dialog.querySelectorAll('a[href]')).filter(isVisible);
+      const rows = [];
+      const seenRows = new Set();
+
+      for (const anchor of anchors) {
+        if (rows.length >= limit) {
+          break;
+        }
+
+        const username = profileFromAnchor(anchor);
+
+        if (!username) {
+          continue;
+        }
+
+        let row = anchor.closest('li') || anchor.closest('article') || anchor.closest('div[role="button"]') || anchor.closest('div');
+
+        for (let element = anchor; element && element !== dialog; element = element.parentElement) {
+          const text = normalizeElementText(element.innerText || element.textContent || '');
+          const rect = element.getBoundingClientRect();
+
+          if (
+            text.toLowerCase().includes(username)
+            && text.length >= username.length + 2
+            && text.length <= 1800
+            && rect.width >= 120
+            && rect.height >= 24
+          ) {
+            row = element;
+            break;
+          }
+        }
+
+        if (!row || seenRows.has(row)) {
+          continue;
+        }
+
+        seenRows.add(row);
+        const rowText = normalizeElementText(row.innerText || row.textContent || '');
+
+        if (!rowText || !rowText.toLowerCase().includes(username)) {
+          continue;
+        }
+
+        if (/^(gef[aä]llt|likes?)\b/i.test(rowText) || /^@\w/.test(rowText) || rowText.length > 1800) {
+          continue;
+        }
+
+        const textLines = rowText
+          .split(/\n| {2,}/)
+          .map((line) => normalizeElementText(line))
+          .filter(Boolean);
+        const fullName = textLines.find((line) => {
+          const normalized = normalizeUsername(line);
+
+          return normalized !== username
+            && !/^(antworten|reply|gef[aä]llt|like|mehr|more)$/i.test(line)
+            && !/\d+\s*(?:min|std|h|d|tag|tage|w|wo|j|y)\b/i.test(line)
+            && line.length <= 120;
+        }) || null;
+        const stripped = rowText
+          .replace(new RegExp(`^${username}\\b`, 'i'), '')
+          .replace(/\b(?:antworten|reply)\b.*$/i, '')
+          .replace(/\b(?:gef[aä]llt|like)[^.!?\n]{0,80}$/i, '')
+          .replace(/\b\d+\s*(?:min|std|h|d|tag|tage|w|wo|j|y)\b/ig, '')
+          .trim();
+        const text = stripped || textLines.filter((line) => normalizeUsername(line) !== username).join(' ').trim();
+
+        if (!text || text.length < 1) {
+          continue;
+        }
+
+        const image = Array.from(row.querySelectorAll('img')).find((candidate) => {
+          const rect = candidate.getBoundingClientRect();
+          const src = candidate.currentSrc || candidate.src || candidate.getAttribute('src') || '';
+
+          return src !== ''
+            && rect.width > 12
+            && rect.height > 12
+            && !/emoji|sprite|blank|transparent/i.test(src);
+        }) || null;
+        const timeElement = row.querySelector('time[datetime]');
+        const publishedAt = timeElement?.getAttribute('datetime') || null;
+        const ariaLabel = anchor.getAttribute('aria-label') || '';
+        const parentContainer = row.parentElement?.closest('li, article, div') || null;
+        const parentText = parentContainer && parentContainer !== row
+          ? normalizeElementText(parentContainer.innerText || parentContainer.textContent || '')
+          : '';
+        const parentUsernameAnchor = parentContainer && parentContainer !== row
+          ? Array.from(parentContainer.querySelectorAll('a[href]')).map(profileFromAnchor).find(Boolean)
+          : null;
+        const parentInstagramCommentId = parentUsernameAnchor && parentUsernameAnchor !== username && parentText.includes(rowText)
+          ? `ui:${shortcode || 'post'}:${parentUsernameAnchor}:${simpleHash(parentText.replace(rowText, '').slice(0, 500))}`
+          : null;
+        const stableIdentity = `${username}:${publishedAt || ''}:${text}`;
+        const instagramCommentId = row.getAttribute('data-comment-id')
+          || row.getAttribute('data-id')
+          || `ui:${shortcode || 'post'}:${username}:${simpleHash(stableIdentity)}`;
+
+        rows.push({
+          instagramCommentId,
+          parentInstagramCommentId,
+          instagramUserId: null,
+          username,
+          fullName,
+          profileImageUrl: image ? (image.currentSrc || image.src || image.getAttribute('src') || null) : null,
+          isVerified: /verified|verifiziert/i.test(ariaLabel) ? true : null,
+          text,
+          likesCount: parseCount(rowText),
+          publishedAt,
+          rawComment: {
+            source: 'ui-post-modal',
+            rowText,
+          },
+        });
+      }
+
+      const scrollTargets = Array.from(dialog.querySelectorAll('div, ul, section, article'))
+        .filter((element) => element.scrollHeight > element.clientHeight + 40);
+      const scrollTarget = scrollTargets
+        .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight))[0] || document.scrollingElement;
+      const before = scrollTarget ? scrollTarget.scrollTop : window.scrollY;
+      const step = scrollTarget
+        ? Math.max(420, scrollTarget.clientHeight * 0.8)
+        : Math.max(420, window.innerHeight * 0.8);
+
+      if (scrollTarget) {
+        scrollTarget.scrollTop = Math.min(scrollTarget.scrollTop + step, scrollTarget.scrollHeight);
+      } else {
+        window.scrollBy(0, step);
+      }
+
+      const after = scrollTarget ? scrollTarget.scrollTop : window.scrollY;
+      const atBottom = scrollTarget
+        ? after + scrollTarget.clientHeight >= scrollTarget.scrollHeight - 8
+        : after + window.innerHeight >= document.documentElement.scrollHeight - 8;
+
+      return {
+        comments: rows,
+        scrolled: after > before,
+        atBottom,
+      };
+    }, {
+      limit: maxComments,
+      shortcode: post.shortcode || null,
+    }).catch(() => ({
+      comments: [],
+      scrolled: false,
+      atBottom: false,
+    }));
+
+    for (const comment of collected.comments || []) {
+      addCommentToMap(commentsById, comment, maxComments);
+    }
+
+    await expandVisibleInstagramPostReplies(page, 3);
+
+    if (commentsById.size >= maxComments) {
+      truncated = true;
+      break;
+    }
+
+    if (commentsById.size === previousCount) {
+      staleRounds++;
+    } else {
+      staleRounds = 0;
+      previousCount = commentsById.size;
+    }
+
+    if (collected.atBottom || (!collected.scrolled && staleRounds >= 2)) {
+      complete = true;
+      break;
+    }
+
+    await sleep(550);
+  }
+
+  return {
+    comments: Array.from(commentsById.values()),
+    complete: complete && !truncated,
+    truncated,
+  };
+}
+
+async function openInstagramPostLikesDialog(page) {
+  const clicked = await page.evaluate(() => {
+    const normalizeElementText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+    const isVisible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 4
+        && rect.height > 4
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && style.opacity !== '0';
+    };
+    const likePattern = /(?:[\d.,\s]+(?:k|m|mio|tsd)?\s*)?(?:gef[aä]llt|likes?)|anderen gef[aä]llt|liked by/i;
+    const candidates = Array.from(document.querySelectorAll('a, button, [role="button"], span, div'))
+      .filter((element) => isVisible(element) && likePattern.test(normalizeElementText(element.innerText || element.textContent || '')))
+      .map((element) => {
+        const clickable = element.closest('a, button, [role="button"]') || element;
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+        const rect = clickable.getBoundingClientRect();
+        let score = 0;
+
+        if (/[\d.,\s]+(?:k|m|mio|tsd)?\s*(?:gef[aä]llt|likes?)/i.test(text)) {
+          score += 80;
+        }
+
+        if (/anderen gef[aä]llt|liked by/i.test(text)) {
+          score += 50;
+        }
+
+        if (clickable.tagName.toLowerCase() === 'a' || clickable.tagName.toLowerCase() === 'button' || clickable.getAttribute('role') === 'button') {
+          score += 25;
+        }
+
+        if (rect.top > window.innerHeight * 0.25) {
+          score += 5;
+        }
+
+        return { clickable, score };
+      })
+      .sort((left, right) => right.score - left.score);
+    const target = candidates[0]?.clickable || null;
+
+    if (!target) {
+      return false;
+    }
+
+    target.click();
+
+    return true;
+  }).catch(() => false);
+
+  if (!clicked) {
+    return false;
+  }
+
+  await sleep(1200);
+
+  return page.evaluate(() => {
+    const dialog = document.querySelector('div[role="dialog"]');
+    const text = String(dialog?.innerText || dialog?.textContent || '').replace(/\s+/g, ' ').trim();
+
+    return Boolean(dialog) && /gef[aä]llt|likes?|abonnieren|follow/i.test(text);
+  }).catch(() => false);
+}
+
+async function collectInstagramPostLikesFromDialog(page, runtimeConfig = {}) {
+  const maxLikes = Math.max(1, Number(runtimeConfig.postScanMaxLikesPerPost || 250));
+  const likesByKey = new Map();
+  let complete = false;
+  let previousCount = -1;
+  let staleRounds = 0;
+  const maxRounds = Math.max(8, Math.min(80, Number(runtimeConfig.postScanLikeDialogMaxScrollRounds || 40)));
+
+  for (let round = 0; round < maxRounds && likesByKey.size < maxLikes; round += 1) {
+    const collected = await page.evaluate(({ limit }) => {
+      const normalizeElementText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+      const normalizeUsername = (value = '') => normalizeElementText(value).replace(/^@+/, '').toLowerCase();
+      const reservedPaths = new Set([
+        'accounts',
+        'direct',
+        'explore',
+        'p',
+        'reel',
+        'reels',
+        'stories',
+        'tv',
+      ]);
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return rect.width > 4
+          && rect.height > 4
+          && style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && style.opacity !== '0';
+      };
+      const dialog = document.querySelector('div[role="dialog"]') || document.body;
+      const rows = [];
+      const seen = new Set();
+
+      for (const anchor of Array.from(dialog.querySelectorAll('a[href]')).filter(isVisible)) {
+        if (rows.length >= limit) {
+          break;
+        }
+
+        let pathname = '';
+
+        try {
+          pathname = new URL(anchor.getAttribute('href'), window.location.origin).pathname;
+        } catch (error) {
+          continue;
+        }
+
+        const parts = pathname.split('/').filter(Boolean);
+
+        if (parts.length !== 1 || reservedPaths.has(parts[0])) {
+          continue;
+        }
+
+        const username = normalizeUsername(parts[0]);
+
+        if (!/^[a-z0-9._]+$/i.test(username) || seen.has(username)) {
+          continue;
+        }
+
+        seen.add(username);
+        const row = anchor.closest('div[role="button"], li, article, div') || anchor;
+        const rowText = normalizeElementText(row.innerText || row.textContent || '');
+        const textLines = rowText
+          .split('\n')
+          .map((line) => normalizeElementText(line))
+          .filter(Boolean);
+        const image = Array.from(row.querySelectorAll('img')).find((candidate) => {
+          const rect = candidate.getBoundingClientRect();
+          const src = candidate.currentSrc || candidate.src || candidate.getAttribute('src') || '';
+
+          return src !== ''
+            && rect.width > 12
+            && rect.height > 12
+            && !/emoji|sprite|blank|transparent/i.test(src);
+        }) || null;
+
+        rows.push({
+          instagramUserId: null,
+          username,
+          fullName: textLines.find((line) => normalizeUsername(line) !== username && !/^(folgen|follow|abonniert)$/i.test(line)) || null,
+          profileImageUrl: image ? (image.currentSrc || image.src || image.getAttribute('src') || null) : null,
+          isVerified: /verified|verifiziert/i.test(anchor.getAttribute('aria-label') || rowText) ? true : null,
+          rawLike: {
+            source: 'ui-like-modal',
+            rowText,
+          },
+        });
+      }
+
+      const scrollTargets = Array.from(dialog.querySelectorAll('div, ul, section'))
+        .filter((element) => element.scrollHeight > element.clientHeight + 40);
+      const scrollTarget = scrollTargets
+        .sort((left, right) => (right.scrollHeight - right.clientHeight) - (left.scrollHeight - left.clientHeight))[0] || document.scrollingElement;
+      const before = scrollTarget ? scrollTarget.scrollTop : window.scrollY;
+      const step = scrollTarget
+        ? Math.max(420, scrollTarget.clientHeight * 0.85)
+        : Math.max(420, window.innerHeight * 0.85);
+
+      if (scrollTarget) {
+        scrollTarget.scrollTop = Math.min(scrollTarget.scrollTop + step, scrollTarget.scrollHeight);
+      } else {
+        window.scrollBy(0, step);
+      }
+
+      const after = scrollTarget ? scrollTarget.scrollTop : window.scrollY;
+      const atBottom = scrollTarget
+        ? after + scrollTarget.clientHeight >= scrollTarget.scrollHeight - 8
+        : after + window.innerHeight >= document.documentElement.scrollHeight - 8;
+
+      return {
+        likes: rows,
+        scrolled: after > before,
+        atBottom,
+      };
+    }, { limit: maxLikes }).catch(() => ({
+      likes: [],
+      scrolled: false,
+      atBottom: false,
+    }));
+
+    for (const like of collected.likes || []) {
+      addLikeToMap(likesByKey, like, maxLikes);
+    }
+
+    if (likesByKey.size === previousCount) {
+      staleRounds++;
+    } else {
+      staleRounds = 0;
+      previousCount = likesByKey.size;
+    }
+
+    if (likesByKey.size >= maxLikes) {
+      break;
+    }
+
+    if (collected.atBottom || (!collected.scrolled && staleRounds >= 2)) {
+      complete = true;
+      break;
+    }
+
+    await sleep(550);
+  }
+
+  return {
+    likes: Array.from(likesByKey.values()),
+    complete,
+  };
+}
+
+async function collectInstagramPostEngagementFromUi(page, post = {}, runtimeConfig = {}) {
+  const result = {
+    likes: [],
+    comments: [],
+    likesComplete: false,
+    commentsComplete: false,
+    errors: [],
+  };
+
+  if (post.postUrl && !page.url().includes(`/${post.shortcode || ''}`)) {
+    const navigation = await navigateWithSoftTimeout(page, post.postUrl, runtimeConfig);
+
+    if (!navigation.ok) {
+      result.errors.push(`ui-navigation: ${navigation.error || 'unbekannter Fehler'}`);
+
+      return result;
+    }
+  }
+
+  await sleep(900);
+  await expandVisibleInstagramPostReplies(page, 6);
+
+  const comments = await collectInstagramPostCommentsFromModal(page, post, runtimeConfig);
+  result.comments = comments.comments;
+  result.commentsComplete = comments.complete;
+
+  const likesDialogOpened = await openInstagramPostLikesDialog(page);
+
+  if (likesDialogOpened) {
+    const likes = await collectInstagramPostLikesFromDialog(page, runtimeConfig);
+    result.likes = likes.likes;
+    result.likesComplete = likes.complete;
+    await closeInstagramDialog(page);
+  } else {
+    result.errors.push('ui-likes-dialog-unavailable');
+  }
+
+  return result;
+}
+
 async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {}) {
   const maxLikes = Math.max(1, Number(runtimeConfig.postScanMaxLikesPerPost || 250));
   const maxComments = Math.max(1, Number(runtimeConfig.postScanMaxCommentsPerPost || 250));
@@ -1642,13 +2251,11 @@ async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {
 
     for (const rawUser of Array.isArray(rawUsers) ? rawUsers : []) {
       const user = normalizeInstagramEngagementUser(rawUser);
-      const key = user?.instagramUserId || user?.username;
-
-      if (user && key && likesByKey.size < maxLikes) {
-        likesByKey.set(key, {
+      if (user) {
+        addLikeToMap(likesByKey, {
           ...user,
           rawLike: rawUser,
-        });
+        }, maxLikes);
       }
     }
 
@@ -1691,7 +2298,7 @@ async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {
         break;
       }
 
-      commentsById.set(comment.instagramCommentId, comment);
+      addCommentToMap(commentsById, comment, maxComments);
     }
 
     for (const rawComment of Array.isArray(rawComments) ? rawComments : []) {
@@ -1733,8 +2340,8 @@ async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {
         for (const rawChild of Array.isArray(rawChildren) ? rawChildren : []) {
           const child = normalizeInstagramComment(rawChild, parentId);
 
-          if (child && commentsById.size < maxComments) {
-            commentsById.set(child.instagramCommentId, child);
+          if (child) {
+            addCommentToMap(commentsById, child, maxComments);
           }
         }
 
@@ -1777,6 +2384,38 @@ async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {
 
     cursor = nextCursor;
     await sleep(150);
+  }
+
+  const expectedLikes = hasFiniteNumericValue(post.likesCount) ? Number(post.likesCount) : null;
+  const uiFallbackEnabled = runtimeConfig.postScanUiFallbackEnabled !== false
+    && runtimeConfig.post_scan_ui_fallback_enabled !== false;
+  const shouldUseUiFallback = uiFallbackEnabled
+    && post.postUrl
+    && (
+      (expectedLikes !== null && expectedLikes > 0 && likesByKey.size < Math.min(expectedLikes, maxLikes))
+      || (expectedComments !== null && expectedComments > 0 && commentsById.size < Math.min(expectedComments, maxComments))
+      || errors.length > 0
+    );
+
+  if (shouldUseUiFallback) {
+    const uiEngagement = await collectInstagramPostEngagementFromUi(page, post, runtimeConfig);
+
+    for (const like of uiEngagement.likes || []) {
+      addLikeToMap(likesByKey, like, maxLikes);
+    }
+
+    for (const comment of uiEngagement.comments || []) {
+      addCommentToMap(commentsById, comment, maxComments);
+    }
+
+    likesComplete = likesComplete || uiEngagement.likesComplete
+      || (expectedLikes !== null && likesByKey.size >= Math.min(expectedLikes, maxLikes));
+    commentsComplete = commentsComplete || uiEngagement.commentsComplete
+      || (expectedComments !== null && commentsById.size >= Math.min(expectedComments, maxComments));
+
+    if (uiEngagement.errors?.length) {
+      errors.push(...uiEngagement.errors);
+    }
   }
 
   return {
@@ -9015,6 +9654,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
           ]),
           durationMs: Date.now() - startedAt,
           operationMode,
+          ...activeScraperProfilePayload(),
           debugLogPath,
         }, runtimeConfig);
         flushRunDebug(responsePayload);
@@ -9110,6 +9750,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
           ]),
           durationMs: Date.now() - startedAt,
           operationMode,
+          ...activeScraperProfilePayload(),
           debugLogPath,
         }, runtimeConfig);
         flushRunDebug(responsePayload);
@@ -9326,6 +9967,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       warnings: dedupedWarnings,
       durationMs: Date.now() - startedAt,
       operationMode,
+      ...activeScraperProfilePayload(),
       debugLogPath,
     }, runtimeConfig);
     flushRunDebug(responsePayload);
@@ -9368,6 +10010,8 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       screenshotMode: debugScreenshotPath ? 'page' : null,
       warnings: dedupe(consoleMessages),
       durationMs: Date.now() - startedAt,
+      operationMode,
+      ...activeScraperProfilePayload(),
       debugLogPath,
     }, runtimeConfig);
     recordRunDebug('run-error', responsePayload);

@@ -918,6 +918,63 @@
                             <p class="mt-1 text-xs text-slate-500">Der Scheduler prueft jede Minute, ob dieses Profil wieder faellig ist.</p>
                             @error('monitoring_interval_minutes') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
                         </div>
+                        <div>
+                            <label class="mb-1 block text-sm font-medium text-slate-700">Automatischer Basis-Scan</label>
+                            <select wire:model.defer="instagram_monitoring_scan_mode" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                <option value="mini">Mini-Scan</option>
+                                <option value="full">Vollanalyse</option>
+                            </select>
+                            <p class="mt-1 text-xs text-slate-500">Gilt fuer die Dauerbeobachtung dieser Person.</p>
+                            @error('instagram_monitoring_scan_mode') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                        </div>
+                        <div class="rounded-xl border border-slate-200 bg-white p-4">
+                            <div class="text-sm font-bold text-slate-900">Automatische Folge-Scans</div>
+                            <p class="mt-1 text-xs leading-5 text-slate-500">
+                                Diese Scans starten nach einem Basis-Scan nur, wenn die Regeln unten greifen. Manuelle Scans bleiben weiterhin moeglich.
+                            </p>
+                            <div class="mt-3 grid gap-2 sm:grid-cols-2">
+                                <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                    <input type="checkbox" wire:model.defer="instagram_auto_scan_followers" class="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500">
+                                    <span>Followerliste</span>
+                                </label>
+                                <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                    <input type="checkbox" wire:model.defer="instagram_auto_scan_following" class="rounded border-slate-300 text-sky-600 focus:ring-sky-500">
+                                    <span>Gefolgt-Liste</span>
+                                </label>
+                                <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                    <input type="checkbox" wire:model.defer="instagram_auto_scan_posts" class="rounded border-slate-300 text-violet-600 focus:ring-violet-500">
+                                    <span>Beitraege</span>
+                                </label>
+                                <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                                    <input type="checkbox" wire:model.defer="instagram_auto_scan_suggestions" class="rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500">
+                                    <span>Vorschlaege</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="grid gap-3 sm:grid-cols-2">
+                            <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                                <input type="checkbox" wire:model.defer="instagram_auto_scan_on_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                                <span class="font-medium">Bei relevanten Aenderungen starten</span>
+                            </label>
+                            <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                                <input type="checkbox" wire:model.defer="instagram_auto_scan_on_interval" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                                <span class="font-medium">Nach Mindestabstand erneut starten</span>
+                            </label>
+                        </div>
+                        <div class="grid gap-3 sm:grid-cols-2">
+                            <div>
+                                <label class="mb-1 block text-sm font-medium text-slate-700">Mindestabstand fuer Folge-Scans</label>
+                                <input type="number" min="0" max="10080" step="1" wire:model.defer="instagram_auto_scan_min_interval_minutes" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                <p class="mt-1 text-xs text-slate-500">0 ignoriert den Abstand; 60 entspricht einer Stunde.</p>
+                                @error('instagram_auto_scan_min_interval_minutes') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                            </div>
+                            <div>
+                                <label class="mb-1 block text-sm font-medium text-slate-700">Aenderung ab Anzahl</label>
+                                <input type="number" min="1" max="1000000" step="1" wire:model.defer="instagram_auto_scan_count_change_threshold" class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
+                                <p class="mt-1 text-xs text-slate-500">Bezieht sich auf Follower-, Gefolgt- und Beitragszaehler.</p>
+                                @error('instagram_auto_scan_count_change_threshold') <p class="mt-1 text-xs text-rose-600">{{ $message }}</p> @enderror
+                            </div>
+                        </div>
                         <label class="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
                             <input type="checkbox" wire:model.defer="notify_social_changes" class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
                             <span class="font-medium">Benachrichtigungen fuer Instagram-Aenderungen aktivieren</span>

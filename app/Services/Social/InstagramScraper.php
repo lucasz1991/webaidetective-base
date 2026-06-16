@@ -149,6 +149,7 @@ class InstagramScraper
         $payload['_stderr'] = $errorOutput;
         $payload['username'] = $payload['username'] ?? $username;
         $payload['operationMode'] = $payload['operationMode'] ?? $operationMode;
+        $this->recordScraperProfileRateLimitIfNeeded($payload);
 
         return $payload;
     }
@@ -360,6 +361,7 @@ class InstagramScraper
         $payload['publicUsername'] = $payload['publicUsername'] ?? $publicUsername;
         $payload['targetUsername'] = $payload['targetUsername'] ?? $targetUsername;
         $payload['operationMode'] = 'public-profile-connections';
+        $this->recordScraperProfileRateLimitIfNeeded($payload);
 
         return $payload;
     }
@@ -370,6 +372,7 @@ class InstagramScraper
         callable $callback,
     ): array {
         $maxAttempts = $this->scanPolicies->errorAttempts($operationMode);
+        $profileSwitchRetryLimit = max($maxAttempts, min(3, $maxAttempts + 2));
         $retryDelayMilliseconds = $this->scanPolicies->retryDelayMilliseconds($operationMode);
         $attemptLog = [];
         $lastException = null;
@@ -384,7 +387,18 @@ class InstagramScraper
                     'processSuccessful' => $payload['_process_successful'] ?? null,
                 ];
 
-                if (! $this->payloadRequiresRetry($payload) || $attempt >= $maxAttempts) {
+                $requiresRetry = $this->payloadRequiresRetry($payload);
+
+                if (
+                    $requiresRetry
+                    && $attempt >= $maxAttempts
+                    && $attempt < $profileSwitchRetryLimit
+                    && $this->payloadShouldRetryWithScraperProfileSwitch($payload)
+                ) {
+                    $maxAttempts = $attempt + 1;
+                }
+
+                if (! $requiresRetry || $attempt >= $maxAttempts) {
                     $payload['_scan_attempt'] = $attempt;
                     $payload['_scan_max_attempts'] = $maxAttempts;
                     $payload['_scan_attempts'] = $attemptLog;
@@ -441,8 +455,22 @@ class InstagramScraper
 
         $statusLevel = Str::lower(trim((string) ($payload['statusLevel'] ?? '')));
 
+        if ($this->isInstagramSessionProblemEvent($payload) && ! (bool) ($payload['ok'] ?? false)) {
+            return true;
+        }
+
         return $statusLevel === 'error'
             || (($payload['_process_successful'] ?? true) === false && ! (bool) ($payload['ok'] ?? false));
+    }
+
+    private function payloadShouldRetryWithScraperProfileSwitch(array $payload): bool
+    {
+        $profile = is_array($payload['scraperProfile'] ?? null) ? $payload['scraperProfile'] : [];
+        $profileId = $this->nullableTrim($payload['scraperProfileId'] ?? $profile['id'] ?? null);
+
+        return $profileId !== null
+            && $this->isInstagramScraperProfileBlockEvent($payload)
+            && ! (bool) ($payload['gracefullyStopped'] ?? false);
     }
 
     private function reportRetry(
@@ -672,7 +700,7 @@ class InstagramScraper
 
     private function recordScraperProfileRateLimitIfNeeded(array $event): void
     {
-        if (! $this->isInstagramRateLimitEvent($event)) {
+        if (! $this->isInstagramScraperProfileBlockEvent($event)) {
             return;
         }
 
@@ -694,14 +722,18 @@ class InstagramScraper
                 ['daily-time-limit', 'daily time limit', 'tägliches zeitlimit', 'taegliches zeitlimit'],
             );
 
+            $isSessionProblem = $this->isInstagramSessionProblemEvent($event);
+
             app(ScraperProfileDatabaseStore::class)->blockProfileForInstagramLimit(
                 $profileId,
                 $this->rateLimitBlockReason($event),
-                $isDailyTimeLimit ? 86400 : 3600,
+                $isDailyTimeLimit ? 86400 : ($isSessionProblem ? 1800 : 3600),
                 [
                     'stage' => $this->nullableTrim($event['stage'] ?? null),
                     'relationship' => $this->nullableTrim($event['relationship'] ?? null),
                     'message' => $this->nullableTrim($event['message'] ?? null),
+                    'statusMessage' => $this->nullableTrim($event['statusMessage'] ?? null),
+                    'finalUrl' => $this->nullableTrim($event['finalUrl'] ?? null),
                     'rateLimitText' => Str::limit((string) ($event['rateLimitText'] ?? ''), 500),
                     'scraperProfileLabel' => $this->nullableTrim($event['scraperProfileLabel'] ?? $profile['label'] ?? null),
                     'scraperProfileLoginUsername' => $this->nullableTrim($event['scraperProfileLoginUsername'] ?? $profile['loginUsername'] ?? null),
@@ -736,14 +768,97 @@ class InstagramScraper
             ]);
     }
 
+    private function isInstagramScraperProfileBlockEvent(array $event): bool
+    {
+        return $this->isInstagramRateLimitEvent($event)
+            || $this->isInstagramSessionProblemEvent($event);
+    }
+
+    private function isInstagramSessionProblemEvent(array $event): bool
+    {
+        $finalUrl = Str::lower((string) ($event['finalUrl'] ?? ''));
+        $cookieDiagnostics = is_array($event['cookieDiagnostics'] ?? null) ? $event['cookieDiagnostics'] : [];
+        $loginDiagnostics = is_array($event['loginDiagnostics'] ?? null) ? $event['loginDiagnostics'] : [];
+
+        if (Str::contains($finalUrl, '/accounts/login')) {
+            return true;
+        }
+
+        if (
+            ($cookieDiagnostics['sessionCookieProvided'] ?? false)
+            && ($cookieDiagnostics['sessionCookieAccepted'] ?? false)
+            && ($cookieDiagnostics['sessionCookieRetained'] ?? null) === false
+        ) {
+            return true;
+        }
+
+        if (($loginDiagnostics['attempted'] ?? false) && ! ($loginDiagnostics['success'] ?? false)) {
+            return true;
+        }
+
+        return Str::contains($this->blockDetectionText($event), [
+            'importierte login-session',
+            'login-session',
+            'login wurde versucht',
+            'instagram verlangt',
+            'accounts/login',
+            'require_login',
+            'login_required',
+            'challenge_required',
+            'checkpoint_required',
+            'checkpoint',
+            'challenge',
+            'suspicious login',
+            'confirm it',
+            'help us confirm',
+            'verify your account',
+            'bestaetige',
+            'bestatige',
+            'sicherheitscode',
+        ]);
+    }
+
+    private function blockDetectionText(array $event): string
+    {
+        $parts = [
+            $event['stage'] ?? null,
+            $event['reason'] ?? null,
+            $event['searchStopReason'] ?? null,
+            $event['message'] ?? null,
+            $event['statusMessage'] ?? null,
+            $event['error'] ?? null,
+            $event['rateLimitText'] ?? null,
+            $event['finalUrl'] ?? null,
+        ];
+
+        foreach (['warnings', 'consoleMessages'] as $key) {
+            if (is_array($event[$key] ?? null)) {
+                $parts[] = implode(' ', array_filter($event[$key], 'is_scalar'));
+            }
+        }
+
+        foreach (['cookieDiagnostics', 'loginDiagnostics'] as $key) {
+            if (is_array($event[$key] ?? null)) {
+                $parts[] = json_encode($event[$key], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?: null;
+            }
+        }
+
+        return Str::lower(implode(' ', array_filter(
+            $parts,
+            static fn ($part): bool => is_scalar($part) && trim((string) $part) !== '',
+        )));
+    }
+
     private function rateLimitBlockReason(array $event): string
     {
         $stage = $this->nullableTrim($event['stage'] ?? null);
         $relationship = $this->nullableTrim($event['relationship'] ?? null);
 
-        $prefix = Str::contains(Str::lower($stage ?? ''), 'daily-time-limit')
-            ? 'instagram-daily-time-limit'
-            : 'instagram-rate-limit';
+        $prefix = $this->isInstagramSessionProblemEvent($event)
+            ? 'instagram-session-problem'
+            : (Str::contains(Str::lower($stage ?? ''), 'daily-time-limit')
+                ? 'instagram-daily-time-limit'
+                : 'instagram-rate-limit');
 
         return trim($prefix.($relationship ? ':'.$relationship : '').($stage ? ':'.$stage : ''));
     }
