@@ -329,7 +329,7 @@
                                     <option value="250" selected>250</option>
                                 </select>
                             </label>
-                            <p class="leading-5 text-slate-500">Die Map lädt grundsätzlich höchstens 250 Profile. Profilbilder werden nur für die 50 engsten Kontakte geladen.</p>
+                            <p class="leading-5 text-slate-500">Die Map lÃ¤dt grundsÃ¤tzlich hÃ¶chstens 250 Profile. Profilbilder werden nur fÃ¼r die 50 engsten Kontakte geladen.</p>
                             <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 leading-5">
                                 <div data-network-visible-profiles-count>0 sichtbar</div>
                                 <div>Effektives Minimum: <span data-network-effective-min-degree>0</span></div>
@@ -506,7 +506,7 @@
                                 wire:loading.attr="disabled"
                                 x-on:click="$wire.openProfilePreview(networkNode.id)"
                             >
-                                Profil öffnen
+                                Profil Ã¶ffnen
                             </button>
                             <button
                                 type="button"
@@ -570,10 +570,10 @@
             ></div>
         </div>
         <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-show="nodeMenu.type === 'person' && nodeMenu.detailUrl" x-on:click="window.location.href = nodeMenu.detailUrl; closeNodeMenu()">
-            Person öffnen
+            Person Ã¶ffnen
         </button>
         <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-show="nodeMenu.type !== 'person'" x-on:click="$wire.openProfilePreview(nodeMenu.id); closeNodeMenu()">
-            Profil öffnen
+            Profil Ã¶ffnen
         </button>
         <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-pink-700 hover:bg-pink-50" x-show="nodeMenu.type !== 'person' && !nodeMenu.isKnownProfile" x-on:click="$wire.addProfileAsKnown(nodeMenu.id); closeNodeMenu()">
             Als bekannt speichern
@@ -633,7 +633,7 @@
                         </button>
                     </div>
                     <p class="mt-2 text-xs text-slate-500">
-                        Scans aktualisieren das Profil ohne Tracking-Platz zu verbrauchen. Nur „Als beobachtetes Profil anlegen“ aktiviert dauerhaftes Tracking und zaehlt gegen dein Profil-Limit.
+                        Scans aktualisieren das Profil ohne Tracking-Platz zu verbrauchen. Nur â€žAls beobachtetes Profil anlegenâ€œ aktiviert dauerhaftes Tracking und zaehlt gegen dein Profil-Limit.
                     </p>
                 </div>
             </x-slot:actions>
@@ -729,7 +729,7 @@
                             </div>
                             @if($profilePreview['profile_url'] ?? null)
                                 <a href="{{ $profilePreview['profile_url'] }}" target="_blank" class="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                                    Instagram öffnen
+                                    Instagram Ã¶ffnen
                                 </a>
                             @endif
                         </div>
