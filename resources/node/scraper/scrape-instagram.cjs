@@ -2054,9 +2054,36 @@ async function collectInstagramPostLikesFromDialog(page, runtimeConfig = {}) {
           && style.visibility !== 'hidden'
           && style.opacity !== '0';
       };
-      const dialog = document.querySelector('div[role="dialog"]') || document.body;
+      const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+      const dialog = dialogs[dialogs.length - 1] || document.body;
       const rows = [];
       const seen = new Set();
+      const findEntryContainer = (anchor, username) => {
+        for (let element = anchor; element && element !== dialog; element = element.parentElement) {
+          const rect = element.getBoundingClientRect();
+          const text = normalizeElementText(element.innerText || element.textContent || '');
+          const hasProfileImage = Boolean(Array.from(element.querySelectorAll('img')).find((image) => {
+            const imageRect = image.getBoundingClientRect();
+
+            return imageRect.width > 12 && imageRect.height > 12;
+          }));
+
+          if (rect.width >= 120
+            && rect.height >= 28
+            && rect.height <= 260
+            && text.length <= 700
+            && text.toLowerCase().includes(username)
+            && hasProfileImage) {
+            return element;
+          }
+
+          if (rect.height > 420 || text.length > 1200) {
+            break;
+          }
+        }
+
+        return anchor.closest('div[role="button"], li, article, div') || anchor;
+      };
 
       for (const anchor of Array.from(dialog.querySelectorAll('a[href]')).filter(isVisible)) {
         if (rows.length >= limit) {
@@ -2084,7 +2111,7 @@ async function collectInstagramPostLikesFromDialog(page, runtimeConfig = {}) {
         }
 
         seen.add(username);
-        const row = anchor.closest('div[role="button"], li, article, div') || anchor;
+        const row = findEntryContainer(anchor, username);
         const rowText = normalizeElementText(row.innerText || row.textContent || '');
         const textLines = rowText
           .split('\n')
@@ -2173,6 +2200,133 @@ async function collectInstagramPostLikesFromDialog(page, runtimeConfig = {}) {
   };
 }
 
+async function openInstagramPostLikesDialogReliable(page) {
+  const clickResult = await page.evaluate(() => {
+    const normalizeElementText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+    const isVisible = (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 4
+        && rect.height > 4
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && style.opacity !== '0';
+    };
+    const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+    const surface = dialogs[dialogs.length - 1] || document.querySelector('article') || document.body;
+    const beforeDialogCount = dialogs.length;
+    const germanLikeWord = 'gef(?:a|\\u00e4|\\u00c3\\u00a4)llt';
+    const numericLikePattern = new RegExp(`(?:^|\\s)[\\d.,\\s]+(?:k|m|mio|tsd)?\\s*(?:${germanLikeWord}|likes?)(?:\\s|$)`, 'i');
+    const socialLikePattern = new RegExp(`(?:anderen\\s+${germanLikeWord}|${germanLikeWord}\\s+.+|liked by|and others|likes?)`, 'i');
+    const rejectPattern = /antworten|reply|kommentar|comment|translation/i;
+    const candidates = Array.from(surface.querySelectorAll('a, button, [role="button"], span, div'))
+      .filter((element) => {
+        if (!isVisible(element)) {
+          return false;
+        }
+
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+
+        return text.length > 0
+          && text.length <= 220
+          && !rejectPattern.test(text)
+          && (numericLikePattern.test(text) || socialLikePattern.test(text));
+      })
+      .map((element) => {
+        const clickable = element.closest('a, button, [role="button"]') || element;
+        const text = normalizeElementText(element.innerText || element.textContent || '');
+        const rect = clickable.getBoundingClientRect();
+        let score = 0;
+
+        if (numericLikePattern.test(text)) {
+          score += 120;
+        }
+
+        if (/liked by|anderen/i.test(text)) {
+          score += 70;
+        }
+
+        if (clickable.tagName.toLowerCase() === 'a' || clickable.tagName.toLowerCase() === 'button' || clickable.getAttribute('role') === 'button') {
+          score += 35;
+        }
+
+        if (rect.top > window.innerHeight * 0.35) {
+          score += 15;
+        }
+
+        if (text.length <= 80) {
+          score += 10;
+        }
+
+        return { clickable, score };
+      })
+      .sort((left, right) => right.score - left.score);
+    const target = candidates[0]?.clickable || null;
+
+    if (!target) {
+      return {
+        clicked: false,
+        beforeDialogCount,
+      };
+    }
+
+    target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
+    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+    target.click();
+
+    return {
+      clicked: true,
+      beforeDialogCount,
+    };
+  }).catch(() => false);
+
+  if (!clickResult || !clickResult.clicked) {
+    return false;
+  }
+
+  const beforeDialogCount = Number(clickResult.beforeDialogCount || 0);
+
+  try {
+    await page.waitForFunction((initialDialogCount) => {
+      const normalizeElementText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+      const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+      const dialog = dialogs[dialogs.length - 1] || null;
+
+      if (!dialog) {
+        return false;
+      }
+
+      const text = normalizeElementText(dialog.innerText || dialog.textContent || '');
+      const profileLinks = Array.from(dialog.querySelectorAll('a[href]')).filter((anchor) => {
+        try {
+          const parts = new URL(anchor.getAttribute('href'), window.location.origin).pathname.split('/').filter(Boolean);
+
+          return parts.length === 1 && /^[a-z0-9._]+$/i.test(parts[0]);
+        } catch (error) {
+          return false;
+        }
+      }).length;
+      const likesDialogPattern = new RegExp('gef(?:a|\\u00e4|\\u00c3\\u00a4)llt|likes?|abonnieren|folgen|follow', 'i');
+
+      const looksLikeReusedLikesDialog = profileLinks >= 2
+        && likesDialogPattern.test(text)
+        && !/antworten|reply|kommentar|comment/i.test(text);
+
+      return dialogs.length > initialDialogCount || looksLikeReusedLikesDialog;
+    }, { timeout: 4500 }, beforeDialogCount);
+
+    return true;
+  } catch (error) {
+    return page.evaluate((initialDialogCount) => {
+      const dialogs = Array.from(document.querySelectorAll('div[role="dialog"]'));
+
+      return dialogs.length > initialDialogCount;
+    }, beforeDialogCount).catch(() => false);
+  }
+}
+
 async function collectInstagramPostEngagementFromUi(page, post = {}, runtimeConfig = {}) {
   const result = {
     likes: [],
@@ -2199,7 +2353,7 @@ async function collectInstagramPostEngagementFromUi(page, post = {}, runtimeConf
   result.comments = comments.comments;
   result.commentsComplete = comments.complete;
 
-  const likesDialogOpened = await openInstagramPostLikesDialog(page);
+  const likesDialogOpened = await openInstagramPostLikesDialogReliable(page);
 
   if (likesDialogOpened) {
     const likes = await collectInstagramPostLikesFromDialog(page, runtimeConfig);
@@ -2393,6 +2547,7 @@ async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {
     && post.postUrl
     && (
       (expectedLikes !== null && expectedLikes > 0 && likesByKey.size < Math.min(expectedLikes, maxLikes))
+      || (expectedLikes === null && likesByKey.size === 0)
       || (expectedComments !== null && expectedComments > 0 && commentsById.size < Math.min(expectedComments, maxComments))
       || errors.length > 0
     );
