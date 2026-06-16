@@ -1,6 +1,7 @@
 ﻿const instances = new WeakMap();
 const activeRoots = new Set();
 const DEFAULT_LAYOUT_MODE = 'clusters';
+const DEFAULT_BACKGROUND_MODE = 'light';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
 const LAYOUT_STORAGE_PREFIX = 'network-map-render:v8';
 let cytoscapeLoader;
@@ -1472,10 +1473,11 @@ async function ensureThreeScene(root, state) {
     }
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x020617);
+    scene.background = new THREE.Color(threeBackgroundColorForMode(state.backgroundMode));
     const camera = new THREE.PerspectiveCamera(54, 1, 1, 10000);
     camera.position.set(0, 0, 980);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer.setClearColor(threeBackgroundColorForMode(state.backgroundMode), 1);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.domElement.className = 'h-full w-full';
     renderer.domElement.style.display = 'block';
@@ -1679,6 +1681,7 @@ async function setViewMode(root, state, mode) {
         overlays?.classList.add('hidden');
         threeCanvas?.classList.remove('hidden');
         await ensureThreeScene(root, state);
+        applyNetworkBackground(root, state);
         scheduleThreeRender(root);
         return;
     }
@@ -1687,6 +1690,7 @@ async function setViewMode(root, state, mode) {
     canvas?.classList.remove('hidden');
     overlays?.classList.remove('hidden');
     destroyThreeScene(state);
+    applyNetworkBackground(root, state);
     state.cy.resize();
     fitGraph(state.cy, { tight: true });
 }
@@ -1752,6 +1756,38 @@ function normalizeLayoutMode(value) {
 
 function normalizeViewMode(value) {
     return String(value || '').trim() === '3d' ? '3d' : '2d';
+}
+
+function normalizeBackgroundMode(value) {
+    return String(value || '').trim() === 'dark' ? 'dark' : DEFAULT_BACKGROUND_MODE;
+}
+
+function backgroundModeStorageKey(root) {
+    return `network-map-background-mode:${root.dataset.networkFilterScope || root.dataset.networkMapId || 'default'}`;
+}
+
+function readStoredBackgroundMode(root) {
+    try {
+        return normalizeBackgroundMode(localStorage.getItem(backgroundModeStorageKey(root)) || root.dataset.networkBackgroundMode);
+    } catch {
+        return normalizeBackgroundMode(root.dataset.networkBackgroundMode);
+    }
+}
+
+function writeStoredBackgroundMode(root, mode) {
+    try {
+        localStorage.setItem(backgroundModeStorageKey(root), normalizeBackgroundMode(mode));
+    } catch {
+        // localStorage can be unavailable in hardened browser contexts.
+    }
+}
+
+function threeBackgroundColorForMode(mode) {
+    return normalizeBackgroundMode(mode) === 'dark' ? 0x020617 : 0xf1f5f9;
+}
+
+function cssBackgroundColorForMode(mode) {
+    return normalizeBackgroundMode(mode) === 'dark' ? '#020617' : '#f1f5f9';
 }
 
 function viewModeStorageKey(root) {
@@ -1858,6 +1894,41 @@ function updateViewModeControls(root, state) {
             ? 'Die 3D-Ansicht nutzt eine feste raeumliche Netzwerk-Anordnung.'
             : '';
     });
+}
+
+function updateBackgroundControls(root, state) {
+    const mode = normalizeBackgroundMode(state?.backgroundMode);
+
+    root.querySelectorAll('[data-network-background-mode]').forEach((button) => {
+        updateButton(button, button.dataset.networkBackgroundMode === mode);
+    });
+}
+
+function applyNetworkBackground(root, state) {
+    const mode = normalizeBackgroundMode(state?.backgroundMode);
+    const color = cssBackgroundColorForMode(mode);
+    const surface = root.querySelector('[data-network-surface]');
+    const canvas = root.querySelector('[data-network-canvas]');
+    const threeCanvas = root.querySelector('[data-network-3d-canvas]');
+
+    root.dataset.networkBackgroundMode = mode;
+    surface?.classList.toggle('network-map-background-dark', mode === 'dark');
+    surface?.classList.toggle('network-map-background-light', mode !== 'dark');
+
+    [surface, canvas, threeCanvas].forEach((element) => {
+        if (element) {
+            element.style.backgroundColor = color;
+        }
+    });
+
+    if (state?.threeState?.THREE && state.threeState.scene && state.threeState.renderer) {
+        const threeColor = threeBackgroundColorForMode(mode);
+        state.threeState.scene.background = new state.threeState.THREE.Color(threeColor);
+        state.threeState.renderer.setClearColor(threeColor, 1);
+        state.threeState.needsRender = true;
+    }
+
+    updateBackgroundControls(root, state);
 }
 
 function rootStateForCy(cy) {
@@ -3907,6 +3978,14 @@ function bindControls(root, cy) {
         });
     });
 
+    root.querySelectorAll('[data-network-background-mode]').forEach((button) => {
+        button.addEventListener('click', () => {
+            state.backgroundMode = normalizeBackgroundMode(button.dataset.networkBackgroundMode);
+            writeStoredBackgroundMode(root, state.backgroundMode);
+            applyNetworkBackground(root, state);
+        });
+    });
+
     root.querySelectorAll('[data-network-layout-spacing]').forEach((control) => {
         control.addEventListener('input', () => {
             const previousScale = state.layoutSpacingScale;
@@ -4207,6 +4286,7 @@ async function initNetworkMap(root) {
             graphDataHash: String(root.dataset.networkGraphHash || '').trim(),
             layoutMode: readStoredLayoutMode(root),
             viewMode: readStoredViewMode(root),
+            backgroundMode: readStoredBackgroundMode(root),
             threeFocusNodeId: null,
             layoutRestored: false,
             hasAppliedLayout: false,
@@ -4227,6 +4307,7 @@ async function initNetworkMap(root) {
         bindLayoutPersistence(root, cy);
         updateLayoutControls(root, state);
         updateViewModeControls(root, state);
+        applyNetworkBackground(root, state);
         setLayoutStatus(root, 'Noch nicht gespeichert');
         applyVisualSettings(root, cy);
         applyAutoMinDegreeIfNeeded(root, cy);

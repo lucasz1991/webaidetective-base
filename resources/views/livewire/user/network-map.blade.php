@@ -6,6 +6,7 @@
     data-network-focus-tracked-person-id="{{ $contextTrackedPersonId ?: $primaryTrackedPersonId }}"
     data-network-max-visible-profiles="250"
     data-network-layout-mode="clusters"
+    data-network-background-mode="light"
     data-network-lazy="true"
     @if($graphToken && ($cacheDebug['chunk_count'] ?? 0) > 0)
         data-network-graph-token="{{ $graphToken }}"
@@ -373,6 +374,16 @@
                                     3D Prototyp
                                 </button>
                             </div>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button type="button" data-network-background-mode="light" data-active-classes="border-slate-900 bg-white text-slate-950" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 shadow-sm transition" aria-pressed="true">
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v2M12 18v2M4 12h2M18 12h2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M17.7 6.3l-1.4 1.4M7.7 16.3l-1.4 1.4M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                                    Hell
+                                </button>
+                                <button type="button" data-network-background-mode="dark" data-active-classes="border-slate-700 bg-slate-950 text-white" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 shadow-sm transition" aria-pressed="false">
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 7 7 0 1 0 20 15.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                    Dunkel
+                                </button>
+                            </div>
                             <label class="grid gap-1.5">
                                 <span>Anordnung</span>
                                 <select data-network-layout-mode class="rounded-lg border-slate-200 bg-white text-sm font-bold text-slate-900 focus:border-slate-400 focus:ring-slate-400">
@@ -442,6 +453,7 @@
                 @else
                     <div
                         class="relative bg-slate-100"
+                        data-network-surface
                         x-bind:class="mapFullscreen ? 'h-screen min-h-0' : 'h-[420px] min-h-[420px] cursor-zoom-in'"
                         x-on:click="if (!mapFullscreen) openMap()"
                         wire:ignore
