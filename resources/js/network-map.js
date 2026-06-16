@@ -745,6 +745,22 @@ function threeDistancesFromFocus(adjacency, focusId) {
     return distances;
 }
 
+function threeFocusStrengths(nodes, adjacency, focusId, state) {
+    const strengths = new Map();
+    const directWeights = nodes.map((node) => adjacency.get(node.id())?.get(focusId) || 0);
+    const maxDirectWeight = Math.max(1, ...directWeights);
+    const maxDegree = Math.max(1, ...nodes.map((node) => visibleDegreeForState(node, state)));
+
+    nodes.forEach((node) => {
+        const directWeight = adjacency.get(node.id())?.get(focusId) || 0;
+        const degreeWeight = visibleDegreeForState(node, state) / maxDegree;
+        const directRatio = directWeight / maxDirectWeight;
+        strengths.set(node.id(), Math.max(0, Math.min(1, (directRatio * 0.78) + (degreeWeight * 0.22))));
+    });
+
+    return strengths;
+}
+
 function threeClusterGroups(nodes, adjacency, focusId) {
     const lookup = new Map(nodes.map((node) => [node.id(), node]));
     const visited = new Set([focusId]);
@@ -839,6 +855,7 @@ function threeNetworkPositions(nodes, edges, state) {
     const spacing = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5);
     const adjacency = threeGraphTopology(nodes, edges);
     const distances = threeDistancesFromFocus(adjacency, focus.id());
+    const strengths = threeFocusStrengths(nodes, adjacency, focus.id(), state);
     const groups = threeClusterGroups(nodes, adjacency, focus.id());
 
     positions.set(focus.id(), { x: 0, y: 0, z: 0 });
@@ -846,9 +863,15 @@ function threeNetworkPositions(nodes, edges, state) {
     groups.forEach((group, groupIndex) => {
         const direction = threeClusterDirection(groupIndex, groups.length);
         const { tangentA, tangentB } = orthonormalBasis(direction);
-        const minDistance = Math.min(...group.map((node) => distances.get(node.id()) ?? 5));
-        const clusterRadius = (255 + ((Math.max(1, minDistance) - 1) * 172) + (Math.sqrt(group.length) * 44)) * Math.max(0.82, Math.min(2.35, spacing));
-        const localRadius = Math.max(70, Math.min(280, 42 + (Math.sqrt(group.length) * 38))) * Math.max(0.9, Math.min(1.9, spacing));
+        const strongest = Math.max(0, ...group.map((node) => strengths.get(node.id()) || 0));
+        const closestDistance = Math.min(...group.map((node) => distances.get(node.id()) ?? 6));
+        const clusterRadius = (
+            360
+            + ((Math.max(1, closestDistance) - 1) * 210)
+            + (Math.sqrt(group.length) * 38)
+            - (strongest * 165)
+        ) * Math.max(0.82, Math.min(2.35, spacing));
+        const localRadius = Math.max(86, Math.min(310, 58 + (Math.sqrt(group.length) * 42))) * Math.max(0.9, Math.min(1.9, spacing));
 
         group
             .sort((left, right) => {
@@ -865,7 +888,8 @@ function threeNetworkPositions(nodes, edges, state) {
                 const localSpread = localRadius * Math.sqrt(localOrdinal / Math.max(1, group.length));
                 const focusWeight = adjacency.get(node.id())?.get(focus.id()) || 0;
                 const distance = distances.get(node.id()) ?? 4;
-                const radialOffset = ((distance - 1) * 76) - (focusWeight * 24);
+                const strength = strengths.get(node.id()) || 0;
+                const radialOffset = ((distance - 1) * 112) + ((1 - strength) * 230) - (focusWeight * 20);
                 const depthOffset = (((nodeIndex % 7) - 3) * 34) + (((Number.parseInt(stableHash(node.id()).slice(-3), 36) || 0) % 46) - 23);
                 let position = vectorScale(direction, clusterRadius + radialOffset + depthOffset);
                 position = vectorAdd(position, vectorScale(tangentA, Math.cos(localAngle) * localSpread));
@@ -1174,6 +1198,7 @@ function updateThreeCameraTween(threeState) {
 
     if (progress >= 1) {
         threeState.cameraTween = null;
+        flushPendingThreeNodeMenu(threeState);
     }
 }
 
@@ -1235,6 +1260,61 @@ function refreshThreeFocusPresentation(state, nodeId) {
 function cancelThreeCameraTween(threeState) {
     if (threeState) {
         threeState.cameraTween = null;
+    }
+}
+
+function projectedThreeNodeMenuPosition(threeState, nodeId) {
+    const nodeGroup = threeState?.nodeGroups?.get(nodeId);
+
+    if (!threeState || !nodeGroup) {
+        return null;
+    }
+
+    const rect = threeState.renderer.domElement.getBoundingClientRect();
+    const projected = nodeGroup.getWorldPosition(new threeState.THREE.Vector3()).project(threeState.camera);
+    const x = rect.left + ((projected.x + 1) / 2) * rect.width + 14;
+    const y = rect.top + ((1 - projected.y) / 2) * rect.height + 14;
+
+    return {
+        x: Math.min(window.innerWidth - 240, Math.max(8, x)),
+        y: Math.min(window.innerHeight - 190, Math.max(8, y)),
+    };
+}
+
+function flushPendingThreeNodeMenu(threeState) {
+    const pending = threeState?.pendingNodeMenu;
+
+    if (!threeState || !pending || threeState.cameraTween) {
+        return;
+    }
+
+    threeState.pendingNodeMenu = null;
+    const node = pending.state?.cy?.getElementById(pending.nodeId);
+
+    if (!node?.length) {
+        return;
+    }
+
+    const position = projectedThreeNodeMenuPosition(threeState, pending.nodeId);
+
+    if (!position) {
+        return;
+    }
+
+    dispatchNodeMenu(pending.root, node, position.x, position.y);
+}
+
+function queueThreeNodeMenu(root, state, nodeId) {
+    const threeState = state?.threeState;
+
+    if (!threeState) {
+        return;
+    }
+
+    threeState.pendingNodeMenu = { root, state, nodeId };
+
+    if (!threeState.cameraTween) {
+        window.requestAnimationFrame(() => flushPendingThreeNodeMenu(threeState));
     }
 }
 
@@ -1437,6 +1517,9 @@ async function ensureThreeScene(root, state) {
         pointerMoved = false;
         pauseThreeAutoRotate(state.threeState);
         cancelThreeCameraTween(state.threeState);
+        if (state.threeState) {
+            state.threeState.pendingNodeMenu = null;
+        }
         container.setPointerCapture?.(event.pointerId);
     };
     const pointerMove = (event) => {
@@ -1483,19 +1566,19 @@ async function ensureThreeScene(root, state) {
 
         const now = Date.now();
         const isDoubleTap = lastTap?.id === node.id() && now - lastTap.at <= 360;
-        const rect = container.getBoundingClientRect();
-        const menuX = Math.min(window.innerWidth - 240, Math.max(8, rect.left + event.clientX - rect.left + 12));
-        const menuY = Math.min(window.innerHeight - 190, Math.max(8, rect.top + event.clientY - rect.top + 12));
         setSelected(root, state.cy, node.id());
         lastTap = { id: node.id(), at: now };
 
         if (isDoubleTap) {
             lastTap = null;
+            if (state.threeState) {
+                state.threeState.pendingNodeMenu = null;
+            }
             dispatchOpenNode(root, node);
             return;
         }
 
-        dispatchNodeMenu(root, node, menuX, menuY);
+        queueThreeNodeMenu(root, state, node.id());
     };
     const wheel = (event) => {
         event.preventDefault();
@@ -1516,6 +1599,7 @@ async function ensureThreeScene(root, state) {
         updateThreeCameraTween(state.threeState);
         updateThreePositionTweens(state.threeState);
         syncThreeBillboards(state.threeState);
+        flushPendingThreeNodeMenu(state.threeState);
         renderer.render(scene, camera);
         state.threeState.frame = window.requestAnimationFrame(animate);
     };
@@ -1535,6 +1619,7 @@ async function ensureThreeScene(root, state) {
         edgeLines: [],
         positionTweens: [],
         cameraTween: null,
+        pendingNodeMenu: null,
         autoRotatePausedUntil: 0,
         resize,
         pointerDown,
