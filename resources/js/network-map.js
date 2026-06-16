@@ -1177,6 +1177,61 @@ function updateThreeCameraTween(threeState) {
     }
 }
 
+function removeThreeFocusLabel(threeState) {
+    if (!threeState?.focusLabel) {
+        return;
+    }
+
+    threeState.billboards = (threeState.billboards || []).filter((billboard) => billboard !== threeState.focusLabel);
+    threeState.focusLabel.parent?.remove(threeState.focusLabel);
+    disposeThreeObject(threeState.focusLabel);
+    threeState.focusLabel = null;
+}
+
+function refreshThreeFocusPresentation(state, nodeId) {
+    const threeState = state?.threeState;
+    const focusNode = state?.cy?.getElementById(nodeId);
+
+    if (!threeState || !focusNode?.length) {
+        return;
+    }
+
+    removeThreeFocusLabel(threeState);
+
+    threeState.nodeGroups?.forEach((nodeGroup, currentNodeId) => {
+        const node = state.cy.getElementById(currentNodeId);
+        const mesh = nodeGroup.children.find((child) => child.userData?.kind === 'node');
+
+        if (!mesh?.material?.color || !node.length) {
+            return;
+        }
+
+        mesh.material.color.setHex(currentNodeId === nodeId ? 0xfbbf24 : nodeColorFor3D(node.data()));
+    });
+
+    const nodeGroup = threeState.nodeGroups?.get(nodeId);
+
+    if (!nodeGroup) {
+        return;
+    }
+
+    const radius = Math.max(8, Math.min(64, (Number(focusNode.data('renderNodeSize')) || baseNodeSizeForData(focusNode.data())) / 8));
+    const label = labelSprite(
+        threeState.THREE,
+        focusNode.data('fullLabel') || focusNode.data('label'),
+        '#fef3c7',
+        focusMetaLines(focusNode, state),
+    );
+    label.userData.anchorId = nodeId;
+    label.userData.offsetRadius = radius + 68;
+    label.userData.verticalOffset = radius + 28;
+
+    threeState.group.add(label);
+    threeState.focusLabel = label;
+    threeState.billboards.push(label);
+    syncThreeBillboards(threeState);
+}
+
 function cancelThreeCameraTween(threeState) {
     if (threeState) {
         threeState.cameraTween = null;
@@ -1194,11 +1249,10 @@ function flyThreeCameraToNode(state, nodeId) {
     const THREE = threeState.THREE;
     const worldPosition = nodeGroup.getWorldPosition(new THREE.Vector3());
     const current = threeState.camera.position.clone();
-    const targetDistance = Math.max(440, Math.min(760, Math.abs(current.z - worldPosition.z) || 560));
     const target = new THREE.Vector3(
         worldPosition.x,
         worldPosition.y,
-        Math.max(320, Math.min(2400, worldPosition.z + targetDistance)),
+        current.z,
     );
 
     threeState.cameraTween = {
@@ -1214,14 +1268,10 @@ function setThreeFocusNode(root, state, nodeId) {
         return;
     }
 
-    const focusChanged = state.threeFocusNodeId !== nodeId;
     state.threeFocusNodeId = nodeId;
     pauseThreeAutoRotate(state.threeState, Number.POSITIVE_INFINITY);
+    refreshThreeFocusPresentation(state, nodeId);
     flyThreeCameraToNode(state, nodeId);
-
-    if (focusChanged) {
-        scheduleThreeRender(root);
-    }
 }
 
 function rebuildThreeGraph(root, state) {
@@ -1239,6 +1289,7 @@ function rebuildThreeGraph(root, state) {
     threeState.edgeLines = [];
     threeState.nodeGroups = new Map();
     threeState.positionTweens = [];
+    threeState.focusLabel = null;
 
     const { nodes, edges } = visibleThreeData(cy);
     const maxDegree = Math.max(1, ...nodes.map((node) => visibleDegreeForState(node, state)));
@@ -1278,17 +1329,22 @@ function rebuildThreeGraph(root, state) {
         }
 
         if (node.id() === focusId || node.data('isPrimary') || node.data('isFocus') || visibleDegreeForState(node, state) >= 3) {
+            const isActiveFocus = node.id() === focusId;
             const label = labelSprite(
                 THREE,
                 node.data('fullLabel') || node.data('label'),
-                node.id() === focusId ? '#fef3c7' : '#f8fafc',
-                node.id() === focusId ? focusMetaLines(node, state) : [],
+                isActiveFocus ? '#fef3c7' : '#f8fafc',
+                isActiveFocus ? focusMetaLines(node, state) : [],
             );
             label.userData.anchorId = node.id();
-            label.userData.offsetRadius = renderRadius + (node.id() === focusId ? 46 : 26);
-            label.userData.verticalOffset = node.id() === focusId ? renderRadius + 18 : renderRadius + 12;
+            label.userData.offsetRadius = renderRadius + (isActiveFocus ? 46 : 26);
+            label.userData.verticalOffset = isActiveFocus ? renderRadius + 18 : renderRadius + 12;
             group.add(label);
             threeState.billboards.push(label);
+
+            if (isActiveFocus) {
+                threeState.focusLabel = label;
+            }
         }
     });
 
