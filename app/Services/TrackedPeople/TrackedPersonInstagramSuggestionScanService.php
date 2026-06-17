@@ -9,6 +9,7 @@ use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramScraper;
+use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -155,6 +156,8 @@ class TrackedPersonInstagramSuggestionScanService
         ?callable $progress = null,
         bool $deepSearch = false,
     ): TrackedPersonInstagramSuggestionScan {
+        DatabaseKeepAlive::ping();
+
         $profile ??= $this->profileRelationshipStore->ensureProfile($targetUsername);
         $deepSearchPolicy = $this->scanPolicies->for('suggestion_deep_search');
         $skipPreviouslyChecked = (bool) ($deepSearchPolicy['skip_previously_checked'] ?? true);
@@ -232,6 +235,8 @@ class TrackedPersonInstagramSuggestionScanService
                     &$persistedConnectionUsernames,
                     &$persistedSuggestionEdges,
                 ): void {
+                    DatabaseKeepAlive::ping(15);
+
                     // Suggestion-Connections (Matches) zusammenfuehren
                     if (array_key_exists('suggestionConnections', $state)) {
                         $liveConnections = $this->mergeSuggestionConnections(
@@ -506,6 +511,7 @@ class TrackedPersonInstagramSuggestionScanService
         bool $deepSearch,
     ): TrackedPersonInstagramSuggestionScan {
         $this->assertActiveScanCurrent();
+        DatabaseKeepAlive::ping(0);
 
         $payload = $this->normalizePayloadScreenshotPaths($payload);
         $scanPayload = $this->suggestionPayload($payload);

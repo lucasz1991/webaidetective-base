@@ -5,6 +5,7 @@ namespace App\Services\Social;
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\Setting;
 use App\Services\Scraper\ScraperProfileDatabaseStore;
+use App\Services\Support\DatabaseKeepAlive;
 use App\Services\TrackedPeople\InstagramScanPolicyService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use Illuminate\Support\Carbon;
@@ -249,6 +250,8 @@ class InstagramScraper
                         if (! $event) {
                             continue;
                         }
+
+                        DatabaseKeepAlive::ping();
 
                         if (($event['stage'] ?? null) === 'technical-heartbeat') {
                             continue;
@@ -672,6 +675,8 @@ class InstagramScraper
             if (! $event) {
                 continue;
             }
+
+            DatabaseKeepAlive::ping();
 
             if (($event['stage'] ?? null) === 'technical-heartbeat') {
                 continue;
