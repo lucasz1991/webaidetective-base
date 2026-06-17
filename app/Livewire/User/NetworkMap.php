@@ -100,7 +100,9 @@ class NetworkMap extends Component
     {
         $this->contextTrackedPersonId = $trackedPersonId;
         $this->embedded = $embedded;
-        $this->mapId = 'network-map-'.Str::uuid();
+        $this->mapId = $this->contextTrackedPersonId
+            ? 'network-map-person-'.$this->contextTrackedPersonId
+            : 'network-map-global';
         $this->cacheDebug = [
             'status' => 'idle',
             'scope' => $this->contextTrackedPersonId ? 'person-'.$this->contextTrackedPersonId : 'global',

@@ -1,4 +1,4 @@
-<div class="container mx-auto space-y-4" wire:poll.visible.4000ms x-data="{ toasts: [] }" x-init="window.addEventListener('toast', e => { toasts.push(e.detail); setTimeout(() => toasts.shift(), 3000); })" x-cloak>
+<div class="container mx-auto space-y-4" x-data="{ toasts: [] }" x-init="window.addEventListener('toast', e => { toasts.push(e.detail); setTimeout(() => toasts.shift(), 3000); })" x-cloak>
     <div class="fixed top-4 right-4 z-50 space-y-2">
         <template x-for="(t, i) in toasts" :key="i">
             <div x-text="t.message" :class="t.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'" class="rounded-lg px-4 py-2 shadow"></div>
