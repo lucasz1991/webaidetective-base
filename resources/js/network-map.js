@@ -2,7 +2,9 @@
 const activeRoots = new Set();
 const DEFAULT_LAYOUT_MODE = 'clusters';
 const DEFAULT_BACKGROUND_MODE = 'light';
+const DEFAULT_THREE_LAYOUT_MODE = 'network';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
+const THREE_LAYOUT_MODES = new Set(['network', 'sphere', 'rings', 'columns']);
 const LAYOUT_STORAGE_PREFIX = 'network-map-render:v10';
 const FILTER_STORAGE_PREFIX = 'network-map-filters:v3';
 let cytoscapeLoader;
@@ -846,6 +848,127 @@ function threeClusterDirection(index, total) {
     };
 }
 
+function threeStableJitter(id, magnitude = 1) {
+    const value = Number.parseInt(stableHash(id).slice(0, 6), 36) || 0;
+
+    return (((value % 2000) / 1000) - 1) * magnitude;
+}
+
+function threeSpherePositions(nodes, focus, state) {
+    const positions = new Map([[focus.id(), { x: 0, y: 0, z: 0 }]]);
+    const spacing = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5);
+    const others = nodes
+        .filter((node) => node.id() !== focus.id())
+        .sort((left, right) => visibleDegreeForState(right, state) - visibleDegreeForState(left, state));
+    const radius = Math.max(420, 270 + (Math.sqrt(others.length) * 74)) * Math.max(0.75, Math.min(2.5, spacing));
+
+    others.forEach((node, index) => {
+        const direction = threeClusterDirection(index, others.length);
+        const shell = radius + ((index % 5) * 42 * spacing) + threeStableJitter(node.id(), 34);
+
+        positions.set(node.id(), vectorScale(direction, shell));
+    });
+
+    return positions;
+}
+
+function threeRingPositions(nodes, distances, focus, state) {
+    const positions = new Map([[focus.id(), { x: 0, y: 0, z: 0 }]]);
+    const spacing = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5);
+    const rings = new Map();
+
+    nodes.forEach((node) => {
+        if (node.id() === focus.id()) {
+            return;
+        }
+
+        const distance = Math.min(6, distances.get(node.id()) ?? 6);
+
+        if (!rings.has(distance)) {
+            rings.set(distance, []);
+        }
+
+        rings.get(distance).push(node);
+    });
+
+    [...rings.entries()]
+        .sort((left, right) => left[0] - right[0])
+        .forEach(([distance, ringNodes]) => {
+            const radius = (260 + (distance * 185) + (Math.sqrt(ringNodes.length) * 34)) * Math.max(0.8, Math.min(2.2, spacing));
+            const z = ((distance - 2) * 180 * Math.max(0.8, Math.min(1.7, spacing)));
+
+            ringNodes
+                .sort((left, right) => visibleDegreeForState(right, state) - visibleDegreeForState(left, state))
+                .forEach((node, index) => {
+                    const angle = ((Math.PI * 2) * index / Math.max(1, ringNodes.length)) + threeStableJitter(node.id(), 0.18);
+                    const wobble = threeStableJitter(`${node.id()}:ring`, 46) * spacing;
+
+                    positions.set(node.id(), {
+                        x: Math.cos(angle) * (radius + wobble),
+                        y: Math.sin(angle) * (radius + wobble),
+                        z: z + threeStableJitter(`${node.id()}:z`, 68),
+                    });
+                });
+        });
+
+    return positions;
+}
+
+function threeColumnKey(node) {
+    if (node.data('type') === 'person') {
+        return 'people';
+    }
+
+    if (node.data('isKnownProfile')) {
+        return 'known';
+    }
+
+    if (visibilityValue(node.data()) === 'public') {
+        return 'public';
+    }
+
+    if (node.data('isSuggestion') || node.data('isReconstructed')) {
+        return 'candidate';
+    }
+
+    return 'other';
+}
+
+function threeColumnPositions(nodes, distances, focus, state) {
+    const positions = new Map([[focus.id(), { x: 0, y: 0, z: 0 }]]);
+    const spacing = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5);
+    const order = ['people', 'known', 'public', 'candidate', 'other'];
+    const labels = new Map(order.map((key) => [key, []]));
+
+    nodes.forEach((node) => {
+        if (node.id() === focus.id()) {
+            return;
+        }
+
+        labels.get(threeColumnKey(node)).push(node);
+    });
+
+    order.forEach((key, columnIndex) => {
+        const columnNodes = labels.get(key)
+            .sort((left, right) => (distances.get(left.id()) ?? 99) - (distances.get(right.id()) ?? 99)
+                || visibleDegreeForState(right, state) - visibleDegreeForState(left, state));
+        const x = ((columnIndex - ((order.length - 1) / 2)) * 390) * Math.max(0.8, Math.min(2.1, spacing));
+
+        columnNodes.forEach((node, index) => {
+            const row = index - ((columnNodes.length - 1) / 2);
+            const distance = distances.get(node.id()) ?? 5;
+
+            positions.set(node.id(), {
+                x: x + threeStableJitter(node.id(), 36),
+                y: row * 120 * Math.max(0.76, Math.min(1.55, spacing)),
+                z: (distance - 2) * 145 + threeStableJitter(`${node.id()}:column`, 54),
+            });
+        });
+    });
+
+    return positions;
+}
+
 function threeNetworkPositions(nodes, edges, state) {
     const focus = focusNodeFor3D(nodes);
     const positions = new Map();
@@ -857,6 +980,20 @@ function threeNetworkPositions(nodes, edges, state) {
     const spacing = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5);
     const adjacency = threeGraphTopology(nodes, edges);
     const distances = threeDistancesFromFocus(adjacency, focus.id());
+    const threeLayoutMode = normalizeThreeLayoutMode(state?.threeLayoutMode);
+
+    if (threeLayoutMode === 'sphere') {
+        return threeSpherePositions(nodes, focus, state);
+    }
+
+    if (threeLayoutMode === 'rings') {
+        return threeRingPositions(nodes, distances, focus, state);
+    }
+
+    if (threeLayoutMode === 'columns') {
+        return threeColumnPositions(nodes, distances, focus, state);
+    }
+
     const strengths = threeFocusStrengths(nodes, adjacency, focus.id(), state);
     const groups = threeClusterGroups(nodes, adjacency, focus.id());
 
@@ -1776,6 +1913,12 @@ function normalizeLayoutMode(value) {
     return LAYOUT_MODES.has(mode) ? mode : DEFAULT_LAYOUT_MODE;
 }
 
+function normalizeThreeLayoutMode(value) {
+    const mode = String(value || '').trim();
+
+    return THREE_LAYOUT_MODES.has(mode) ? mode : DEFAULT_THREE_LAYOUT_MODE;
+}
+
 function normalizeViewMode(value) {
     return String(value || '').trim() === '3d' ? '3d' : '2d';
 }
@@ -1869,6 +2012,26 @@ function writeStoredLayoutMode(root, mode) {
     }
 }
 
+function threeLayoutModeStorageKey(root) {
+    return `network-map-3d-layout-mode:${root.dataset.networkFilterScope || root.dataset.networkMapId || 'default'}`;
+}
+
+function readStoredThreeLayoutMode(root) {
+    try {
+        return normalizeThreeLayoutMode(localStorage.getItem(threeLayoutModeStorageKey(root)) || root.dataset.networkThreeLayoutMode);
+    } catch {
+        return normalizeThreeLayoutMode(root.dataset.networkThreeLayoutMode);
+    }
+}
+
+function writeStoredThreeLayoutMode(root, mode) {
+    try {
+        localStorage.setItem(threeLayoutModeStorageKey(root), normalizeThreeLayoutMode(mode));
+    } catch {
+        // localStorage can be unavailable in hardened browser contexts.
+    }
+}
+
 function layoutSettingsStorageKey(root) {
     return `network-map-layout-settings:${root.dataset.networkFilterScope || root.dataset.networkMapId || 'default'}`;
 }
@@ -1896,6 +2059,10 @@ function writeStoredLayoutSettings(root, state) {
 function updateLayoutControls(root, state) {
     root.querySelectorAll('[data-network-layout-mode]').forEach((control) => {
         control.value = normalizeLayoutMode(state?.layoutMode);
+    });
+
+    root.querySelectorAll('[data-network-3d-layout-mode]').forEach((control) => {
+        control.value = normalizeThreeLayoutMode(state?.threeLayoutMode);
     });
 
     root.querySelectorAll('[data-network-layout-spacing]').forEach((control) => {
@@ -1927,11 +2094,20 @@ function updateViewModeControls(root, state) {
         updateButton(button, button.dataset.networkViewMode === mode);
     });
 
-    root.querySelectorAll('[data-network-layout-mode]').forEach((control) => {
-        control.disabled = mode === '3d';
-        control.title = mode === '3d'
-            ? 'Die 3D-Ansicht nutzt eine feste raeumliche Netzwerk-Anordnung.'
-            : '';
+    root.querySelectorAll('[data-network-2d-control]').forEach((element) => {
+        const shouldHide = mode === '3d';
+        element.hidden = shouldHide;
+        element.classList.toggle('hidden', shouldHide);
+    });
+
+    root.querySelectorAll('[data-network-3d-control]').forEach((element) => {
+        const shouldHide = mode !== '3d';
+        element.hidden = shouldHide;
+        element.classList.toggle('hidden', shouldHide);
+    });
+
+    root.querySelectorAll('[data-network-3d-layout-mode]').forEach((control) => {
+        control.value = normalizeThreeLayoutMode(state?.threeLayoutMode);
     });
 }
 
@@ -3213,6 +3389,8 @@ function profileListItems(cy) {
 function renderProfileList(root, cy) {
     const list = root.querySelector('[data-network-profile-list]');
     const count = root.querySelector('[data-network-profile-list-count]');
+    const state = instances.get(root);
+    const selectedId = state?.selectedId || null;
 
     if (!list) {
         return;
@@ -3250,22 +3428,33 @@ function renderProfileList(root, cy) {
         const meta = document.createElement('div');
         const actions = document.createElement('div');
         const instagramUrl = instagramProfileUrl(node);
+        const isSelected = selectedId === node.id();
 
-        row.className = 'grid grid-cols-[2.25rem_2.25rem_minmax(0,1fr)] gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm';
-        rank.className = 'pt-1 text-right text-xs font-black text-slate-400 tabular-nums';
+        row.dataset.networkProfileListNodeId = node.id();
+        row.className = [
+            'relative grid grid-cols-[2.25rem_2.25rem_minmax(0,1fr)] gap-3 overflow-hidden rounded-lg border px-3 py-2 text-sm shadow-sm transition',
+            isSelected
+                ? 'border-amber-300 bg-amber-50 ring-2 ring-amber-300/60'
+                : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50',
+        ].join(' ');
+        row.addEventListener('click', (event) => {
+            if (event.target.closest('button,a')) {
+                return;
+            }
+
+            setSelected(root, cy, node.id());
+        });
+
+        const accent = document.createElement('span');
+        accent.className = `absolute bottom-2 left-0 top-2 w-1 rounded-r-full ${isSelected ? 'bg-amber-400' : 'bg-slate-200'}`;
+        rank.className = `pt-1 text-right text-xs font-black tabular-nums ${isSelected ? 'text-amber-700' : 'text-slate-400'}`;
         rank.textContent = String(index + 1);
         content.className = 'min-w-0';
         titleLine.className = 'flex min-w-0 items-center gap-2';
         title.type = 'button';
-        title.className = 'truncate text-left font-bold text-slate-950 hover:text-pink-700';
+        title.className = `truncate text-left font-bold hover:text-pink-700 ${isSelected ? 'text-amber-950' : 'text-slate-950'}`;
         title.textContent = node.data('fullLabel') || node.data('label') || node.id();
-        title.addEventListener('click', () => {
-            if (isPerson && node.data('detailUrl')) {
-                dispatchProfileListAction(root, node, 'detail');
-            } else {
-                dispatchProfileListAction(root, node, 'open');
-            }
-        });
+        title.addEventListener('click', () => setSelected(root, cy, node.id()));
 
         handle.className = 'mt-0.5 truncate text-xs font-semibold text-slate-500';
         handle.textContent = [node.data('handle'), node.data('role')].filter(Boolean).join(' · ') || node.id();
@@ -3278,10 +3467,19 @@ function renderProfileList(root, cy) {
             node.data('isKnownProfile') ? 'Bekannt' : null,
         ].filter(Boolean).forEach((label) => {
             const badge = document.createElement('span');
-            badge.className = 'rounded-full bg-slate-100 px-2 py-0.5';
+            badge.className = isSelected
+                ? 'rounded-full bg-amber-100 px-2 py-0.5 text-amber-900'
+                : 'rounded-full bg-slate-100 px-2 py-0.5';
             badge.textContent = label;
             meta.append(badge);
         });
+
+        if (isSelected) {
+            const selectedBadge = document.createElement('span');
+            selectedBadge.className = 'shrink-0 rounded-full bg-amber-400 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-950';
+            selectedBadge.textContent = 'Fokus';
+            titleLine.append(selectedBadge);
+        }
 
         actions.className = 'mt-2 flex flex-wrap gap-1.5';
 
@@ -3318,13 +3516,18 @@ function renderProfileList(root, cy) {
             actions.append(external);
         }
 
-        titleLine.append(title);
+        titleLine.prepend(title);
         content.append(titleLine, handle, meta, actions);
-        row.append(rank, avatar, content);
+        row.append(accent, rank, avatar, content);
         fragment.append(row);
     });
 
     list.append(fragment);
+
+    if (selectedId && typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+        list.querySelector(`[data-network-profile-list-node-id="${CSS.escape(selectedId)}"]`)
+            ?.scrollIntoView({ block: 'nearest' });
+    }
 }
 
 function placeSpiralGroups(preparedGroups, updates, centerX, centerY, spacingScale) {
@@ -4003,6 +4206,7 @@ function setSelected(root, cy, nodeId) {
     }
 
     updateSelectionPanel(root, cy);
+    renderProfileList(root, cy);
 }
 
 function updateSelectionPanel(root, cy) {
@@ -4508,16 +4712,28 @@ function bindControls(root, cy) {
             state.layoutMode = normalizeLayoutMode(event.target.value);
             writeStoredLayoutMode(root, state.layoutMode);
             clearStoredLayout(root, cy);
-            arrangeVisibleGraph(root, cy, true, state.layoutMode, { fit: state.viewMode !== '3d' });
+            arrangeVisibleGraph(root, cy, true, state.layoutMode, { fit: true });
+        });
+    });
+
+    root.querySelectorAll('[data-network-3d-layout-mode]').forEach((control) => {
+        control.addEventListener('change', (event) => {
+            state.threeLayoutMode = normalizeThreeLayoutMode(event.target.value);
+            writeStoredThreeLayoutMode(root, state.threeLayoutMode);
+            updateLayoutControls(root, state);
             scheduleThreeRender(root);
         });
     });
 
     root.querySelectorAll('[data-network-layout-reset]').forEach((button) => {
         button.addEventListener('click', () => {
+            if (state.viewMode === '3d') {
+                scheduleThreeRender(root);
+                return;
+            }
+
             clearStoredLayout(root, cy);
-            arrangeVisibleGraph(root, cy, true, state.layoutMode, { fit: state.viewMode !== '3d' });
-            scheduleThreeRender(root);
+            arrangeVisibleGraph(root, cy, true, state.layoutMode, { fit: true });
         });
     });
 
@@ -4870,6 +5086,7 @@ async function initNetworkMap(root) {
             loadedGraphKey: '',
             initialGraphAutoloaded: false,
             layoutMode: readStoredLayoutMode(root),
+            threeLayoutMode: readStoredThreeLayoutMode(root),
             viewMode: readStoredViewMode(root),
             backgroundMode: readStoredBackgroundMode(root),
             threeFocusNodeId: null,

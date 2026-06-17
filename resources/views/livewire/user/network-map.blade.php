@@ -300,15 +300,25 @@
                             ['state' => 'suggestion', 'label' => 'Vorschlag', 'swatch' => 'bg-amber-500', 'active' => 'border-amber-300 bg-amber-50/90 text-amber-900'],
                         ];
                     @endphp
-                    @foreach($connectionButtons as $connectionButton)
-                        <button type="button" data-network-connection-state="{{ $connectionButton['state'] }}" data-active-classes="{{ $connectionButton['active'] }}" data-inactive-classes="border-white/40 bg-white/75 text-slate-500" class="inline-flex h-10 items-center gap-2 rounded-lg border px-2.5 text-xs font-bold shadow-lg backdrop-blur-xl transition duration-200 hover:bg-white" aria-pressed="true">
-                            <span class="h-2 w-7 rounded-full {{ $connectionButton['swatch'] }}"></span>
-                            <span>{{ $connectionButton['label'] }}</span>
-                            <span class="h-5 w-9 rounded-full border border-current/20 bg-current/10 p-0.5">
-                                <span data-network-toggle-thumb class="block h-3.5 w-3.5 translate-x-4 rounded-full bg-current transition-transform duration-200 ease-out"></span>
-                            </span>
+                    <div class="relative" x-on:click.outside="if (filterMenu === 'connections') filterMenu = null">
+                        <button type="button" x-on:click="filterMenu = filterMenu === 'connections' ? null : 'connections'" x-bind:aria-expanded="filterMenu === 'connections'" class="inline-flex h-10 items-center gap-2 rounded-lg border border-white/40 bg-white/75 px-3 text-xs font-bold text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Verbindungsarten filtern">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 7h10M7 17h10M4 7h.01M4 17h.01M20 7h.01M20 17h.01M8 7l8 10M16 7 8 17" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                            Verbindungen
                         </button>
-                    @endforeach
+                        <div x-show="filterMenu === 'connections'" x-cloak class="absolute left-0 top-full mt-2 grid w-[min(360px,calc(100vw-1.5rem))] gap-2 rounded-lg border border-white/45 bg-white/90 p-3 text-xs font-semibold text-slate-600 shadow-2xl backdrop-blur-xl">
+                            @foreach($connectionButtons as $connectionButton)
+                                <button type="button" data-network-connection-state="{{ $connectionButton['state'] }}" data-active-classes="{{ $connectionButton['active'] }}" data-inactive-classes="border-slate-200 bg-white text-slate-500" class="inline-flex h-10 items-center justify-between gap-3 rounded-lg border px-3 text-xs font-bold transition duration-200 hover:bg-slate-50" aria-pressed="true">
+                                    <span class="inline-flex min-w-0 items-center gap-2">
+                                        <span class="h-2 w-7 rounded-full {{ $connectionButton['swatch'] }}"></span>
+                                        <span class="truncate">{{ $connectionButton['label'] }}</span>
+                                    </span>
+                                    <span class="h-5 w-9 rounded-full border border-current/20 bg-current/10 p-0.5">
+                                        <span data-network-toggle-thumb class="block h-3.5 w-3.5 translate-x-4 rounded-full bg-current transition-transform duration-200 ease-out"></span>
+                                    </span>
+                                </button>
+                            @endforeach
+                        </div>
+                    </div>
                     <button type="button" data-network-filter="direct" data-active-classes="border-slate-900 bg-slate-900 text-white" data-inactive-classes="border-white/40 bg-white/75 text-slate-500" class="inline-flex h-10 items-center gap-2 rounded-lg border px-2.5 text-xs font-bold shadow-lg backdrop-blur-xl transition duration-200 hover:bg-white" aria-pressed="false">
                         <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         Direkt
@@ -317,12 +327,10 @@
                         </span>
                     </button>
                     <div class="relative" x-on:click.outside="if (filterMenu === 'visibility') filterMenu = null">
-                        <button type="button" x-on:click="filterMenu = filterMenu === 'visibility' ? null : 'visibility'" x-bind:aria-expanded="filterMenu === 'visibility'" class="inline-flex h-10 items-center gap-2 rounded-lg border border-white/40 bg-white/75 px-3 text-xs font-bold text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Minimale Verbindungen">
+                        <button type="button" x-on:click="filterMenu = filterMenu === 'visibility' ? null : 'visibility'" x-bind:aria-expanded="filterMenu === 'visibility'" class="inline-flex h-10 items-center gap-2 rounded-lg border border-white/40 bg-white/75 px-3 text-xs font-bold text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Sichtbarkeit begrenzen">
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 18h16M7 14h10M10 10h4M12 6v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                             Min <span data-network-min-degree-current>0</span>
-                        </button>
-                        <button type="button" x-on:click="filterMenu = filterMenu === 'visibility' ? null : 'visibility'" x-bind:aria-expanded="filterMenu === 'visibility'" class="ml-1 inline-flex h-10 items-center gap-2 rounded-lg border border-white/40 bg-white/75 px-3 text-xs font-bold text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Maximal sichtbare Profile">
-                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                            <span class="text-slate-400">/</span>
                             Max <span data-network-max-profiles-current>2.000</span>
                         </button>
                         <div x-show="filterMenu === 'visibility'" x-cloak class="absolute left-0 top-full mt-2 grid w-[min(320px,calc(100vw-1.5rem))] gap-3 rounded-lg border border-white/45 bg-white/90 p-3 text-xs font-semibold text-slate-600 shadow-2xl backdrop-blur-xl">
@@ -378,7 +386,7 @@
                             <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v16M4 12h16M7 7h.01M17 7h.01M7 17h.01M17 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                         </button>
                         <div x-show="filterMenu === 'layout'" x-cloak class="absolute right-0 top-full mt-2 grid w-[min(420px,calc(100vw-1.5rem))] gap-3 rounded-lg border border-white/45 bg-white/90 p-3 text-xs font-semibold text-slate-600 shadow-2xl backdrop-blur-xl">
-                            <label class="grid gap-1.5">
+                            <label class="grid gap-1.5" data-network-2d-control>
                                 <span>Anordnung</span>
                                 <select data-network-layout-mode class="rounded-lg border-slate-200 bg-white text-sm font-bold text-slate-900 focus:border-slate-400 focus:ring-slate-400">
                                     <option value="clusters">Cluster</option>
@@ -386,6 +394,15 @@
                                     <option value="radial">Radial</option>
                                     <option value="concentric">Ringe</option>
                                     <option value="grid">Raster</option>
+                                </select>
+                            </label>
+                            <label class="grid gap-1.5 hidden" data-network-3d-control>
+                                <span>3D-Anordnung</span>
+                                <select data-network-3d-layout-mode class="rounded-lg border-slate-200 bg-white text-sm font-bold text-slate-900 focus:border-indigo-400 focus:ring-indigo-400">
+                                    <option value="network">Netzwerk</option>
+                                    <option value="sphere">Kugel</option>
+                                    <option value="rings">Ringe</option>
+                                    <option value="columns">Ebenen</option>
                                 </select>
                             </label>
                             <label class="grid grid-cols-[7.5rem_1fr_3.5rem] items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
@@ -406,15 +423,15 @@
                             <div class="text-slate-500" data-network-layout-state>Nicht gespeichert</div>
                         </div>
                     </div>
-                    <button type="button" data-network-action="zoom-out" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Rauszoomen">
+                    <button type="button" data-network-action="zoom-out" data-network-2d-control class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Rauszoomen">
                         <span class="sr-only">Rauszoomen</span>
                         <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                     </button>
-                    <button type="button" data-network-action="zoom-in" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Reinzoomen">
+                    <button type="button" data-network-action="zoom-in" data-network-2d-control class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Reinzoomen">
                         <span class="sr-only">Reinzoomen</span>
                         <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                     </button>
-                    <button type="button" data-network-action="fit" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Neu anpassen">
+                    <button type="button" data-network-action="fit" data-network-2d-control class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Neu anpassen">
                         <span class="sr-only">Neu anpassen</span>
                         <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                     </button>
