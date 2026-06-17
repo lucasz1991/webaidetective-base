@@ -509,6 +509,42 @@ class TrackedPersonDetail extends Component
         $this->runInstagramSuggestionScan(true);
     }
 
+    public function openProfilePreview(string $nodeId): mixed
+    {
+        $username = null;
+
+        if (Str::startsWith($nodeId, 'profile-instagram-')) {
+            $username = Str::after($nodeId, 'profile-instagram-');
+        } elseif (Str::startsWith($nodeId, 'candidate-')) {
+            $username = Str::after($nodeId, 'candidate-');
+        }
+
+        $username = Str::lower(ltrim(trim((string) $username), '@'));
+
+        if ($username === '') {
+            $this->setDetailStatus('Profil konnte aus der Network Map nicht geoeffnet werden.', 'error');
+
+            return null;
+        }
+
+        $profile = InstagramProfile::query()
+            ->where('username', $username)
+            ->first()
+            ?: app(InstagramProfileRelationshipStore::class)->ensureProfile($username);
+
+        if (! $profile) {
+            $this->setDetailStatus('Profil konnte aus der Network Map nicht gefunden werden.', 'error');
+
+            return null;
+        }
+
+        return $this->redirectRoute(
+            'instagram-profiles.show',
+            ['instagramProfileId' => $profile->id],
+            navigate: true,
+        );
+    }
+
     private function runInstagramSuggestionScan(bool $deepSearch): void
     {
         @set_time_limit(0);
