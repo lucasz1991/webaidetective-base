@@ -4143,9 +4143,42 @@ function bindLayoutPersistence(root, cy) {
     });
 }
 
+function stateMatchesCurrentDom(root, state) {
+    const container = root.querySelector('[data-network-canvas]');
+
+    return Boolean(
+        state?.cy
+        && container
+        && state.cy.container?.() === container
+        && document.body.contains(root)
+        && document.body.contains(container),
+    );
+}
+
+function disposeNetworkMapState(root, state) {
+    if (!state) {
+        return;
+    }
+
+    window.removeEventListener('resize', state.resizeHandler);
+    window.clearTimeout(state.nodeTapTimer);
+    window.clearTimeout(state.layoutSaveTimer);
+    window.clearTimeout(state.layoutSettingsTimer);
+    destroyThreeScene(state);
+    state.cy?.destroy?.();
+    instances.delete(root);
+    activeRoots.delete(root);
+}
+
 async function initNetworkMap(root) {
     if (instances.has(root)) {
-        return instances.get(root);
+        const state = instances.get(root);
+
+        if (stateMatchesCurrentDom(root, state)) {
+            return state;
+        }
+
+        disposeNetworkMapState(root, state);
     }
 
     if (root.networkMapInitPromise) {
@@ -4375,6 +4408,7 @@ async function initNetworkMap(root) {
             graphDataHash: String(root.dataset.networkGraphHash || '').trim(),
             currentGraphLoadKey: '',
             loadedGraphKey: '',
+            initialGraphAutoloaded: false,
             layoutMode: readStoredLayoutMode(root),
             viewMode: readStoredViewMode(root),
             backgroundMode: readStoredBackgroundMode(root),
@@ -4478,11 +4512,11 @@ async function initNetworkMap(root) {
 
         if (initialChunkUrl && Number.isFinite(initialChunkCount) && initialChunkCount > 0) {
             window.requestAnimationFrame(() => {
-                if (root.dataset.networkGraphAutoloaded === 'true') {
+                if (state.initialGraphAutoloaded) {
                     return;
                 }
 
-                root.dataset.networkGraphAutoloaded = 'true';
+                state.initialGraphAutoloaded = true;
                 loadPreparedGraph(root, {
                     mapId: root.dataset.networkMapId,
                     token: root.dataset.networkGraphToken,
@@ -4805,22 +4839,17 @@ export function initNetworkMaps(scope = document) {
 
 export function destroyNetworkMaps() {
     activeRoots.forEach((root) => {
-        const state = instances.get(root);
-
-        if (!state) {
-            return;
-        }
-
-        window.removeEventListener('resize', state.resizeHandler);
-        window.clearTimeout(state.nodeTapTimer);
-        window.clearTimeout(state.layoutSaveTimer);
-        window.clearTimeout(state.layoutSettingsTimer);
-        destroyThreeScene(state);
-        state.cy.destroy();
-        instances.delete(root);
+        disposeNetworkMapState(root, instances.get(root));
     });
 
     activeRoots.clear();
+}
+
+function refreshNetworkMapsSoon(scope = document) {
+    window.requestAnimationFrame(() => {
+        initNetworkMaps(scope);
+        window.setTimeout(() => initNetworkMaps(scope), 80);
+    });
 }
 
 window.addEventListener('network-map-layout-refresh', (event) => {
@@ -4862,6 +4891,13 @@ window.addEventListener('network-map-layout-refresh', (event) => {
 document.addEventListener('DOMContentLoaded', () => initNetworkMaps());
 document.addEventListener('livewire:navigating', () => destroyNetworkMaps());
 document.addEventListener('livewire:navigated', () => initNetworkMaps());
+document.addEventListener('livewire:init', () => {
+    window.Livewire?.hook?.('morph.updated', ({ el }) => {
+        if (el?.matches?.('[data-network-map-root]') || el?.querySelector?.('[data-network-map-root]')) {
+            refreshNetworkMapsSoon(el);
+        }
+    });
+});
 window.addEventListener('network-map-graph-prepared', handlePreparedGraph);
 window.addEventListener('network-map-empty', (event) => {
     const detail = eventDetail(event);
