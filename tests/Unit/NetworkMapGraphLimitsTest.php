@@ -8,9 +8,9 @@ use ReflectionMethod;
 
 class NetworkMapGraphLimitsTest extends TestCase
 {
-    public function test_it_limits_the_graph_to_250_nodes_including_the_focus_profile(): void
+    public function test_it_limits_the_graph_to_2000_nodes_including_the_focus_profile(): void
     {
-        [$nodes, $edges] = $this->graphWithProfiles(300);
+        [$nodes, $edges] = $this->graphWithProfiles(2200);
 
         [$limitedNodes, $limitedEdges] = $this->invokePrivate(
             new NetworkMap,
@@ -24,20 +24,19 @@ class NetworkMapGraphLimitsTest extends TestCase
         );
         $nodeIds = array_column($limitedNodes, 'id');
 
-        $this->assertCount(250, $limitedNodes);
-        $this->assertCount(249, $profileNodes);
+        $this->assertCount(2000, $limitedNodes);
+        $this->assertCount(1999, $profileNodes);
         $this->assertContains('person-1', $nodeIds);
         $this->assertContains('profile-001', $nodeIds);
-        $this->assertNotContains('profile-300', $nodeIds);
         $this->assertTrue(collect($limitedEdges)->every(
             fn (array $edge): bool => in_array($edge['from'], $nodeIds, true)
                 && in_array($edge['to'], $nodeIds, true),
         ));
     }
 
-    public function test_it_keeps_images_for_only_50_closest_contacts(): void
+    public function test_it_keeps_images_for_only_500_closest_contacts(): void
     {
-        [$nodes, $edges] = $this->graphWithProfiles(80);
+        [$nodes, $edges] = $this->graphWithProfiles(650);
         $limitedNodes = $this->invokePrivate(
             new NetworkMap,
             'limitGraphImages',
@@ -49,18 +48,18 @@ class NetworkMapGraphLimitsTest extends TestCase
             ->filter(fn (array $node): bool => $node['hasImage'])
             ->values();
 
-        $this->assertCount(50, $contactImages);
+        $this->assertCount(500, $contactImages);
         $this->assertTrue($limitedNodes['person-1']['hasImage']);
         $this->assertTrue($limitedNodes['profile-001']['hasImage']);
-        $this->assertFalse($limitedNodes['profile-080']['hasImage']);
-        $this->assertNull($limitedNodes['profile-080']['imageUrl']);
+        $this->assertFalse($limitedNodes['profile-650']['hasImage']);
+        $this->assertNull($limitedNodes['profile-650']['imageUrl']);
     }
 
     public function test_it_prioritizes_direct_focus_connections_when_the_graph_is_limited(): void
     {
-        [$nodes, $edges] = $this->graphWithProfiles(300);
+        [$nodes, $edges] = $this->graphWithProfiles(2200);
 
-        foreach (range(101, 300) as $index) {
+        foreach (range(101, 2200) as $index) {
             $id = sprintf('profile-%03d', $index);
             $edges['edge-'.$id] = [
                 'id' => 'edge-'.$id,

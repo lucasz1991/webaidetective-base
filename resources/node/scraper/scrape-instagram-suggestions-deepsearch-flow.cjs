@@ -1,17 +1,62 @@
 #!/usr/bin/env node
 
-// DeepSearch-Flow fuer Instagram-Vorschlaege mit zweiter Ebene:
-// 1) Fuehrt den vorhandenen Kandidaten-Check pro Vorschlag (oeffentlich: Listen; privat: Vorschlagsliste)
-// 2) Vertieft fuer Treffer eine weitere Ebene: Sammelt deren Vorschlaege und prueft erneut auf die Zielverbindung
+// DeepSearch ist Stufe 2 des Vorschlags-Scans:
+// Er scannt nicht erneut die Zielperson, sondern die Vorschlagslisten der zuvor
+// im normalen Vorschlags-Scan gefundenen Profile.
 
-const { runProfileSuggestionConnectionScan: runProfileSuggestionConnectionScanCore } = require('./scrape-instagram-suggestions.cjs');
+function normalizeCandidateProfile(candidate, normalizeInstagramUsername) {
+  const username = normalizeInstagramUsername(candidate?.username || '');
 
-function hasFiniteNumericValue(value) {
-  return Number.isFinite(Number(value));
+  if (!username) {
+    return null;
+  }
+
+  return {
+    ...candidate,
+    username,
+    profileUrl: candidate?.profileUrl || `https://www.instagram.com/${username}/`,
+  };
 }
 
-function previewItems(items = [], limit = 40) {
-  return items.slice(0, Math.max(0, limit));
+function normalizeSeedProfiles(runtimeConfig = {}, normalizeInstagramUsername) {
+  const pendingCandidates = Array.isArray(runtimeConfig.suggestionPendingCandidates)
+    ? runtimeConfig.suggestionPendingCandidates
+    : [];
+  const configuredSeeds = Array.isArray(runtimeConfig.suggestionDeepSearchSeedProfiles)
+    ? runtimeConfig.suggestionDeepSearchSeedProfiles
+    : [];
+  const sourceProfiles = pendingCandidates.length > 0 && runtimeConfig.suggestionResumePendingOnly
+    ? pendingCandidates
+    : configuredSeeds;
+  const seen = new Set();
+  const normalized = [];
+
+  for (const sourceProfile of sourceProfiles) {
+    const candidate = normalizeCandidateProfile(sourceProfile, normalizeInstagramUsername);
+
+    if (!candidate || seen.has(candidate.username)) {
+      continue;
+    }
+
+    seen.add(candidate.username);
+    normalized.push(candidate);
+  }
+
+  return normalized;
+}
+
+function branchItems(sourceUsername, items = [], maxItems = 0) {
+  const limit = maxItems > 0 ? maxItems : items.length;
+
+  return items.slice(0, limit).map((item) => ({
+    ...item,
+    sourceSuggestionUsername: sourceUsername,
+    sourcePublicUsername: sourceUsername,
+    sourceLists: Array.isArray(item.sourceLists)
+      ? Array.from(new Set([...item.sourceLists, 'profile_suggestions_level2']))
+      : ['profile_suggestions_level2'],
+    suggestionLevel: 2,
+  }));
 }
 
 async function runInstagramSuggestionsDeepSearchFlow(
@@ -23,169 +68,318 @@ async function runInstagramSuggestionsDeepSearchFlow(
   profileUrl,
   options = {},
 ) {
-  const originalRuntimeConfig = runtimeState.runtimeConfig || {};
-  const runtimeConfig = {
-    ...originalRuntimeConfig,
-    // DeepSearch kann History nutzen, aber konfigurierbar
-    suggestionSkipPreviouslyChecked: originalRuntimeConfig.suggestionSkipPreviouslyChecked !== false,
-  };
-
-  runtimeState.runtimeConfig = runtimeConfig;
-
-  // 1) Erste Ebene: vorhandene DeepSearch-Kernlogik verwenden
-  const firstLevel = await runProfileSuggestionConnectionScanCore(
-    deps,
-    page,
-    runtimeState,
-    notes,
-    targetUsername,
-    profileUrl,
-    {
-      ...options,
-      deepSearch: true,
-    },
-  );
-
-  // Abbruch, wenn Rate-Limit/Stop
-  if (!firstLevel?.ok || firstLevel?.gracefullyStopped) {
-    return {
-      ...firstLevel,
-      scanType: 'suggestion-deepsearch',
-    };
-  }
-
   const {
-    progressLog,
     captureLivePreviewScreenshot,
-    normalizeInstagramUsername,
+    closeInstagramDialog,
     collectProfileSuggestionItemsDeep,
+    detectInstagramHttp429Page,
+    markGracefulStopIfRequested,
     navigateWithSoftTimeout,
+    normalizeInstagramUsername,
+    progressLog,
     scrollToProfileSuggestions,
     sleep,
   } = deps;
+  const runtimeConfig = {
+    ...(runtimeState.runtimeConfig || {}),
+    suggestionDismissChecked: false,
+  };
+  runtimeState.runtimeConfig = runtimeConfig;
 
-  const matched = Array.isArray(firstLevel.matches) ? firstLevel.matches : [];
-  const level2MaxParents = Math.max(0, Number(runtimeConfig.suggestionSecondLevelMaxParents || 8));
-  const level2MaxItemsPerParent = Math.max(1, Number(runtimeConfig.suggestionSecondLevelMaxItemsPerParent || 15));
-  const level2MaxTotalChecks = Math.max(1, Number(runtimeConfig.suggestionSecondLevelMaxTotalChecks || 80));
-  const parents = matched.slice(0, level2MaxParents);
+  const seedProfiles = normalizeSeedProfiles(runtimeConfig, normalizeInstagramUsername);
+  const maxParents = Math.max(1, Number(runtimeConfig.suggestionDeepSearchMaxProfiles || runtimeConfig.suggestionSecondLevelMaxParents || 250));
+  const maxItemsPerParent = Math.max(1, Number(
+    runtimeConfig.suggestionDeepSearchMaxItemsPerProfile
+      || runtimeConfig.suggestionSecondLevelMaxItemsPerParent
+      || runtimeConfig.suggestionCandidateMaxItems
+      || 300,
+  ));
+  const maxTotalItems = Math.max(1, Number(runtimeConfig.suggestionDeepSearchMaxTotalItems || runtimeConfig.suggestionSecondLevelMaxTotalChecks || 5000));
+  const parentsToScan = seedProfiles.slice(0, maxParents);
+  const checkedCandidates = [];
   const branchedConnections = [];
-  let totalChecked = 0;
+  let totalObserved = 0;
+  let gracefullyStopped = false;
+  let rateLimited = false;
+  let rateLimitText = null;
 
-  for (const parent of parents) {
-    if (totalChecked >= level2MaxTotalChecks) {
+  if (parentsToScan.length === 0) {
+    const statusMessage = 'Vorschlaege DeepSearch konnte nicht starten: keine Profile aus einem vorherigen Vorschlaege-Scan gefunden.';
+
+    progressLog('suggestions-deepsearch-no-seeds', {
+      relationship: 'suggestions',
+      loaded: 0,
+      expectedCount: 0,
+      observedSuggestionCount: 0,
+      suggestionBranchedConnections: [],
+      message: statusMessage,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+    });
+
+    notes.push(statusMessage);
+
+    return {
+      ok: true,
+      statusLevel: 'partial',
+      statusMessage,
+      scanType: 'suggestion-deepsearch',
+      targetUsername,
+      attempted: true,
+      available: false,
+      observedCount: 0,
+      checkedCount: 0,
+      matchCount: 0,
+      rateLimited: false,
+      gracefullyStopped: false,
+      suggestions: [],
+      candidatesToCheck: [],
+      checkedCandidates: [],
+      skippedCandidates: [],
+      dismissedCandidates: [],
+      observedSuggestions: [],
+      suggestionBranchedConnections: [],
+      matches: [],
+    };
+  }
+
+  progressLog('suggestions-deepsearch-opening', {
+    relationship: 'suggestions',
+    loaded: 0,
+    expectedCount: parentsToScan.length,
+    observedSuggestionCount: 0,
+    suggestionBranchedConnections: [],
+    message: runtimeConfig.suggestionResumePendingOnly
+      ? `Vorschlaege DeepSearch wird fortgesetzt: ${parentsToScan.length} Profile in der Warteschlange.`
+      : `Vorschlaege DeepSearch startet Stufe 2 fuer ${parentsToScan.length} gefundene Vorschlagsprofile.`,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  const pageHas429 = async () => {
+    if (!detectInstagramHttp429Page) {
+      return { detected: false };
+    }
+
+    return detectInstagramHttp429Page(page);
+  };
+  const looksLikeHttp429 = (value) => (
+    /http\s*error\s*429|error\s*429|http\s*429|\b429\b|too many requests|t[aä]gliches zeitlimit erreicht|daily time limit reached|reached your daily time limit/i.test(String(value || ''))
+  );
+  const resultLooksLikeHttp429 = (result = {}) => (
+    Number(result?.status || 0) === 429
+    || looksLikeHttp429(result?.error)
+    || looksLikeHttp429(result?.rateLimitText)
+  );
+
+  for (const parent of parentsToScan) {
+    if (totalObserved >= maxTotalItems) {
       break;
     }
 
+    const stopRequest = markGracefulStopIfRequested('suggestions', {
+      loaded: checkedCandidates.length,
+      expectedCount: parentsToScan.length,
+      observedSuggestionCount: totalObserved,
+    });
+
+    if (stopRequest) {
+      gracefullyStopped = true;
+      break;
+    }
+
+    progressLog('suggestions-deepsearch-profile-opening', {
+      relationship: 'suggestions',
+      loaded: checkedCandidates.length,
+      expectedCount: parentsToScan.length,
+      candidateUsername: parent.username,
+      sourceUsername: parent.username,
+      observedSuggestionCount: totalObserved,
+      message: `Stufe 2: Vorschlaege von @${parent.username} werden gescannt.`,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+    });
+
     try {
-      // Zu Eltern-Profil navigieren
-      await navigateWithSoftTimeout(page, parent.profileUrl, runtimeConfig);
-      await sleep(1000);
+      const navigation = await navigateWithSoftTimeout(page, parent.profileUrl, runtimeConfig);
+      const navigation429 = await pageHas429();
+
+      if (resultLooksLikeHttp429(navigation) || navigation429.detected) {
+        rateLimited = true;
+        rateLimitText = navigation429.text || navigation.error || 'HTTP ERROR 429';
+        checkedCandidates.push({
+          ...parent,
+          checked: false,
+          skipped: true,
+          skippedReason: 'candidate-http-429',
+          error: rateLimitText,
+        });
+        break;
+      }
+
+      if (!navigation.ok) {
+        checkedCandidates.push({
+          ...parent,
+          checked: false,
+          skipped: true,
+          skippedReason: 'candidate-navigation-error',
+          error: navigation.error,
+        });
+
+        progressLog('suggestions-deepsearch-profile-error', {
+          relationship: 'suggestions',
+          loaded: checkedCandidates.length,
+          expectedCount: parentsToScan.length,
+          candidateUsername: parent.username,
+          sourceUsername: parent.username,
+          observedSuggestionCount: totalObserved,
+          skippedReason: 'candidate-navigation-error',
+          message: `Stufe 2: @${parent.username} konnte nicht stabil geladen werden.`,
+          ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+        });
+
+        continue;
+      }
+
+      await sleep(1100);
       await scrollToProfileSuggestions(page, 5);
 
       const parentSuggestions = await collectProfileSuggestionItemsDeep(
         page,
         parent.username,
-        level2MaxItemsPerParent,
+        Math.min(maxItemsPerParent, maxTotalItems - totalObserved),
         {
           includeSeeAll: true,
           forceSeeAll: true,
+          openSeeAllFirst: true,
           continueUntilEnd: true,
           runtimeConfig,
-          maxInlineRounds: runtimeConfig.suggestionCandidateInlineMaxRounds || 24,
-          maxDialogRounds: runtimeConfig.suggestionCandidateDialogMaxRounds || 36,
+          maxInlineRounds: runtimeConfig.suggestionCandidateInlineMaxRounds || runtimeConfig.suggestionInlineMaxRounds || 40,
+          maxDialogRounds: runtimeConfig.suggestionCandidateDialogMaxRounds || runtimeConfig.suggestionDialogMaxRounds || 70,
         },
       );
+      const collection429 = await pageHas429();
 
-      const secondLevelItems = Array.isArray(parentSuggestions?.items) ? parentSuggestions.items : [];
-      const hits = secondLevelItems
-        .filter((item) => normalizeInstagramUsername(item.username) === normalizeInstagramUsername(targetUsername));
-
-      if (hits.length > 0) {
-        branchedConnections.push({
-          sourceUsername: parent.username,
-          sourceProfileUrl: parent.profileUrl,
-          targetUsername,
-          targetProfileUrl: `https://www.instagram.com/${normalizeInstagramUsername(targetUsername)}/`,
-          via: 'profile_suggestions_level2',
-          suggestionPreview: previewItems(secondLevelItems, level2MaxItemsPerParent),
-        });
+      if (collection429.detected || Boolean(parentSuggestions?.rateLimited)) {
+        rateLimited = true;
+        rateLimitText = collection429.text || parentSuggestions?.rateLimitText || 'HTTP ERROR 429';
       }
 
-      totalChecked += secondLevelItems.length;
+      await closeInstagramDialog(page).catch(() => {});
 
-      progressLog('suggestions-deepsearch-level2-progress', {
+      const items = Array.isArray(parentSuggestions?.items) ? parentSuggestions.items : [];
+      const suggestionPreview = branchItems(parent.username, items, maxItemsPerParent);
+      const branch = {
+        sourceUsername: parent.username,
+        sourceProfileUrl: parent.profileUrl,
+        sourceDisplayName: parent.displayName || null,
+        targetUsername,
+        via: 'profile_suggestions_level2',
+        suggestionPreview,
+        suggestionsObserved: suggestionPreview.length,
+        suggestionsAvailable: Boolean(parentSuggestions?.available),
+        suggestionsRateLimited: Boolean(parentSuggestions?.rateLimited),
+      };
+
+      branchedConnections.push(branch);
+      totalObserved += suggestionPreview.length;
+      checkedCandidates.push({
+        ...parent,
+        checked: !rateLimited,
+        skipped: rateLimited,
+        skippedReason: rateLimited ? 'candidate-http-429' : null,
+        error: rateLimited ? rateLimitText : null,
+        matched: false,
+        checkMode: 'profile-suggestions-level2',
+        suggestionsObserved: suggestionPreview.length,
+        suggestionsAvailable: Boolean(parentSuggestions?.available),
+        suggestionsRateLimited: Boolean(parentSuggestions?.rateLimited),
+        suggestionPreview,
+      });
+
+      progressLog(rateLimited ? 'suggestions-deepsearch-rate-limited' : 'suggestions-deepsearch-profile-checked', {
         relationship: 'suggestions',
-        parentUsername: parent.username,
-        level2Checked: secondLevelItems.length,
-        level2TotalChecked: totalChecked,
-        level2MaxTotalChecks,
-        level2Preview: previewItems(secondLevelItems, 10),
-        message: hits.length > 0
-          ? `Zweit-Ebene: @${parent.username} enthaelt @${targetUsername} in Vorschlaegen.`
-          : `Zweit-Ebene: @${parent.username} ohne direkten Vorschlagstreffer auf @${targetUsername}.`,
+        loaded: checkedCandidates.length,
+        expectedCount: parentsToScan.length,
+        candidateUsername: parent.username,
+        sourceUsername: parent.username,
+        observedSuggestionCount: totalObserved,
+        suggestionBranchedConnections: [branch],
+        suggestionBranchedConnectionsPreview: branchedConnections.slice(-20),
+        message: rateLimited
+          ? `Stufe 2: Instagram-Rate-Limit bei @${parent.username}; DeepSearch wird pausiert.`
+          : `Stufe 2: ${suggestionPreview.length} Vorschlaege von @${parent.username} gespeichert.`,
         ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
       });
 
-      if (totalChecked >= level2MaxTotalChecks) {
+      if (rateLimited) {
         break;
       }
     } catch (error) {
-      // Level-2 Fehler nicht fatal fuer gesamten Lauf
-      progressLog('suggestions-deepsearch-level2-error', {
-        relationship: 'suggestions',
-        parentUsername: parent.username,
+      checkedCandidates.push({
+        ...parent,
+        checked: false,
+        skipped: true,
+        skippedReason: 'candidate-error',
         error: String(error?.message || error),
-        message: `Zweit-Ebene bei @${parent.username} wegen Fehler uebersprungen.`,
+      });
+
+      progressLog('suggestions-deepsearch-profile-error', {
+        relationship: 'suggestions',
+        loaded: checkedCandidates.length,
+        expectedCount: parentsToScan.length,
+        candidateUsername: parent.username,
+        sourceUsername: parent.username,
+        observedSuggestionCount: totalObserved,
+        skippedReason: 'candidate-error',
+        error: String(error?.message || error),
+        message: `Stufe 2: @${parent.username} wurde wegen eines Fehlers uebersprungen.`,
         ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
       });
     }
   }
 
-  const mergedMatches = Array.isArray(firstLevel.matches) ? firstLevel.matches.slice() : [];
+  const statusLevel = gracefullyStopped || rateLimited ? 'partial' : 'success';
+  const statusMessage = gracefullyStopped
+    ? 'Vorschlaege DeepSearch wurde beendet; bisherige Stufe-2-Vorschlaege wurden gespeichert.'
+    : (rateLimited
+      ? 'Vorschlaege DeepSearch wurde wegen Instagram-Rate-Limit pausiert.'
+      : 'Vorschlaege DeepSearch Stufe 2 abgeschlossen.');
 
-  // Zweite Ebene-Treffer als zusaetzliche Matches fuer normale Vorschlagslisten aufnehmen
-  for (const branch of branchedConnections) {
-    const existing = mergedMatches.find((m) => m.username === branch.sourceUsername);
+  progressLog('suggestions-deepsearch-complete', {
+    relationship: 'suggestions',
+    loaded: checkedCandidates.length,
+    expectedCount: parentsToScan.length,
+    observedSuggestionCount: totalObserved,
+    suggestionBranchedConnectionsPreview: branchedConnections.slice(-40),
+    gracefullyStopped,
+    rateLimited,
+    message: statusMessage,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
 
-    if (existing) {
-      // Kennzeichnen, dass diese Quelle ebenfalls eine Level-2-Verbindung liefert
-      existing.sourceLists = Array.isArray(existing.sourceLists)
-        ? Array.from(new Set([...existing.sourceLists, branch.via]))
-        : [branch.via];
-      continue;
-    }
+  notes.push(`Vorschlaege DeepSearch Stufe 2: ${checkedCandidates.length} von ${parentsToScan.length} Profilen gescannt, ${totalObserved} Vorschlaege gesehen.`);
 
-    mergedMatches.push({
-      username: branch.sourceUsername,
-      displayName: null,
-      profileUrl: branch.sourceProfileUrl,
-      profileImageUrl: null,
-      profileVisibility: null,
-      isPrivate: null,
-      postsCount: null,
-      followersCount: null,
-      followingCount: null,
-      hoverCard: null,
-      sourceSuggestionUsername: branch.sourceUsername,
-      sourcePublicUsername: branch.sourceUsername,
-      targetFoundAsSuggestion: true,
-      targetFoundInPublicLists: false,
-      targetFoundInFollowers: false,
-      targetFoundInFollowing: false,
-      sourceLists: ['profile_suggestions_level2'],
-      suggestionPreview: branch.suggestionPreview,
-    });
-  }
-
-  const result = {
-    ...firstLevel,
+  return {
+    ok: !rateLimited,
+    statusLevel,
+    statusMessage,
     scanType: 'suggestion-deepsearch',
-    matches: mergedMatches,
+    targetUsername,
+    attempted: true,
+    available: branchedConnections.length > 0,
+    observedCount: totalObserved,
+    checkedCount: checkedCandidates.filter((candidate) => candidate.checked).length,
+    matchCount: 0,
+    rateLimited,
+    rateLimitText,
+    gracefullyStopped,
+    suggestions: parentsToScan,
+    candidatesToCheck: parentsToScan,
+    checkedCandidates,
+    skippedCandidates: checkedCandidates.filter((candidate) => candidate.skipped),
+    dismissedCandidates: [],
+    observedSuggestions: [],
     suggestionBranchedConnections: branchedConnections,
+    matches: [],
   };
-
-  return result;
 }
 
 module.exports = {

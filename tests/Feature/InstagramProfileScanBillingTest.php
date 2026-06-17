@@ -178,6 +178,15 @@ class InstagramProfileScanBillingTest extends TestCase
                         ],
                     ],
                 ],
+                'suggestionBranchedConnections' => [
+                    [
+                        'sourceUsername' => 'first_level_b',
+                        'sourceDisplayName' => 'First B',
+                        'suggestionPreview' => [
+                            ['username' => 'second_level_c', 'displayName' => 'Second C'],
+                        ],
+                    ],
+                ],
             ],
         ];
 
@@ -197,7 +206,9 @@ class InstagramProfileScanBillingTest extends TestCase
         );
 
         $firstLevelA = InstagramProfile::where('username', 'first_level_a')->firstOrFail();
+        $firstLevelB = InstagramProfile::where('username', 'first_level_b')->firstOrFail();
         $secondLevelA = InstagramProfile::where('username', 'second_level_a')->firstOrFail();
+        $secondLevelC = InstagramProfile::where('username', 'second_level_c')->firstOrFail();
 
         $this->assertDatabaseHas('instagram_profile_relationships', [
             'source_instagram_profile_id' => $target->id,
@@ -211,10 +222,92 @@ class InstagramProfileScanBillingTest extends TestCase
             'list_type' => 'profile_suggestions',
             'status' => 'active',
         ]);
-        $this->assertSame(4, InstagramProfileRelationship::query()
+        $this->assertDatabaseHas('instagram_profile_relationships', [
+            'source_instagram_profile_id' => $firstLevelB->id,
+            'related_instagram_profile_id' => $secondLevelC->id,
+            'list_type' => 'profile_suggestions',
+            'status' => 'active',
+        ]);
+        $this->assertSame(5, InstagramProfileRelationship::query()
             ->where('list_type', 'profile_suggestions')
             ->where('status', 'active')
             ->count());
+    }
+
+    public function test_deepsearch_seed_profiles_are_loaded_from_previous_basic_suggestions(): void
+    {
+        $user = User::factory()->create();
+        $target = InstagramProfile::create(['username' => 'deep_seed_target']);
+        $graphSeed = InstagramProfile::create(['username' => 'deep_graph_seed']);
+        InstagramProfileRelationship::create([
+            'source_instagram_profile_id' => $target->id,
+            'related_instagram_profile_id' => $graphSeed->id,
+            'list_type' => 'profile_suggestions',
+            'status' => 'active',
+            'first_seen_at' => now('UTC'),
+            'last_seen_at' => now('UTC'),
+        ]);
+        TrackedPersonInstagramSuggestionScan::create([
+            'tracked_person_id' => null,
+            'instagram_profile_id' => $target->id,
+            'user_id' => $user->id,
+            'target_username' => $target->username,
+            'status_level' => 'success',
+            'status_message' => 'Basic suggestions stored.',
+            'suggestions_observed_count' => 1,
+            'suggestions_checked_count' => 0,
+            'suggestion_matches_count' => 0,
+            'gracefully_stopped' => false,
+            'raw_payload' => [
+                'suggestionScan' => [
+                    'scanType' => 'suggestions',
+                    'observedSuggestions' => [
+                        ['username' => 'deep_payload_seed', 'displayName' => 'Payload Seed'],
+                    ],
+                ],
+            ],
+            'analyzed_at' => now('UTC')->subMinute(),
+        ]);
+        TrackedPersonInstagramSuggestionScan::create([
+            'tracked_person_id' => null,
+            'instagram_profile_id' => $target->id,
+            'user_id' => $user->id,
+            'target_username' => $target->username,
+            'status_level' => 'success',
+            'status_message' => 'DeepSearch stored.',
+            'suggestions_observed_count' => 1,
+            'suggestions_checked_count' => 1,
+            'suggestion_matches_count' => 0,
+            'gracefully_stopped' => false,
+            'raw_payload' => [
+                'suggestionScan' => [
+                    'scanType' => 'suggestion-deepsearch',
+                    'suggestionBranchedConnections' => [
+                        [
+                            'sourceUsername' => 'deep_payload_seed',
+                            'suggestionPreview' => [
+                                ['username' => 'must_not_be_seeded_from_deepsearch'],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            'analyzed_at' => now('UTC'),
+        ]);
+
+        $method = new ReflectionMethod(app(TrackedPersonInstagramSuggestionScanService::class), 'buildDeepSearchSeedProfiles');
+        $method->setAccessible(true);
+        $seeds = $method->invoke(
+            app(TrackedPersonInstagramSuggestionScanService::class),
+            null,
+            $target,
+            $target->username,
+        );
+
+        $this->assertSame(
+            ['deep_graph_seed', 'deep_payload_seed'],
+            collect($seeds)->pluck('username')->sort()->values()->all(),
+        );
     }
 
     public function test_known_suggestions_are_added_to_candidate_history_without_rechecking(): void
@@ -269,7 +362,7 @@ class InstagramProfileScanBillingTest extends TestCase
         $this->assertTrue($history['known_from_previous_scan']['knownSuggestion']);
     }
 
-    public function test_public_suggestion_list_hits_are_stored_as_reconstructed_lists_not_suggestion_connections(): void
+    public function test_public_suggestion_list_hits_are_stored_as_normal_inferred_connections_with_suggestion_origin(): void
     {
         $user = User::factory()->create();
         $person = TrackedPerson::create([
@@ -298,6 +391,10 @@ class InstagramProfileScanBillingTest extends TestCase
         $storeInferred->setAccessible(true);
         $storeInferred->invoke($service, $person, null, 'public_rule_target', [$connection], [], $seenAt);
 
+        $storePublicInferred = new ReflectionMethod($service, 'storeInferredPublicListConnections');
+        $storePublicInferred->setAccessible(true);
+        $storePublicInferred->invoke($service, $person, null, 'public_rule_target', [$connection], $seenAt);
+
         $storePublicLists = new ReflectionMethod($service, 'storePublicListRelationships');
         $storePublicLists->setAccessible(true);
         $storePublicLists->invoke($service, $person, null, 'public_rule_target', [$connection], $seenAt);
@@ -310,6 +407,22 @@ class InstagramProfileScanBillingTest extends TestCase
             ->where('relationship_type', 'suggestion_connection')
             ->where('candidate_username', 'public_candidate_hit')
             ->count());
+
+        foreach (['follows_target', 'followed_by_target'] as $relationshipType) {
+            $inferredConnection = TrackedPersonInstagramInferredConnection::query()
+                ->where('tracked_person_id', $person->id)
+                ->whereNull('public_profile_id')
+                ->where('relationship_type', $relationshipType)
+                ->where('candidate_username', 'public_candidate_hit')
+                ->firstOrFail();
+
+            $this->assertTrue((bool) data_get($inferredConnection->evidence, 'fromSuggestionScan'));
+            $this->assertSame(
+                'public_lists_from_suggestion_scan',
+                data_get($inferredConnection->evidence, 'relationship_origin'),
+            );
+            $this->assertContains('suggestion_scan_public_lists', $inferredConnection->source_lists);
+        }
 
         foreach (['followers', 'following'] as $listType) {
             $relationship = InstagramProfileRelationship::query()
@@ -324,5 +437,60 @@ class InstagramProfileScanBillingTest extends TestCase
                 data_get($relationship->evidence, 'relationship_origin'),
             );
         }
+    }
+
+    public function test_suggestion_resume_uses_pending_candidate_queue_in_original_order(): void
+    {
+        $user = User::factory()->create();
+        $person = TrackedPerson::create([
+            'user_id' => $user->id,
+            'first_name' => 'Resume',
+            'last_name' => 'Target',
+            'instagram_username' => 'resume_target',
+        ]);
+        $scan = TrackedPersonInstagramSuggestionScan::create([
+            'tracked_person_id' => $person->id,
+            'user_id' => $user->id,
+            'target_username' => 'resume_target',
+            'status_level' => 'partial',
+            'status_message' => 'Pausiert',
+            'suggestions_observed_count' => 4,
+            'suggestions_checked_count' => 2,
+            'suggestion_matches_count' => 0,
+            'gracefully_stopped' => true,
+            'raw_payload' => [
+                'suggestionScan' => [
+                    'candidatesToCheck' => [
+                        ['username' => 'alpha_done', 'profileUrl' => 'https://www.instagram.com/alpha_done/'],
+                        ['username' => 'beta_retry', 'profileUrl' => 'https://www.instagram.com/beta_retry/'],
+                        ['username' => 'gamma_next', 'profileUrl' => 'https://www.instagram.com/gamma_next/'],
+                        ['username' => 'delta_next', 'profileUrl' => 'https://www.instagram.com/delta_next/'],
+                    ],
+                    'checkedCandidates' => [
+                        ['username' => 'alpha_done', 'checked' => true],
+                        [
+                            'username' => 'beta_retry',
+                            'checked' => false,
+                            'skipped' => true,
+                            'skippedReason' => 'candidate-http-429',
+                        ],
+                    ],
+                ],
+            ],
+            'analyzed_at' => now('UTC'),
+        ]);
+
+        $method = new ReflectionMethod(app(TrackedPersonInstagramSuggestionScanService::class), 'buildResumePendingFromLastScan');
+        $method->setAccessible(true);
+        [$resumePendingOnly, $pendingCandidates] = $method->invoke(
+            app(TrackedPersonInstagramSuggestionScanService::class),
+            $scan,
+        );
+
+        $this->assertTrue($resumePendingOnly);
+        $this->assertSame(
+            ['beta_retry', 'gamma_next', 'delta_next'],
+            array_column($pendingCandidates, 'username'),
+        );
     }
 }

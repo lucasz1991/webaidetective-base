@@ -36,6 +36,7 @@ class InvestigationAssistantToolService
             'Eine Nutzernachricht mit [SCAN_TARGET_SELECTED] bedeutet: Der Nutzer hat ein Profil-Badge als moegliches Scan-Ziel angeklickt. Das ist noch keine Freigabe fuer einen bestimmten Scan.',
             'Pruefe bei [SCAN_TARGET_SELECTED] zuerst Profiltyp, Sichtbarkeit, vorhandene Daten und Scan-Historie. Wenn der Nutzer keinen konkreten Scan-Typ bestaetigt hat, frage nach und nenne kurz die passenden Scan-Optionen. Starte bis zur eindeutigen Auswahl kein Scan-Tool.',
             'Eine Nutzernachricht mit [SCAN_TYPE_CONFIRMED] ist die ausdrueckliche Freigabe fuer den darin genannten Scan-Typ. Nutze fuer tracked_person dispatch_instagram_scan. Nutze fuer instagram_profile bei Vollanalyse dispatch_network_profile_scan und ersetze den bestaetigten Typ nicht eigenmaechtig.',
+            'Wenn der Nutzer die Networkmap sehen, schliessen oder einen Knoten darin fokussieren moechte, nutze control_network_map statt zu navigieren.',
             'Navigiere nur, wenn der Nutzer dich ausdruecklich darum bittet. Nutze dafuer navigate_app_page oder open_profile.',
         ]));
     }
@@ -65,6 +66,21 @@ class InvestigationAssistantToolService
                     'limit' => ['type' => 'integer', 'minimum' => 1, 'maximum' => 25],
                     'include_known_profiles' => ['type' => 'boolean'],
                 ],
+            ]),
+            $this->tool('control_network_map', 'Steuere die aktuell vorhandene Networkmap: Vollbild oeffnen/schliessen oder einen Knoten fokussieren.', [
+                'type' => 'object',
+                'properties' => [
+                    'command' => [
+                        'type' => 'string',
+                        'enum' => ['open', 'close', 'toggle', 'focus', 'select', 'click'],
+                    ],
+                    'map_id' => ['type' => 'string', 'description' => 'Optional: konkrete Map-ID aus dem aktuellen Kontext.'],
+                    'node_id' => ['type' => 'string', 'description' => 'Optional: technische Node-ID, z.B. person-56 oder profile-instagram-username.'],
+                    'tracked_person_id' => ['type' => 'integer'],
+                    'instagram_username' => ['type' => 'string'],
+                    'label' => ['type' => 'string'],
+                ],
+                'required' => ['command'],
             ]),
             $this->tool('create_or_update_tracked_person', 'Lege eine beobachtete Person an oder aktualisiere Basisdaten und Instagram-Handle.', [
                 'type' => 'object',
@@ -197,6 +213,7 @@ class InvestigationAssistantToolService
             'dispatch_network_profile_scan' => $this->dispatchNetworkProfileScan($user, $arguments),
             'stop_active_scan' => $this->stopActiveScan($user, $arguments),
             'present_chat_options' => $this->presentChatOptions($arguments),
+            'control_network_map' => $this->controlNetworkMap($arguments),
             'navigate_app_page' => $this->navigateAppPage($arguments),
             'open_profile' => $this->openProfile($user, $arguments),
             default => $this->error('UNKNOWN_TOOL', 'Unbekanntes Tool: '.$name),
@@ -759,6 +776,47 @@ class InvestigationAssistantToolService
             'chat_options' => [
                 'prompt' => $prompt,
                 'options' => $options,
+            ],
+        ];
+    }
+
+    private function controlNetworkMap(array $arguments): array
+    {
+        $command = Str::of((string) ($arguments['command'] ?? ''))
+            ->trim()
+            ->lower()
+            ->replace('-', '_')
+            ->toString();
+        $allowedCommands = ['open', 'close', 'toggle', 'focus', 'select', 'click'];
+
+        if (! in_array($command, $allowedCommands, true)) {
+            return $this->error('INVALID_NETWORK_MAP_COMMAND', 'Diese Networkmap-Aktion kenne ich nicht.');
+        }
+
+        $username = $this->normalizeUsername($arguments['instagram_username'] ?? null);
+        $trackedPersonId = (int) ($arguments['tracked_person_id'] ?? 0);
+        $nodeId = trim((string) ($arguments['node_id'] ?? ''));
+
+        if (in_array($command, ['focus', 'select', 'click'], true) && $nodeId === '' && $trackedPersonId <= 0 && $username === '' && blank($arguments['label'] ?? null)) {
+            return $this->error('NETWORK_MAP_TARGET_REQUIRED', 'Zum Fokussieren brauche ich eine Person, einen Handle oder eine Node-ID.');
+        }
+
+        return [
+            'ok' => true,
+            'message' => match ($command) {
+                'open' => 'Networkmap wird im Vollbild geoeffnet.',
+                'close' => 'Networkmap wird geschlossen.',
+                'toggle' => 'Networkmap-Ansicht wird umgeschaltet.',
+                default => 'Knoten wird in der Networkmap fokussiert.',
+            },
+            'ui_action' => [
+                'type' => 'network_map',
+                'command' => $command,
+                'mapId' => trim((string) ($arguments['map_id'] ?? '')) ?: null,
+                'nodeId' => $nodeId ?: null,
+                'trackedPersonId' => $trackedPersonId > 0 ? $trackedPersonId : null,
+                'instagramUsername' => $username !== '' ? $username : null,
+                'label' => filled($arguments['label'] ?? null) ? trim((string) $arguments['label']) : null,
             ],
         ];
     }

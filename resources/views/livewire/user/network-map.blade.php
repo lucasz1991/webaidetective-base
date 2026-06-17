@@ -4,7 +4,7 @@
     data-network-map-id="{{ $mapId }}"
     data-network-filter-scope="{{ $contextTrackedPersonId ? 'person-'.$contextTrackedPersonId : 'global' }}"
     data-network-focus-tracked-person-id="{{ $contextTrackedPersonId ?: $primaryTrackedPersonId }}"
-    data-network-max-visible-profiles="250"
+    data-network-max-visible-profiles="2000"
     data-network-layout-mode="clusters"
     data-network-background-mode="light"
     data-network-lazy="true"
@@ -18,6 +18,7 @@
     x-data="{
         mapFullscreen: false,
         filterMenu: null,
+        profileListOpen: false,
         networkNode: { id: null, type: null, isKnownProfile: false },
         nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, detailUrl: null, name: '', handle: '', x: 0, y: 0 },
         notifyAssistantContext() {
@@ -29,6 +30,13 @@
                     focusTrackedPersonId: @js($contextTrackedPersonId ?: $primaryTrackedPersonId),
                 },
             }));
+        },
+        mapCommandDetail(event) {
+            const detail = Array.isArray(event?.detail) ? (event.detail[0] || {}) : (event?.detail || {});
+            return detail.action && typeof detail.action === 'object' ? detail.action : detail;
+        },
+        commandTargetsThisMap(detail) {
+            return !detail?.mapId || detail.mapId === '{{ $mapId }}';
         },
         openMap() {
             if (this.mapFullscreen) {
@@ -47,10 +55,36 @@
 
             this.mapFullscreen = false;
             this.filterMenu = null;
+            this.profileListOpen = false;
             this.closeNodeMenu();
             document.documentElement.classList.remove('overflow-hidden');
             this.notifyAssistantContext();
             this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } })));
+        },
+        toggleProfileList() {
+            this.profileListOpen = ! this.profileListOpen;
+            this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-profile-list-refresh', { detail: { mapId: '{{ $mapId }}' } })));
+        },
+        handleProfileListAction(event) {
+            if (event.detail?.mapId && event.detail.mapId !== '{{ $mapId }}') {
+                return;
+            }
+
+            if (event.detail?.action === 'detail' && event.detail?.detailUrl) {
+                window.location.href = event.detail.detailUrl;
+                return;
+            }
+
+            if (!event.detail?.id) {
+                return;
+            }
+
+            if (event.detail.action === 'scan') {
+                this.$wire.scanProfile(event.detail.id);
+                return;
+            }
+
+            this.$wire.openProfilePreview(event.detail.id);
         },
         setNetworkNode(event) {
             if (event.detail?.mapId && event.detail.mapId !== '{{ $mapId }}') {
@@ -92,11 +126,35 @@
             if (event.detail?.id) {
                 this.$wire.openProfilePreview(event.detail.id);
             }
+        },
+        handleMapCommand(event) {
+            const detail = this.mapCommandDetail(event);
+
+            if (!this.commandTargetsThisMap(detail)) {
+                return;
+            }
+
+            const command = detail.command || detail.action || detail.type;
+
+            if (['open', 'fullscreen', 'open_fullscreen', 'show'].includes(command)) {
+                this.openMap();
+            } else if (['close', 'exit_fullscreen', 'hide'].includes(command)) {
+                this.closeMap();
+            } else if (command === 'toggle') {
+                this.mapFullscreen ? this.closeMap() : this.openMap();
+            }
+
+            if (['focus', 'select', 'click', 'highlight'].includes(command)) {
+                this.openMap();
+                this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-focus-node', { detail })));
+            }
         }
     }"
     x-on:network-map-node-selected.window="setNetworkNode($event)"
     x-on:network-map-node-menu.window="openNodeMenu($event)"
     x-on:network-map-open-node.window="openNode($event)"
+    x-on:network-map-profile-list-action.window="handleProfileListAction($event)"
+    x-on:network-map-command.window="handleMapCommand($event)"
     x-on:pointerdown.window="if (nodeMenu.open && !$event.target.closest('[data-network-node-menu]')) closeNodeMenu()"
     x-on:keydown.escape.window="if (mapFullscreen) closeMap()"
     x-init="notifyAssistantContext()"
@@ -231,88 +289,43 @@
                 class="relative overflow-hidden rounded-lg border border-slate-200 bg-slate-100 shadow-sm"
                 x-bind:class="mapFullscreen ? '!min-h-screen !rounded-none !border-0 !shadow-none' : ''"
             >
-                <div x-show="mapFullscreen" x-cloak class="absolute left-3 top-3 z-30 flex max-w-[calc(100%-7.5rem)] flex-wrap items-start gap-2">
-                    <div class="relative" x-on:click.outside="if (filterMenu === 'connections') filterMenu = null">
-                        <button
-                            type="button"
-                            x-on:click="filterMenu = filterMenu === 'connections' ? null : 'connections'"
-                            x-bind:aria-expanded="filterMenu === 'connections'"
-                            class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white"
-                            title="Verbindungen"
-                        >
-                            <span class="sr-only">Verbindungen</span>
-                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                <path d="M6.5 8.5h11M6.5 15.5h11M8 6l-3 2.5L8 11M16 13l3 2.5L16 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                            </svg>
+                <div x-show="mapFullscreen" x-cloak class="absolute left-3 top-3 z-30 flex max-w-[calc(100vw-1.5rem)] flex-wrap items-start gap-2 pr-[32rem]">
+                    @php
+                        $connectionButtons = [
+                            ['state' => 'mutual', 'label' => 'Gegenseitig', 'swatch' => 'bg-emerald-600', 'active' => 'border-emerald-300 bg-emerald-50/90 text-emerald-900'],
+                            ['state' => 'following', 'label' => 'Folgt', 'swatch' => 'bg-green-500', 'active' => 'border-green-300 bg-green-50/90 text-green-900'],
+                            ['state' => 'known-profile', 'label' => 'Bekannt', 'swatch' => 'bg-sky-600', 'active' => 'border-sky-300 bg-sky-50/90 text-sky-900'],
+                            ['state' => 'known-person-link', 'label' => 'Person', 'swatch' => 'bg-violet-600', 'active' => 'border-violet-300 bg-violet-50/90 text-violet-900'],
+                            ['state' => 'reconstructed', 'label' => 'Rekonstr.', 'swatch' => 'bg-rose-600', 'active' => 'border-rose-300 bg-rose-50/90 text-rose-900'],
+                            ['state' => 'suggestion', 'label' => 'Vorschlag', 'swatch' => 'bg-amber-500', 'active' => 'border-amber-300 bg-amber-50/90 text-amber-900'],
+                        ];
+                    @endphp
+                    @foreach($connectionButtons as $connectionButton)
+                        <button type="button" data-network-connection-state="{{ $connectionButton['state'] }}" data-active-classes="{{ $connectionButton['active'] }}" data-inactive-classes="border-white/40 bg-white/75 text-slate-500" class="inline-flex h-10 items-center gap-2 rounded-lg border px-2.5 text-xs font-bold shadow-lg backdrop-blur-xl transition duration-200 hover:bg-white" aria-pressed="true">
+                            <span class="h-2 w-7 rounded-full {{ $connectionButton['swatch'] }}"></span>
+                            <span>{{ $connectionButton['label'] }}</span>
+                            <span class="h-5 w-9 rounded-full border border-current/20 bg-current/10 p-0.5">
+                                <span data-network-toggle-thumb class="block h-3.5 w-3.5 translate-x-4 rounded-full bg-current transition-transform duration-200 ease-out"></span>
+                            </span>
                         </button>
-                        <div
-                            x-show="filterMenu === 'connections'"
-                            x-cloak
-                            class="absolute left-0 top-full mt-2 w-[min(360px,calc(100vw-1.5rem))] rounded-lg border border-white/45 bg-white/80 p-3 shadow-2xl backdrop-blur-xl"
-                        >
-                            <div class="grid gap-2 text-xs font-semibold">
-                                <button type="button" data-network-filter="public" data-active-classes="border-sky-300 bg-sky-50/90 text-sky-900" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="flex items-center justify-between rounded-lg border px-3 py-2 text-left shadow-sm transition" aria-pressed="true">
-                                    <span class="inline-flex items-center gap-2">
-                                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 12h8M12 8v8M5 5h14v14H5z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                                        Bekannte Profile
-                                    </span>
-                                    <span class="h-5 w-9 rounded-full border border-current/20 bg-current/10 p-0.5"><span class="block h-3.5 w-3.5 rounded-full bg-current"></span></span>
-                                </button>
-                                <button type="button" data-network-filter="inferred" data-active-classes="border-rose-300 bg-rose-50/90 text-rose-900" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="flex items-center justify-between rounded-lg border px-3 py-2 text-left shadow-sm transition" aria-pressed="true">
-                                    <span class="inline-flex items-center gap-2">
-                                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v4M12 17v4M4.6 6.6l2.8 2.8M16.6 16.6l2.8 2.8M3 12h4M17 12h4M4.6 17.4l2.8-2.8M16.6 7.4l2.8-2.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                                        Rekonstruktionen und Vorschlaege
-                                    </span>
-                                    <span class="h-5 w-9 rounded-full border border-current/20 bg-current/10 p-0.5"><span class="block h-3.5 w-3.5 rounded-full bg-current"></span></span>
-                                </button>
-                                <button type="button" data-network-filter="tracked" data-active-classes="border-emerald-300 bg-emerald-50/90 text-emerald-900" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="flex items-center justify-between rounded-lg border px-3 py-2 text-left shadow-sm transition" aria-pressed="true">
-                                    <span class="inline-flex items-center gap-2">
-                                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 8a4 4 0 1 0 0 8M17 8a4 4 0 1 1 0 8M9.5 12h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                                        Follower/Gefolgt
-                                    </span>
-                                    <span class="h-5 w-9 rounded-full border border-current/20 bg-current/10 p-0.5"><span class="block h-3.5 w-3.5 rounded-full bg-current"></span></span>
-                                </button>
-                                <button type="button" data-network-filter="direct" data-active-classes="border-slate-900 bg-slate-900 text-white" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="flex items-center justify-between rounded-lg border px-3 py-2 text-left shadow-sm transition" aria-pressed="false">
-                                    <span class="inline-flex items-center gap-2">
-                                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                                        Nur direkt verbundene Profile
-                                    </span>
-                                    <span class="h-5 w-9 rounded-full border border-current/20 bg-current/10 p-0.5"><span class="block h-3.5 w-3.5 rounded-full bg-current"></span></span>
-                                </button>
-                            </div>
-                            <div class="mt-3 border-t border-slate-200 pt-3 text-xs text-slate-600">
-                                <div class="mb-2 font-bold uppercase tracking-wide text-slate-500">Farben</div>
-                                <div class="grid gap-2">
-                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-emerald-600"></span> Gegenseitiges Folgen</div>
-                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-green-500"></span> Einseitiges Folgen</div>
-                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-sky-600"></span> Bekannte Profil-Verknuepfung</div>
-                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-violet-600"></span> Verknuepfung ueber gespeicherte Person</div>
-                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-rose-600"></span> Rekonstruiert</div>
-                                    <div class="flex items-center gap-2"><span class="h-1.5 w-8 rounded-full bg-amber-500"></span> Vorschlag</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
+                    @endforeach
+                    <button type="button" data-network-filter="direct" data-active-classes="border-slate-900 bg-slate-900 text-white" data-inactive-classes="border-white/40 bg-white/75 text-slate-500" class="inline-flex h-10 items-center gap-2 rounded-lg border px-2.5 text-xs font-bold shadow-lg backdrop-blur-xl transition duration-200 hover:bg-white" aria-pressed="false">
+                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Direkt
+                        <span class="h-5 w-9 rounded-full border border-current/20 bg-current/10 p-0.5">
+                            <span data-network-toggle-thumb class="block h-3.5 w-3.5 translate-x-0 rounded-full bg-current transition-transform duration-200 ease-out"></span>
+                        </span>
+                    </button>
                     <div class="relative" x-on:click.outside="if (filterMenu === 'visibility') filterMenu = null">
-                        <button
-                            type="button"
-                            x-on:click="filterMenu = filterMenu === 'visibility' ? null : 'visibility'"
-                            x-bind:aria-expanded="filterMenu === 'visibility'"
-                            class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white"
-                            title="Sichtbarkeit"
-                        >
-                            <span class="sr-only">Sichtbarkeit</span>
-                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-                                <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
-                            </svg>
+                        <button type="button" x-on:click="filterMenu = filterMenu === 'visibility' ? null : 'visibility'" x-bind:aria-expanded="filterMenu === 'visibility'" class="inline-flex h-10 items-center gap-2 rounded-lg border border-white/40 bg-white/75 px-3 text-xs font-bold text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Minimale Verbindungen">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 18h16M7 14h10M10 10h4M12 6v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                            Min <span data-network-min-degree-current>0</span>
                         </button>
-                        <div
-                            x-show="filterMenu === 'visibility'"
-                            x-cloak
-                            class="absolute left-0 top-full mt-2 grid w-[min(320px,calc(100vw-1.5rem))] gap-3 rounded-lg border border-white/45 bg-white/80 p-3 text-xs font-semibold text-slate-600 shadow-2xl backdrop-blur-xl"
-                        >
+                        <button type="button" x-on:click="filterMenu = filterMenu === 'visibility' ? null : 'visibility'" x-bind:aria-expanded="filterMenu === 'visibility'" class="ml-1 inline-flex h-10 items-center gap-2 rounded-lg border border-white/40 bg-white/75 px-3 text-xs font-bold text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Maximal sichtbare Profile">
+                            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                            Max <span data-network-max-profiles-current>2.000</span>
+                        </button>
+                        <div x-show="filterMenu === 'visibility'" x-cloak class="absolute left-0 top-full mt-2 grid w-[min(320px,calc(100vw-1.5rem))] gap-3 rounded-lg border border-white/45 bg-white/90 p-3 text-xs font-semibold text-slate-600 shadow-2xl backdrop-blur-xl">
                             <label class="grid gap-1.5">
                                 <span>Minimale Verbindungen</span>
                                 <select data-network-filter-min-degree class="rounded-lg border-slate-200 bg-white text-sm font-bold text-slate-900 focus:border-slate-400 focus:ring-slate-400">
@@ -332,55 +345,39 @@
                                     <option value="50">50</option>
                                     <option value="100">100</option>
                                     <option value="150">150</option>
-                                    <option value="250" selected>250</option>
+                                    <option value="250">250</option>
+                                    <option value="500">500</option>
+                                    <option value="1000">1.000</option>
+                                    <option value="2000" selected>2.000</option>
                                 </select>
                             </label>
-                            <p class="leading-5 text-slate-500">Die Map lädt grundsätzlich höchstens 250 Profile. Profilbilder werden nur für die 50 engsten Kontakte geladen.</p>
                             <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 leading-5">
                                 <div data-network-visible-profiles-count>0 sichtbar</div>
                                 <div>Effektives Minimum: <span data-network-effective-min-degree>0</span></div>
                             </div>
                         </div>
                     </div>
+                </div>
 
-                    <div class="relative" x-on:click.outside="if (filterMenu === 'display') filterMenu = null">
-                        <button
-                            type="button"
-                            x-on:click="filterMenu = filterMenu === 'display' ? null : 'display'"
-                            x-bind:aria-expanded="filterMenu === 'display'"
-                            class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white"
-                            title="Darstellung"
-                        >
-                            <span class="sr-only">Darstellung</span>
-                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                <path d="M4 7h16M7 12h10M10 17h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                            </svg>
+                <div x-show="mapFullscreen" x-cloak class="absolute right-3 top-3 z-40 flex max-w-[calc(100vw-1.5rem)] flex-wrap justify-end gap-2">
+                    <div class="inline-flex h-10 overflow-hidden rounded-lg border border-white/40 bg-white/75 shadow-lg backdrop-blur-xl">
+                        <button type="button" data-network-background-mode="light" data-active-classes="bg-white text-slate-950" data-inactive-classes="text-slate-500" class="inline-flex h-full w-10 items-center justify-center transition" aria-pressed="true" title="Heller Hintergrund">
+                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v2M12 18v2M4 12h2M18 12h2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M17.7 6.3l-1.4 1.4M7.7 16.3l-1.4 1.4M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
                         </button>
-                        <div
-                            x-show="filterMenu === 'display'"
-                            x-cloak
-                            class="absolute left-0 top-full mt-2 grid w-[min(420px,calc(100vw-1.5rem))] gap-3 rounded-lg border border-white/45 bg-white/80 p-3 text-xs font-semibold text-slate-600 shadow-2xl backdrop-blur-xl"
-                        >
-                            <div class="grid grid-cols-2 gap-2">
-                                <button type="button" data-network-view-mode="2d" data-active-classes="border-slate-900 bg-slate-900 text-white" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 shadow-sm transition" aria-pressed="true">
-                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16v12H4zM8 10h8M8 14h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                                    2D
-                                </button>
-                                <button type="button" data-network-view-mode="3d" data-active-classes="border-indigo-400 bg-indigo-50/90 text-indigo-900" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 shadow-sm transition" aria-pressed="false">
-                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9L12 3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 12 4 7.5M12 12l8-4.5M12 12v9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                                    3D Prototyp
-                                </button>
-                            </div>
-                            <div class="grid grid-cols-2 gap-2">
-                                <button type="button" data-network-background-mode="light" data-active-classes="border-slate-900 bg-white text-slate-950" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 shadow-sm transition" aria-pressed="true">
-                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v2M12 18v2M4 12h2M18 12h2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M17.7 6.3l-1.4 1.4M7.7 16.3l-1.4 1.4M12 9a3 3 0 1 1 0 6 3 3 0 0 1 0-6Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                                    Hell
-                                </button>
-                                <button type="button" data-network-background-mode="dark" data-active-classes="border-slate-700 bg-slate-950 text-white" data-inactive-classes="border-slate-200 bg-white/55 text-slate-500" class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 shadow-sm transition" aria-pressed="false">
-                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 7 7 0 1 0 20 15.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                                    Dunkel
-                                </button>
-                            </div>
+                        <button type="button" data-network-background-mode="dark" data-active-classes="bg-slate-950 text-white" data-inactive-classes="text-slate-500" class="inline-flex h-full w-10 items-center justify-center transition" aria-pressed="false" title="Dunkler Hintergrund">
+                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 15.5A8.5 8.5 0 0 1 8.5 4 7 7 0 1 0 20 15.5Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        </button>
+                    </div>
+                    <div class="inline-flex h-10 overflow-hidden rounded-lg border border-white/40 bg-white/75 shadow-lg backdrop-blur-xl">
+                        <button type="button" data-network-view-mode="2d" data-active-classes="bg-slate-900 text-white" data-inactive-classes="text-slate-500" class="inline-flex h-full items-center justify-center gap-1 px-3 text-xs font-bold transition" aria-pressed="true">2D</button>
+                        <button type="button" data-network-view-mode="3d" data-active-classes="bg-indigo-600 text-white" data-inactive-classes="text-slate-500" class="inline-flex h-full items-center justify-center gap-1 px-3 text-xs font-bold transition" aria-pressed="false">3D</button>
+                    </div>
+                    <div class="relative" x-on:click.outside="if (filterMenu === 'layout') filterMenu = null">
+                        <button type="button" x-on:click="filterMenu = filterMenu === 'layout' ? null : 'layout'" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Anordnung">
+                            <span class="sr-only">Anordnung</span>
+                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v16M4 12h16M7 7h.01M17 7h.01M7 17h.01M17 17h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                        </button>
+                        <div x-show="filterMenu === 'layout'" x-cloak class="absolute right-0 top-full mt-2 grid w-[min(420px,calc(100vw-1.5rem))] gap-3 rounded-lg border border-white/45 bg-white/90 p-3 text-xs font-semibold text-slate-600 shadow-2xl backdrop-blur-xl">
                             <label class="grid gap-1.5">
                                 <span>Anordnung</span>
                                 <select data-network-layout-mode class="rounded-lg border-slate-200 bg-white text-sm font-bold text-slate-900 focus:border-slate-400 focus:ring-slate-400">
@@ -406,42 +403,32 @@
                                 <input type="range" min="0" max="400" step="10" value="100" data-network-size-variance class="w-full accent-slate-900">
                                 <span class="text-right text-slate-900" data-network-size-variance-value>100%</span>
                             </label>
-                            <div class="flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
-                                <button type="button" data-network-action="zoom-out" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white/70 transition hover:bg-white" title="Rauszoomen">
-                                    <span class="sr-only">Rauszoomen</span>
-                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                                </button>
-                                <button type="button" data-network-action="zoom-in" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white/70 transition hover:bg-white" title="Reinzoomen">
-                                    <span class="sr-only">Reinzoomen</span>
-                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                                </button>
-                                <button type="button" data-network-action="fit" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white/70 transition hover:bg-white" title="Einpassen">
-                                    <span class="sr-only">Einpassen</span>
-                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                                </button>
-                                <button type="button" data-network-layout-reset class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white/70 transition hover:bg-white" title="Neu anordnen">
-                                    <span class="sr-only">Neu anordnen</span>
-                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.35-5.65M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                                </button>
-                            </div>
                             <div class="text-slate-500" data-network-layout-state>Nicht gespeichert</div>
                         </div>
                     </div>
+                    <button type="button" data-network-action="zoom-out" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Rauszoomen">
+                        <span class="sr-only">Rauszoomen</span>
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                    </button>
+                    <button type="button" data-network-action="zoom-in" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Reinzoomen">
+                        <span class="sr-only">Reinzoomen</span>
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                    </button>
+                    <button type="button" data-network-action="fit" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Neu anpassen">
+                        <span class="sr-only">Neu anpassen</span>
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                    <button type="button" data-network-layout-reset class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Neu anordnen">
+                        <span class="sr-only">Neu anordnen</span>
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.35-5.65M20 4v6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                    <button type="button" x-on:click="closeMap()" class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Schliessen">
+                        <span class="sr-only">Schliessen</span>
+                        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                    </button>
                 </div>
-
-                <button
-                    type="button"
-                    x-show="mapFullscreen"
-                    x-cloak
-                    x-on:click="closeMap()"
-                    class="absolute right-3 top-3 z-30 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/40 bg-white/75 text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white"
-                    title="Schliessen"
-                >
-                    <span class="sr-only">Schliessen</span>
-                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    </svg>
-                </button>
 
                 @if($trackedPeople->isEmpty())
                     <div class="p-8 text-sm text-slate-500">
@@ -479,6 +466,43 @@
                             </div>
                             <div class="mt-2 text-xs font-semibold text-slate-500" data-network-progress-count>Warte auf Daten</div>
                         </div>
+                    </div>
+                    <div x-show="mapFullscreen" x-cloak class="absolute bottom-3 left-3 z-30">
+                        <div
+                            x-show="profileListOpen"
+                            x-transition.opacity
+                            x-on:click.outside="profileListOpen = false"
+                            class="mb-2 flex max-h-[min(72vh,44rem)] w-[min(36rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-white/45 bg-white/95 shadow-2xl backdrop-blur-xl"
+                            data-network-profile-list-panel
+                        >
+                            <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">
+                                <div>
+                                    <div class="text-sm font-bold text-slate-950">Dargestellte Profile</div>
+                                    <div class="mt-0.5 text-xs font-semibold text-slate-500" data-network-profile-list-count>0 sichtbar</div>
+                                </div>
+                                <button type="button" x-on:click="profileListOpen = false" class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50" title="Liste schliessen">
+                                    <span class="sr-only">Liste schliessen</span>
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="overflow-y-auto p-3" data-network-profile-list>
+                                <p class="px-1 py-2 text-sm text-slate-500">Noch keine Profile geladen.</p>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            x-on:click.stop="toggleProfileList()"
+                            x-bind:aria-expanded="profileListOpen"
+                            class="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-white/40 bg-white/80 px-3 text-sm font-bold text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white"
+                            title="Dargestellte Profile"
+                        >
+                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                            </svg>
+                            <span>Profile</span>
+                        </button>
                     </div>
                 @endif
             </section>

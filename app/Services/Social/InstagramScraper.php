@@ -902,6 +902,10 @@ class InstagramScraper
                 'sourceSuggestionUsername' => $this->normalizeInstagramUsername((string) ($item['sourceSuggestionUsername'] ?? $item['sourcePublicUsername'] ?? '')),
                 'sourcePublicUsername' => $this->normalizeInstagramUsername((string) ($item['sourcePublicUsername'] ?? $item['sourceSuggestionUsername'] ?? '')),
                 'sourceLists' => is_array($item['sourceLists'] ?? null) ? array_values(array_filter($item['sourceLists'], 'is_scalar')) : [],
+                'fromSuggestionScan' => (bool) ($item['fromSuggestionScan'] ?? false),
+                'relationshipOriginLabel' => is_scalar($item['relationshipOriginLabel'] ?? $item['relationship_origin_label'] ?? null)
+                    ? trim((string) ($item['relationshipOriginLabel'] ?? $item['relationship_origin_label']))
+                    : null,
                 'targetFoundAsSuggestion' => array_key_exists('targetFoundAsSuggestion', $item)
                     ? (bool) $item['targetFoundAsSuggestion']
                     : true,
@@ -979,6 +983,8 @@ class InstagramScraper
             && ! array_key_exists('observedSuggestionsPreview', $event)
             && ! array_key_exists('observedSuggestions', $event)
             && ! array_key_exists('suggestionsObserved', $event)
+            && ! array_key_exists('suggestionBranchedConnections', $event)
+            && ! array_key_exists('suggestionBranchedConnectionsPreview', $event)
             && ! array_key_exists('suggestionDebug', $event)
             && ! array_key_exists('suggestionCollectionPhase', $event)
         ) {
@@ -996,6 +1002,9 @@ class InstagramScraper
             'dismissedSuggestions' => (int) ($event['dismissedSuggestions'] ?? 0),
             'observedSuggestions' => $this->normalizeConnectionProgressItems(
                 $event['observedSuggestionsPreview'] ?? $event['observedSuggestions'] ?? null,
+            ),
+            'suggestionBranchedConnections' => $this->normalizeSuggestionBranchProgressItems(
+                $event['suggestionBranchedConnections'] ?? $event['suggestionBranchedConnectionsPreview'] ?? null,
             ),
         ];
 
@@ -1055,6 +1064,47 @@ class InstagramScraper
         }
 
         return $progress;
+    }
+
+    private function normalizeSuggestionBranchProgressItems(mixed $branches, int $limit = 40): array
+    {
+        if (! is_array($branches)) {
+            return [];
+        }
+
+        $normalizedBranches = [];
+
+        foreach (array_slice($branches, 0, max(1, $limit)) as $branch) {
+            if (! is_array($branch) || ! is_scalar($branch['sourceUsername'] ?? null)) {
+                continue;
+            }
+
+            $sourceUsername = $this->normalizeInstagramUsername((string) $branch['sourceUsername']);
+
+            if ($sourceUsername === null) {
+                continue;
+            }
+
+            $normalizedBranches[] = [
+                'sourceUsername' => $sourceUsername,
+                'sourceProfileUrl' => is_scalar($branch['sourceProfileUrl'] ?? null)
+                    ? trim((string) $branch['sourceProfileUrl'])
+                    : 'https://www.instagram.com/'.$sourceUsername.'/',
+                'sourceDisplayName' => is_scalar($branch['sourceDisplayName'] ?? null)
+                    ? trim((string) $branch['sourceDisplayName'])
+                    : null,
+                'targetUsername' => is_scalar($branch['targetUsername'] ?? null)
+                    ? $this->normalizeInstagramUsername((string) $branch['targetUsername'])
+                    : null,
+                'via' => is_scalar($branch['via'] ?? null) ? trim((string) $branch['via']) : 'profile_suggestions_level2',
+                'suggestionsObserved' => (int) ($branch['suggestionsObserved'] ?? 0),
+                'suggestionsAvailable' => (bool) ($branch['suggestionsAvailable'] ?? false),
+                'suggestionsRateLimited' => (bool) ($branch['suggestionsRateLimited'] ?? false),
+                'suggestionPreview' => $this->normalizeConnectionProgressItems($branch['suggestionPreview'] ?? [], 250),
+            ];
+        }
+
+        return $normalizedBranches;
     }
 
     private function normalizeRelationshipProgress(array $event): array

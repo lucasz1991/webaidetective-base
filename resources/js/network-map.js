@@ -3,8 +3,8 @@ const activeRoots = new Set();
 const DEFAULT_LAYOUT_MODE = 'clusters';
 const DEFAULT_BACKGROUND_MODE = 'light';
 const LAYOUT_MODES = new Set(['clusters', 'spiral', 'radial', 'concentric', 'grid']);
-const LAYOUT_STORAGE_PREFIX = 'network-map-render:v9';
-const FILTER_STORAGE_PREFIX = 'network-map-filters:v2';
+const LAYOUT_STORAGE_PREFIX = 'network-map-render:v10';
+const FILTER_STORAGE_PREFIX = 'network-map-filters:v3';
 let cytoscapeLoader;
 let threeLoader;
 
@@ -1708,10 +1708,16 @@ async function setViewMode(root, state, mode) {
 function updateButton(button, active) {
     const activeClasses = (button.dataset.activeClasses || '').split(' ').filter(Boolean);
     const inactiveClasses = (button.dataset.inactiveClasses || '').split(' ').filter(Boolean);
+    const thumb = button.querySelector('[data-network-toggle-thumb]');
 
     button.setAttribute('aria-pressed', active ? 'true' : 'false');
     button.classList.remove(...activeClasses, ...inactiveClasses);
     button.classList.add(...(active ? activeClasses : inactiveClasses));
+
+    if (thumb) {
+        thumb.classList.toggle('translate-x-4', active);
+        thumb.classList.toggle('translate-x-0', !active);
+    }
 }
 
 function filterStorageKey(root) {
@@ -1732,6 +1738,12 @@ function writeStoredFilters(root, state) {
         showInferred: state.showInferred,
         showTracked: state.showTracked,
         showDirectOnly: state.showDirectOnly,
+        showMutual: state.showMutual,
+        showFollowing: state.showFollowing,
+        showKnownProfile: state.showKnownProfile,
+        showKnownPersonLink: state.showKnownPersonLink,
+        showReconstructed: state.showReconstructed,
+        showSuggestion: state.showSuggestion,
         minDegree: state.minDegree,
         maxVisibleProfiles: state.maxVisibleProfiles,
         layoutSpacingScale: state.layoutSpacingScale,
@@ -2261,6 +2273,17 @@ function evidenceVisibleForState(evidence, state) {
     return true;
 }
 
+function connectionStateVisibleForState(connectionState, state) {
+    return ({
+        mutual: state?.showMutual !== false,
+        following: state?.showFollowing !== false,
+        'known-profile': state?.showKnownProfile !== false,
+        'known-person-link': state?.showKnownPersonLink !== false,
+        reconstructed: state?.showReconstructed !== false,
+        suggestion: state?.showSuggestion !== false,
+    })[connectionState] ?? true;
+}
+
 function edgeEvidences(edge) {
     const evidences = edge.data('edgeEvidences');
 
@@ -2276,7 +2299,15 @@ function visibleEdgeEvidences(edge, state) {
 }
 
 function edgeVisibleForState(edge, state) {
-    return visibleEdgeEvidences(edge, state).length > 0;
+    const evidences = visibleEdgeEvidences(edge, state);
+
+    if (!evidences.length) {
+        return false;
+    }
+
+    const renderState = edgeRenderState(edge.data('source'), edge.data('target'), evidences);
+
+    return connectionStateVisibleForState(renderState.connectionState, state);
 }
 
 function applyEdgeRenderState(cy, state) {
@@ -2459,6 +2490,114 @@ function nodeActionDetail(root, node, extra = {}) {
     };
 }
 
+function normalizedCommandUsername(value) {
+    return String(value || '')
+        .replace(/^@/, '')
+        .trim()
+        .toLowerCase();
+}
+
+function commandNodeId(detail) {
+    const explicitId = String(detail?.nodeId || detail?.id || '').trim();
+
+    if (explicitId) {
+        return explicitId;
+    }
+
+    const trackedPersonId = Number(detail?.trackedPersonId || detail?.tracked_person_id || 0);
+
+    if (Number.isInteger(trackedPersonId) && trackedPersonId > 0) {
+        return `person-${trackedPersonId}`;
+    }
+
+    const username = normalizedCommandUsername(
+        detail?.instagramUsername
+            || detail?.instagram_username
+            || detail?.profileUsername
+            || detail?.username
+            || detail?.handle,
+    );
+
+    return username ? `profile-instagram-${username}` : '';
+}
+
+function findCommandNode(cy, detail) {
+    const id = commandNodeId(detail);
+
+    if (id) {
+        const exact = cy.getElementById(id);
+
+        if (exact.length) {
+            return exact;
+        }
+    }
+
+    const username = normalizedCommandUsername(
+        detail?.instagramUsername
+            || detail?.instagram_username
+            || detail?.profileUsername
+            || detail?.username
+            || detail?.handle,
+    );
+
+    if (username) {
+        const byUsername = cy.nodes().filter((node) => {
+            return normalizedCommandUsername(node.data('username')) === username
+                || normalizedCommandUsername(node.data('handle')) === username;
+        }).first();
+
+        if (byUsername.length) {
+            return byUsername;
+        }
+    }
+
+    const label = String(detail?.label || detail?.name || '').trim().toLowerCase();
+
+    if (label) {
+        return cy.nodes().filter((node) => {
+            return String(node.data('fullLabel') || node.data('label') || '').trim().toLowerCase() === label;
+        }).first();
+    }
+
+    return cy.collection();
+}
+
+function focusCommandNode(root, cy, detail) {
+    const node = findCommandNode(cy, detail);
+
+    if (!node.length) {
+        window.dispatchEvent(new CustomEvent('network-map-command-result', {
+            detail: {
+                mapId: root.dataset.networkMapId || null,
+                ok: false,
+                command: detail?.command || detail?.action || detail?.type || 'focus',
+                reason: 'node-not-found',
+            },
+        }));
+        return false;
+    }
+
+    node.removeClass('network-filtered');
+    setSelected(root, cy, node.id());
+
+    if (instances.get(root)?.viewMode !== '3d') {
+        cy.animate({
+            center: { eles: node },
+            zoom: Math.max(cy.zoom(), Math.min(1.35, Math.max(cy.minZoom(), cy.zoom() * 1.15))),
+        }, { duration: 360 });
+    }
+
+    window.dispatchEvent(new CustomEvent('network-map-command-result', {
+        detail: {
+            ...nodeActionDetail(root, node),
+            ok: true,
+            command: detail?.command || detail?.action || detail?.type || 'focus',
+        },
+    }));
+
+    return true;
+}
+
 function dispatchOpenNode(root, node) {
     window.dispatchEvent(new CustomEvent('network-map-open-node', {
         detail: nodeActionDetail(root, node),
@@ -2469,6 +2608,20 @@ function dispatchNodeMenu(root, node, x, y) {
     window.dispatchEvent(new CustomEvent('network-map-node-menu', {
         detail: nodeActionDetail(root, node, { x, y }),
     }));
+}
+
+function dispatchProfileListAction(root, node, action) {
+    window.dispatchEvent(new CustomEvent('network-map-profile-list-action', {
+        detail: nodeActionDetail(root, node, { action }),
+    }));
+}
+
+function instagramProfileUrl(node) {
+    const username = String(node.data('username') || node.data('handle') || '')
+        .replace(/^@/, '')
+        .trim();
+
+    return username ? `https://www.instagram.com/${encodeURIComponent(username)}/` : '';
 }
 
 function bindOpenGestures(element, openCallback) {
@@ -2503,8 +2656,10 @@ function layoutSort(a, b) {
 }
 
 function layoutCenter(visibleNodes, minWidth = 1200, minHeight = 820) {
-    const width = Math.max(minWidth, visibleNodes.length * 22);
-    const height = Math.max(minHeight, visibleNodes.length * 16);
+    const count = Number(visibleNodes?.length || 0);
+    const largeGraphScale = count > 1200 ? 1.42 : (count > 650 ? 1.22 : 1);
+    const width = Math.max(minWidth, count * 22 * largeGraphScale);
+    const height = Math.max(minHeight, count * 16 * largeGraphScale);
 
     return { width, height, centerX: width / 2, centerY: height / 2 };
 }
@@ -2778,8 +2933,10 @@ function radialDistancesWithinGroup(root, groupNodes) {
 function localRingPositions(root, buckets, options = {}) {
     const updates = [{ node: root, position: { x: 0, y: 0 } }];
     const spacingScale = normalizedScale(options.spacingScale, 1, 0.5, 5);
-    const baseRadius = (options.baseRadius || 180) * spacingScale;
-    const ringGap = (options.ringGap || 160) * spacingScale;
+    const totalNodes = buckets.reduce((sum, bucket) => sum + bucket.length, 0);
+    const densityScale = totalNodes > 500 ? 1.22 : (totalNodes > 180 ? 1.1 : 1);
+    const baseRadius = (options.baseRadius || 180) * spacingScale * densityScale;
+    const ringGap = (options.ringGap || 160) * spacingScale * densityScale;
 
     buckets
         .filter((bucket) => bucket.length)
@@ -2946,7 +3103,8 @@ function appendPreparedGroup(updates, item, center) {
 
 function placeClusterGroups(preparedGroups, updates, centerX, centerY, spacingScale) {
     let index = 0;
-    let ringRadius = 440 * spacingScale;
+    const graphScale = preparedGroups.length > 90 ? 1.28 : (preparedGroups.length > 42 ? 1.14 : 1);
+    let ringRadius = 440 * spacingScale * graphScale;
     let ringIndex = 0;
 
     while (index < preparedGroups.length) {
@@ -2957,7 +3115,7 @@ function placeClusterGroups(preparedGroups, updates, centerX, centerY, spacingSc
 
         while (index < preparedGroups.length) {
             const item = preparedGroups[index];
-            const arc = Math.max(320 * spacingScale, (item.radius * 1.55) + (140 * spacingScale));
+            const arc = Math.max(340 * spacingScale * graphScale, (item.radius * 1.72) + (170 * spacingScale * graphScale));
 
             if (ring.length && usedArc + arc > circumference) {
                 break;
@@ -2969,20 +3127,204 @@ function placeClusterGroups(preparedGroups, updates, centerX, centerY, spacingSc
             index += 1;
         }
 
-        const angleOffset = (-Math.PI / 2) + (ringIndex * 0.31);
+        const angleOffset = (-Math.PI / 2) + (ringIndex * 0.37);
 
         ring.forEach((item, ringItemIndex) => {
             const angle = angleOffset + ((Math.PI * 2) * (ringItemIndex / Math.max(1, ring.length)));
 
             appendPreparedGroup(updates, item, {
-                x: centerX + Math.cos(angle) * (ringRadius + item.radius * 0.18),
-                y: centerY + Math.sin(angle) * (ringRadius + item.radius * 0.18),
+                x: centerX + Math.cos(angle) * (ringRadius + item.radius * 0.22),
+                y: centerY + Math.sin(angle) * (ringRadius + item.radius * 0.22),
             });
         });
 
-        ringRadius += Math.max(460 * spacingScale, (maxRadius * 2.2) + (300 * spacingScale));
+        ringRadius += Math.max(520 * spacingScale * graphScale, (maxRadius * 2.35) + (340 * spacingScale * graphScale));
         ringIndex += 1;
     }
+}
+
+function hierarchyDistances(cy, focus) {
+    const distances = new Map([[focus.id(), 0]]);
+    const queue = [focus];
+
+    for (let index = 0; index < queue.length; index += 1) {
+        const current = queue[index];
+        const nextDistance = (distances.get(current.id()) || 0) + 1;
+
+        current.connectedEdges()
+            .not('.network-filtered')
+            .connectedNodes()
+            .not('.network-filtered')
+            .forEach((node) => {
+                if (distances.has(node.id())) {
+                    return;
+                }
+
+                distances.set(node.id(), nextDistance);
+                queue.push(node);
+            });
+    }
+
+    return distances;
+}
+
+function hierarchyLabel(distance) {
+    if (distance === 0) {
+        return 'Fokus';
+    }
+
+    if (distance === 1) {
+        return 'Direkt';
+    }
+
+    if (Number.isFinite(distance)) {
+        return `Ebene ${distance}`;
+    }
+
+    return 'Ohne Pfad';
+}
+
+function profileListItems(cy) {
+    const visibleNodes = cy.nodes().not('.network-filtered');
+    const nodes = visibleNodes.toArray();
+    const focus = primaryLayoutNode(nodes);
+
+    if (!focus) {
+        return [];
+    }
+
+    const distances = hierarchyDistances(cy, focus);
+
+    return nodes
+        .filter((node) => node.data('type') !== 'person' || node.id() === focus.id() || node.data('isPrimary') || node.data('isFocus'))
+        .map((node) => ({
+            node,
+            distance: distances.get(node.id()) ?? Number.POSITIVE_INFINITY,
+            degree: visibleDegree(node),
+        }))
+        .sort((left, right) => left.distance - right.distance
+            || (right.node.data('isKnownProfile') ? 1 : 0) - (left.node.data('isKnownProfile') ? 1 : 0)
+            || (visibilityValue(right.node.data()) === 'public' ? 1 : 0) - (visibilityValue(left.node.data()) === 'public' ? 1 : 0)
+            || right.degree - left.degree
+            || String(left.node.data('handle') || left.node.data('fullLabel') || left.node.id())
+                .localeCompare(String(right.node.data('handle') || right.node.data('fullLabel') || right.node.id())));
+}
+
+function renderProfileList(root, cy) {
+    const list = root.querySelector('[data-network-profile-list]');
+    const count = root.querySelector('[data-network-profile-list-count]');
+
+    if (!list) {
+        return;
+    }
+
+    const items = profileListItems(cy);
+    const profileCount = items.filter((item) => item.node.data('type') !== 'person').length;
+
+    if (count) {
+        count.textContent = `${profileCount.toLocaleString('de-DE')} Profile sichtbar`;
+    }
+
+    list.replaceChildren();
+
+    if (!items.length) {
+        const empty = document.createElement('p');
+        empty.className = 'px-1 py-2 text-sm text-slate-500';
+        empty.textContent = 'Noch keine Profile geladen.';
+        list.append(empty);
+        return;
+    }
+
+    const fragment = document.createDocumentFragment();
+
+    items.forEach((item, index) => {
+        const { node, distance, degree } = item;
+        const isPerson = node.data('type') === 'person';
+        const row = document.createElement('div');
+        const rank = document.createElement('div');
+        const avatar = avatarElement(node.data());
+        const content = document.createElement('div');
+        const titleLine = document.createElement('div');
+        const title = document.createElement('button');
+        const handle = document.createElement('div');
+        const meta = document.createElement('div');
+        const actions = document.createElement('div');
+        const instagramUrl = instagramProfileUrl(node);
+
+        row.className = 'grid grid-cols-[2.25rem_2.25rem_minmax(0,1fr)] gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm';
+        rank.className = 'pt-1 text-right text-xs font-black text-slate-400 tabular-nums';
+        rank.textContent = String(index + 1);
+        content.className = 'min-w-0';
+        titleLine.className = 'flex min-w-0 items-center gap-2';
+        title.type = 'button';
+        title.className = 'truncate text-left font-bold text-slate-950 hover:text-pink-700';
+        title.textContent = node.data('fullLabel') || node.data('label') || node.id();
+        title.addEventListener('click', () => {
+            if (isPerson && node.data('detailUrl')) {
+                dispatchProfileListAction(root, node, 'detail');
+            } else {
+                dispatchProfileListAction(root, node, 'open');
+            }
+        });
+
+        handle.className = 'mt-0.5 truncate text-xs font-semibold text-slate-500';
+        handle.textContent = [node.data('handle'), node.data('role')].filter(Boolean).join(' · ') || node.id();
+
+        meta.className = 'mt-1 flex flex-wrap gap-1.5 text-[11px] font-semibold text-slate-500';
+        [
+            hierarchyLabel(distance),
+            `${degree} Kanten`,
+            visibilityLabel(node.data()),
+            node.data('isKnownProfile') ? 'Bekannt' : null,
+        ].filter(Boolean).forEach((label) => {
+            const badge = document.createElement('span');
+            badge.className = 'rounded-full bg-slate-100 px-2 py-0.5';
+            badge.textContent = label;
+            meta.append(badge);
+        });
+
+        actions.className = 'mt-2 flex flex-wrap gap-1.5';
+
+        if (isPerson && node.data('detailUrl')) {
+            const detail = document.createElement('button');
+            detail.type = 'button';
+            detail.className = 'rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50';
+            detail.textContent = 'Person';
+            detail.addEventListener('click', () => dispatchProfileListAction(root, node, 'detail'));
+            actions.append(detail);
+        } else if (!isPerson) {
+            const preview = document.createElement('button');
+            preview.type = 'button';
+            preview.className = 'rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50';
+            preview.textContent = 'Profil';
+            preview.addEventListener('click', () => dispatchProfileListAction(root, node, 'open'));
+            actions.append(preview);
+
+            const scan = document.createElement('button');
+            scan.type = 'button';
+            scan.className = 'rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-bold text-sky-700 hover:bg-sky-100';
+            scan.textContent = 'Scan';
+            scan.addEventListener('click', () => dispatchProfileListAction(root, node, 'scan'));
+            actions.append(scan);
+        }
+
+        if (instagramUrl) {
+            const external = document.createElement('a');
+            external.href = instagramUrl;
+            external.target = '_blank';
+            external.rel = 'noopener noreferrer';
+            external.className = 'rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50';
+            external.textContent = 'Instagram';
+            actions.append(external);
+        }
+
+        titleLine.append(title);
+        content.append(titleLine, handle, meta, actions);
+        row.append(rank, avatar, content);
+        fragment.append(row);
+    });
+
+    list.append(fragment);
 }
 
 function placeSpiralGroups(preparedGroups, updates, centerX, centerY, spacingScale) {
@@ -3082,13 +3424,15 @@ function placeConcentricGroups(preparedGroups, updates, centerX, centerY, spacin
 
 function placeGroupedLayout(root, cy, visibleNodes, mode) {
     const state = instances.get(root);
-    const spacingScale = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5);
+    const nodeCount = visibleNodes.length;
+    const spacingScale = normalizedScale(state?.layoutSpacingScale, 1, 0.5, 5)
+        * (nodeCount > 1200 ? 1.24 : (nodeCount > 650 ? 1.12 : 1));
     const nodes = visibleNodes.toArray();
     const focus = primaryLayoutNode(nodes);
     const { centerX, centerY } = layoutCenter(
         visibleNodes,
-        Math.max(1300, visibleNodes.length * 38),
-        Math.max(900, visibleNodes.length * 28),
+        Math.max(1300, nodeCount * (nodeCount > 650 ? 48 : 38)),
+        Math.max(900, nodeCount * (nodeCount > 650 ? 36 : 28)),
     );
     const groups = connectedLayoutGroups(cy, visibleNodes, focus);
     const updates = [{ node: focus, position: { x: centerX, y: centerY } }];
@@ -3827,6 +4171,20 @@ function applyFilters(root, cy, options = {}) {
         updateButton(button, active);
     });
 
+    root.querySelectorAll('[data-network-connection-state]').forEach((button) => {
+        const connectionState = button.dataset.networkConnectionState;
+        const active = {
+            mutual: state.showMutual,
+            following: state.showFollowing,
+            'known-profile': state.showKnownProfile,
+            'known-person-link': state.showKnownPersonLink,
+            reconstructed: state.showReconstructed,
+            suggestion: state.showSuggestion,
+        }[connectionState] ?? true;
+
+        updateButton(button, active);
+    });
+
     const minDegreeControl = root.querySelector('[data-network-filter-min-degree]');
 
     if (minDegreeControl) {
@@ -3834,12 +4192,20 @@ function applyFilters(root, cy, options = {}) {
         minDegreeControl.value = String(state.minDegree);
     }
 
+    root.querySelectorAll('[data-network-min-degree-current]').forEach((element) => {
+        element.textContent = String(effectiveMinDegree);
+    });
+
     const maxProfilesControl = root.querySelector('[data-network-filter-max-profiles]');
 
     if (maxProfilesControl) {
         ensureMaxProfilesOption(root, state.maxVisibleProfiles);
         maxProfilesControl.value = String(state.maxVisibleProfiles);
     }
+
+    root.querySelectorAll('[data-network-max-profiles-current]').forEach((element) => {
+        element.textContent = Number(state.maxVisibleProfiles || 0).toLocaleString('de-DE');
+    });
 
     const maxProfilesLabel = root.querySelector('[data-network-visible-profiles-count]');
 
@@ -3854,6 +4220,7 @@ function applyFilters(root, cy, options = {}) {
         debugMinDegree.textContent = String(effectiveMinDegree);
     }
 
+    renderProfileList(root, cy);
     writeStoredFilters(root, state);
 
     if (options.layout === true) {
@@ -3874,6 +4241,12 @@ function resetFiltersToVisibleDefaults(root, cy, state) {
     state.showInferred = true;
     state.showTracked = true;
     state.showDirectOnly = false;
+    state.showMutual = true;
+    state.showFollowing = true;
+    state.showKnownProfile = true;
+    state.showKnownPersonLink = true;
+    state.showReconstructed = true;
+    state.showSuggestion = true;
     state.minDegree = 0;
     state.maxVisibleProfiles = networkMaxVisibleProfiles(root);
     state.hasStoredMinDegree = false;
@@ -4025,6 +4398,40 @@ function scheduleVisualSettingsRefresh(root, cy) {
 
 function bindControls(root, cy) {
     const state = instances.get(root);
+    const refreshProfileList = (event) => {
+        const detail = eventDetail(event);
+
+        if (detail.mapId && detail.mapId !== root.dataset.networkMapId) {
+            return;
+        }
+
+        renderProfileList(root, cy);
+    };
+
+    window.addEventListener('network-map-profile-list-refresh', refreshProfileList);
+
+    const focusNodeFromCommand = (event, attempt = 0) => {
+        const detail = eventDetail(event);
+
+        if (detail.mapId && detail.mapId !== root.dataset.networkMapId) {
+            return;
+        }
+
+        if (focusCommandNode(root, cy, detail)) {
+            return;
+        }
+
+        if (attempt < 8 && (instances.get(root)?.isLoadingGraph || cy.nodes().length === 0)) {
+            window.setTimeout(() => focusNodeFromCommand(event, attempt + 1), 250);
+        }
+    };
+
+    window.addEventListener('network-map-focus-node', focusNodeFromCommand);
+
+    if (state) {
+        state.cleanupCallbacks.push(() => window.removeEventListener('network-map-profile-list-refresh', refreshProfileList));
+        state.cleanupCallbacks.push(() => window.removeEventListener('network-map-focus-node', focusNodeFromCommand));
+    }
 
     root.querySelectorAll('[data-network-filter]').forEach((button) => {
         button.addEventListener('click', () => {
@@ -4039,6 +4446,34 @@ function bindControls(root, cy) {
             }
 
             applyFilters(root, cy);
+            if (state.viewMode === '3d') {
+                scheduleThreeRender(root);
+            } else {
+                fitGraph(cy, { tight: true });
+            }
+        });
+    });
+
+    root.querySelectorAll('[data-network-connection-state]').forEach((button) => {
+        button.addEventListener('click', () => {
+            const connectionState = button.dataset.networkConnectionState;
+
+            if (connectionState === 'mutual') {
+                state.showMutual = !state.showMutual;
+            } else if (connectionState === 'following') {
+                state.showFollowing = !state.showFollowing;
+            } else if (connectionState === 'known-profile') {
+                state.showKnownProfile = !state.showKnownProfile;
+            } else if (connectionState === 'known-person-link') {
+                state.showKnownPersonLink = !state.showKnownPersonLink;
+            } else if (connectionState === 'reconstructed') {
+                state.showReconstructed = !state.showReconstructed;
+            } else if (connectionState === 'suggestion') {
+                state.showSuggestion = !state.showSuggestion;
+            }
+
+            applyFilters(root, cy);
+
             if (state.viewMode === '3d') {
                 scheduleThreeRender(root);
             } else {
@@ -4182,6 +4617,7 @@ function disposeNetworkMapState(root, state) {
     window.clearTimeout(state.nodeTapTimer);
     window.clearTimeout(state.layoutSaveTimer);
     window.clearTimeout(state.layoutSettingsTimer);
+    state.cleanupCallbacks?.forEach((callback) => callback());
     destroyThreeScene(state);
     state.cy?.destroy?.();
     instances.delete(root);
@@ -4408,6 +4844,12 @@ async function initNetworkMap(root) {
             showInferred: storedFilters.showInferred ?? true,
             showTracked: storedFilters.showTracked ?? true,
             showDirectOnly: storedFilters.showDirectOnly ?? false,
+            showMutual: storedFilters.showMutual ?? true,
+            showFollowing: storedFilters.showFollowing ?? true,
+            showKnownProfile: storedFilters.showKnownProfile ?? true,
+            showKnownPersonLink: storedFilters.showKnownPersonLink ?? true,
+            showReconstructed: storedFilters.showReconstructed ?? true,
+            showSuggestion: storedFilters.showSuggestion ?? true,
             minDegree: storedMinDegree ?? 0,
             maxVisibleProfiles: storedMaxVisibleProfiles ?? selectedMaxVisibleProfiles(root),
             layoutSpacingScale: normalizedScale(storedFilters.layoutSpacingScale ?? storedLayoutSettings.layoutSpacingScale, 1, 0.5, 5),
@@ -4439,6 +4881,7 @@ async function initNetworkMap(root) {
             layoutSettingsTimer: null,
             threeState: null,
             threeRenderQueued: false,
+            cleanupCallbacks: [],
         };
 
         instances.set(root, state);
@@ -4646,6 +5089,7 @@ function addGraphChunk(root, cy, chunk) {
         state.loadedEdges += edgeElements.length;
         applyEdgeRenderState(cy, state);
         applyVisualSettings(root, cy);
+        renderProfileList(root, cy);
     }
 }
 
@@ -4675,6 +5119,7 @@ function resetGraph(root) {
     window.clearTimeout(state.layoutSettingsTimer);
     state.cy.elements().remove();
     updateSelectionPanel(root, state.cy);
+    renderProfileList(root, state.cy);
     schedulePublicBadgeUpdate(root, state.cy);
     scheduleThreeRender(root);
     updateBuildStatus(root, {

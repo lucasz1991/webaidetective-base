@@ -27,9 +27,9 @@ class NetworkMap extends Component
 
     private const GRAPH_EDGE_CHUNK_SIZE = 500;
 
-    private const MAX_GRAPH_NODES = 250;
+    private const MAX_GRAPH_NODES = 2000;
 
-    private const MAX_CONTACT_IMAGES = 50;
+    private const MAX_CONTACT_IMAGES = 500;
 
     private const MAX_SYSTEM_RELATIONSHIPS = 1500;
 
@@ -149,7 +149,7 @@ class NetworkMap extends Component
             ];
         })->toArray();
 
-        $data['graph_version'] = 12;
+        $data['graph_version'] = 13;
         $data['graph_node_limit'] = self::MAX_GRAPH_NODES;
         $data['contact_image_limit'] = self::MAX_CONTACT_IMAGES;
         $data['context_tracked_person_id'] = $this->contextTrackedPersonId;

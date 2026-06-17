@@ -989,6 +989,10 @@ class TrackedPersonDetail extends Component
                 'displayName' => is_scalar($item['displayName'] ?? null) ? trim((string) $item['displayName']) : '',
                 'profileUrl' => is_scalar($item['profileUrl'] ?? null) ? trim((string) $item['profileUrl']) : '',
                 'sourcePublicUsername' => ltrim($sourcePublicUsername, '@'),
+                'fromSuggestionScan' => (bool) ($item['fromSuggestionScan'] ?? false),
+                'relationshipOriginLabel' => is_scalar($item['relationshipOriginLabel'] ?? null)
+                    ? trim((string) $item['relationshipOriginLabel'])
+                    : '',
             ];
         }
 
@@ -1073,6 +1077,8 @@ class TrackedPersonDetail extends Component
             $username = e($item['username']);
             $displayName = trim((string) ($item['displayName'] ?? ''));
             $sourcePublicUsername = trim((string) ($item['sourcePublicUsername'] ?? ''));
+            $relationshipOriginLabel = trim((string) ($item['relationshipOriginLabel'] ?? ''));
+            $fromSuggestionScan = (bool) ($item['fromSuggestionScan'] ?? false);
 
             $html .= '<div class="rounded-md bg-slate-50 px-3 py-2 text-xs">'
                 .'<div class="font-semibold text-slate-900">@'.$username.'</div>';
@@ -1083,6 +1089,12 @@ class TrackedPersonDetail extends Component
 
             if ($sourcePublicUsername !== '') {
                 $html .= '<div class="mt-1 text-[11px] text-slate-500">Quelle: @'.e($sourcePublicUsername).'</div>';
+            }
+
+            if ($fromSuggestionScan || $relationshipOriginLabel !== '') {
+                $html .= '<div class="mt-1 inline-flex rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">'
+                    .e($relationshipOriginLabel !== '' ? $relationshipOriginLabel : 'Aus Vorschlaege-Scan')
+                    .'</div>';
             }
 
             $html .= '</div>';

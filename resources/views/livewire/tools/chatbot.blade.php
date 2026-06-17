@@ -12,6 +12,7 @@
         pendingLabel: '',
         selectedChatOptions: {},
         resumingScanToken: null,
+        networkMapFullscreen: false,
         voiceSupported: false,
         listening: false,
         recognition: null,
@@ -70,6 +71,7 @@
                 tracked_person_id: trackedPersonMatch ? trackedPersonMatch[1] : null,
                 instagram_profile_id: instagramProfileMatch ? instagramProfileMatch[1] : null,
                 network_map_open: Boolean(mapRoot),
+                network_map_fullscreen: this.networkMapFullscreen,
                 network_map_id: mapRoot?.dataset.networkMapId || null,
                 network_focus_tracked_person_id: mapRoot?.dataset.networkFocusTrackedPersonId || null,
                 ...extra,
@@ -270,6 +272,7 @@
         },
         updateNetworkContext(event) {
             const detail = this.normalizeEventDetail(event);
+            this.networkMapFullscreen = Boolean(detail.fullscreen);
 
             this.syncContext({
                 network_map_open: detail.open !== false,
@@ -623,6 +626,15 @@
             if (action?.type === 'navigate' && action.url) {
                 window.setTimeout(() => this.navigateTo(action.url), 850);
             }
+
+            if (['network_map', 'network-map', 'control_network_map'].includes(action?.type)) {
+                window.dispatchEvent(new CustomEvent('network-map-command', {
+                    detail: {
+                        ...action,
+                        command: action.command || action.map_action || action.action,
+                    },
+                }));
+            }
         },
         navigateTo(url) {
             if (!url) return;
@@ -674,7 +686,7 @@
     x-on:assistant-context-profile-preview.window="updateProfilePreview($event)"
     x-on:assistant-ui-action.window="handleUiAction($event)"
     x-on:keydown.escape.window="if (showChat) { stopSpeaking(); showChat = false }"
-    x-on:livewire:navigated.window="syncContext({
+    x-on:livewire:navigated.window="networkMapFullscreen = false; syncContext({
         selected_node_id: null,
         selected_node_type: null,
         selected_profile_username: null,
@@ -703,7 +715,7 @@
         </button>
 
         <div
-            x-show="showChat"
+            x-show="showChat && !networkMapFullscreen"
             x-cloak
             x-transition:enter="transition-opacity ease-out duration-200"
             x-transition:enter-start="opacity-0"
@@ -727,7 +739,7 @@
             x-transition:leave-end="translate-y-3 scale-95 opacity-0"
             class="fixed bottom-4 right-4 z-[70] flex h-[min(700px,calc(100vh-2rem))] w-[min(440px,calc(100vw-2rem))] flex-col overflow-hidden rounded-[1.75rem] border border-white/80 bg-white shadow-[0_30px_80px_-20px_rgba(15,23,42,.45)] ring-1 ring-slate-900/5"
             role="dialog"
-            aria-modal="true"
+            x-bind:aria-modal="networkMapFullscreen ? 'false' : 'true'"
             aria-label="Investigation Copilot"
         >
             <header class="relative overflow-visible border-b border-cyan-300/40 bg-gradient-to-r from-sky-600 via-cyan-600 to-emerald-600 px-3 py-2.5 text-white">
