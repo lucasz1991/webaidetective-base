@@ -13,9 +13,9 @@ use App\Models\TrackedPersonInstagramSnapshot;
 use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramPostMediaStorage;
 use App\Services\Social\InstagramScraper;
+use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 class TrackedPersonInstagramPostScanService
@@ -107,13 +107,14 @@ class TrackedPersonInstagramPostScanService
         int $userId,
     ): InstagramPostScan {
         $this->assertActiveScanCurrent();
+        DatabaseKeepAlive::ping(0);
 
         $postPayload = is_array($payload['postsScan'] ?? null) ? $payload['postsScan'] : [];
         $posts = $this->normalizePosts($postPayload['items'] ?? []);
         $rawPayload = $this->withoutPostEngagementDetails($payload);
         $scannedAt = now('UTC');
 
-        $stored = DB::transaction(function () use (
+        $stored = DatabaseKeepAlive::transaction(function () use (
             $trackedPerson,
             $profile,
             $snapshot,

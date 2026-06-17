@@ -4,8 +4,8 @@ namespace App\Services\Billing;
 
 use App\Models\CreditTransaction;
 use App\Models\CreditWallet;
+use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Support\Facades\DB;
 
 class ScanCreditService
 {
@@ -17,7 +17,7 @@ class ScanCreditService
             return 0;
         }
 
-        return DB::transaction(function () use ($userId, $reference, $credits, $description): int {
+        return DatabaseKeepAlive::transaction(function () use ($userId, $reference, $credits, $description): int {
             $wallet = CreditWallet::query()->firstOrCreate(
                 ['user_id' => $userId],
                 [

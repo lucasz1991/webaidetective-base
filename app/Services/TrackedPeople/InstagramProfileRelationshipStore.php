@@ -11,8 +11,8 @@ use App\Models\TrackedPersonInstagramProfileLink;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\TrackedPersonPublicProfile;
 use App\Services\Social\InstagramProfileImageStorage;
+use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -237,8 +237,7 @@ class InstagramProfileRelationshipStore
             return null;
         }
 
-        DB::purge();
-        DB::reconnect();
+        DatabaseKeepAlive::reconnect();
 
         $scannedAt = $this->parseTimestamp($payload['analyzedAt'] ?? null) ?: now('UTC');
         $scan = InstagramProfileListScan::create([
@@ -304,6 +303,8 @@ class InstagramProfileRelationshipStore
         if (! $this->isReady() || ! in_array($listType, ['followers', 'following', 'profile_suggestions'], true)) {
             return 0;
         }
+
+        DatabaseKeepAlive::ping(15);
 
         $observedAt = $this->parseTimestamp($observedAt) ?: now('UTC');
         $normalizedItems = $this->normalizeRelationshipItems($items);

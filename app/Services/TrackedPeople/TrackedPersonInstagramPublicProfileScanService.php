@@ -11,10 +11,10 @@ use App\Models\TrackedPersonInstagramPublicProfileScanLog;
 use App\Models\TrackedPersonPublicProfile;
 use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramScraper;
+use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -203,6 +203,8 @@ class TrackedPersonInstagramPublicProfileScanService
                         &$currentProfileInferredFollowing,
                         &$scanPausedForRateLimit,
                     ): void {
+                        DatabaseKeepAlive::ping(15);
+
                         if (array_key_exists('inferredFollowers', $state)) {
                             $currentProfileInferredFollowers = $this->normalizeProgressConnectionItems(
                                 $state['inferredFollowers'],
@@ -586,6 +588,7 @@ class TrackedPersonInstagramPublicProfileScanService
         array $inferredFollowing,
     ): void {
         $this->assertActiveScanCurrent();
+        DatabaseKeepAlive::ping(0);
 
         $freshScan = $scan->fresh();
         $payload = is_array($freshScan?->raw_payload) ? $freshScan->raw_payload : [];
@@ -918,6 +921,7 @@ class TrackedPersonInstagramPublicProfileScanService
         ?TrackedPersonInstagramPublicProfileScan $existingScan = null,
     ): TrackedPersonInstagramPublicProfileScan {
         $this->assertActiveScanCurrent();
+        DatabaseKeepAlive::ping(0);
 
         $payload = $this->normalizePayloadScreenshotPaths($payload);
 
@@ -928,7 +932,7 @@ class TrackedPersonInstagramPublicProfileScanService
         $publicFollowsTarget = (bool) ($payload['publicProfileFollowsTarget'] ?? false);
         $analyzedAt = now('UTC');
 
-        return DB::transaction(function () use (
+        return DatabaseKeepAlive::transaction(function () use (
             $trackedPerson,
             $publicProfile,
             $payload,

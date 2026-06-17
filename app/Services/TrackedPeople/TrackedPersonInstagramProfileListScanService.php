@@ -8,9 +8,9 @@ use App\Models\TrackedPerson;
 use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
+use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
 class TrackedPersonInstagramProfileListScanService
@@ -270,8 +270,7 @@ class TrackedPersonInstagramProfileListScanService
 
     private function refreshDatabaseConnection(): void
     {
-        DB::purge();
-        DB::reconnect();
+        DatabaseKeepAlive::reconnect();
     }
 
     private function lastScanSuggestsResume(InstagramProfileListScan $lastScan, int $expectedCount): bool
@@ -318,6 +317,8 @@ class TrackedPersonInstagramProfileListScanService
 
     private function reportProgress(?callable $progress, array $payload): void
     {
+        DatabaseKeepAlive::ping(15);
+
         if ($progress) {
             $progress($payload);
         }
@@ -329,6 +330,8 @@ class TrackedPersonInstagramProfileListScanService
         ?callable $progress = null,
     ): callable {
         return function (array $state) use ($contextPerson, $profile, $progress): void {
+            DatabaseKeepAlive::ping(15);
+
             try {
                 $this->persistRelationshipPreviewProgress($contextPerson, $profile, $state);
             } catch (\Throwable) {

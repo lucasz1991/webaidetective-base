@@ -7,9 +7,9 @@ use App\Models\TrackedPersonInstagramSnapshot;
 use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
+use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -156,7 +156,9 @@ class TrackedPersonInstagramAnalysisService
         ]);
         $this->assertActiveScanCurrent();
 
-        $snapshot = DB::transaction(function () use (
+        DatabaseKeepAlive::ping(0);
+
+        $snapshot = DatabaseKeepAlive::transaction(function () use (
             $trackedPerson,
             $previousSnapshot,
             $payload,
@@ -396,7 +398,9 @@ class TrackedPersonInstagramAnalysisService
         ]);
         $this->assertActiveScanCurrent();
 
-        $snapshot = DB::transaction(function () use (
+        DatabaseKeepAlive::ping(0);
+
+        $snapshot = DatabaseKeepAlive::transaction(function () use (
             $trackedPerson,
             $previousSnapshot,
             $payload,
@@ -542,6 +546,8 @@ class TrackedPersonInstagramAnalysisService
         ?callable $progress = null,
     ): callable {
         return function (array $state) use ($trackedPerson, $progress): void {
+            DatabaseKeepAlive::ping(15);
+
             try {
                 $this->persistTrackedPersonProgressSnapshot($trackedPerson, $state);
             } catch (\Throwable) {
@@ -764,8 +770,7 @@ class TrackedPersonInstagramAnalysisService
 
     private function refreshDatabaseConnection(): void
     {
-        DB::purge();
-        DB::reconnect();
+        DatabaseKeepAlive::reconnect();
     }
 
     private function normalizeProgressRelationshipItems(mixed $items): array

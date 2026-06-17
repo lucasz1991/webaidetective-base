@@ -12,7 +12,6 @@ use App\Services\Social\InstagramScraper;
 use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 class TrackedPersonInstagramSuggestionScanService
@@ -542,7 +541,7 @@ class TrackedPersonInstagramSuggestionScanService
         }
         $analyzedAt = now('UTC');
 
-        $scan = DB::transaction(function () use (
+        $scan = DatabaseKeepAlive::transaction(function () use (
             $trackedPerson,
             $profile,
             $userId,

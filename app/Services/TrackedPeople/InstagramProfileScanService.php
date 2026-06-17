@@ -7,6 +7,7 @@ use App\Models\InstagramProfileScan;
 use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
+use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Facades\Cache;
 
 class InstagramProfileScanService
@@ -45,6 +46,8 @@ class InstagramProfileScanService
                 $progress,
             );
             $extracted = $this->extractor->extract($payload);
+            DatabaseKeepAlive::ping(0);
+
             $profile = $this->profileRelationshipStore->ensureProfile($username, [
                 'display_name' => $extracted['full_name'] ?? $profile->display_name,
                 'full_name' => $extracted['full_name'] ?? $profile->full_name,
