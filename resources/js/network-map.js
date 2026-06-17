@@ -1474,11 +1474,12 @@ async function ensureThreeScene(root, state) {
     }
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(threeBackgroundColorForMode(state.backgroundMode));
+    scene.background = null;
+    scene.fog = new THREE.FogExp2(threeFogColorForMode(state.backgroundMode), normalizeBackgroundMode(state.backgroundMode) === 'dark' ? 0.00036 : 0.00022);
     const camera = new THREE.PerspectiveCamera(54, 1, 1, 10000);
     camera.position.set(0, 0, 980);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
-    renderer.setClearColor(threeBackgroundColorForMode(state.backgroundMode), 1);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setClearColor(threeBackgroundColorForMode(state.backgroundMode), 0);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.domElement.className = 'h-full w-full';
     renderer.domElement.style.display = 'block';
@@ -1792,11 +1793,28 @@ function writeStoredBackgroundMode(root, mode) {
 }
 
 function threeBackgroundColorForMode(mode) {
-    return normalizeBackgroundMode(mode) === 'dark' ? 0x020617 : 0xf1f5f9;
+    return normalizeBackgroundMode(mode) === 'dark' ? 0x071327 : 0xf4f9ff;
 }
 
-function cssBackgroundColorForMode(mode) {
-    return normalizeBackgroundMode(mode) === 'dark' ? '#020617' : '#f1f5f9';
+function threeFogColorForMode(mode) {
+    return normalizeBackgroundMode(mode) === 'dark' ? 0x0b1f3a : 0xe8f4ff;
+}
+
+function cssBackgroundForMode(mode) {
+    if (normalizeBackgroundMode(mode) === 'dark') {
+        return [
+            'radial-gradient(circle at 18% 18%, rgba(37, 99, 235, 0.28), transparent 34%)',
+            'radial-gradient(circle at 82% 24%, rgba(14, 165, 233, 0.18), transparent 36%)',
+            'radial-gradient(circle at 52% 92%, rgba(30, 64, 175, 0.18), transparent 42%)',
+            'linear-gradient(135deg, #071327 0%, #0b1f3a 48%, #102a4c 100%)',
+        ].join(', ');
+    }
+
+    return [
+        'radial-gradient(circle at 18% 16%, rgba(56, 189, 248, 0.20), transparent 34%)',
+        'radial-gradient(circle at 82% 18%, rgba(129, 140, 248, 0.14), transparent 36%)',
+        'linear-gradient(135deg, #f8fbff 0%, #eef7ff 48%, #e0f2fe 100%)',
+    ].join(', ');
 }
 
 function viewModeStorageKey(root) {
@@ -1915,7 +1933,7 @@ function updateBackgroundControls(root, state) {
 
 function applyNetworkBackground(root, state) {
     const mode = normalizeBackgroundMode(state?.backgroundMode);
-    const color = cssBackgroundColorForMode(mode);
+    const background = cssBackgroundForMode(mode);
     const surface = root.querySelector('[data-network-surface]');
     const canvas = root.querySelector('[data-network-canvas]');
     const threeCanvas = root.querySelector('[data-network-3d-canvas]');
@@ -1926,14 +1944,14 @@ function applyNetworkBackground(root, state) {
 
     [surface, canvas, threeCanvas].forEach((element) => {
         if (element) {
-            element.style.backgroundColor = color;
+            element.style.background = background;
         }
     });
 
     if (state?.threeState?.THREE && state.threeState.scene && state.threeState.renderer) {
-        const threeColor = threeBackgroundColorForMode(mode);
-        state.threeState.scene.background = new state.threeState.THREE.Color(threeColor);
-        state.threeState.renderer.setClearColor(threeColor, 1);
+        state.threeState.scene.background = null;
+        state.threeState.scene.fog = new state.threeState.THREE.FogExp2(threeFogColorForMode(mode), mode === 'dark' ? 0.00036 : 0.00022);
+        state.threeState.renderer.setClearColor(threeBackgroundColorForMode(mode), 0);
         state.threeState.needsRender = true;
     }
 
