@@ -3847,12 +3847,48 @@ function applyFilters(root, cy, options = {}) {
     scheduleThreeRender(root);
 }
 
+function visibleNodeCount(cy) {
+    return cy.nodes().not('.network-filtered').length;
+}
+
+function resetFiltersToVisibleDefaults(root, cy, state) {
+    state.showPublic = true;
+    state.showInferred = true;
+    state.showTracked = true;
+    state.showDirectOnly = false;
+    state.minDegree = 0;
+    state.maxVisibleProfiles = networkMaxVisibleProfiles(root);
+    state.hasStoredMinDegree = false;
+    state.autoMinDegreeApplied = false;
+    cy.elements().removeClass('network-filtered network-faded network-neighbor network-selected');
+    applyEdgeRenderState(cy, state);
+    applyVisualSettings(root, cy);
+    writeStoredFilters(root, state);
+    updateSelectionPanel(root, cy);
+}
+
+function ensureVisibleGraph(root, cy, reason = '') {
+    const state = instances.get(root);
+
+    if (!state || !cy.nodes().length || visibleNodeCount(cy) > 0) {
+        return false;
+    }
+
+    console.warn('Network map filters hid all nodes; resetting filters.', { reason });
+    resetFiltersToVisibleDefaults(root, cy, state);
+
+    return true;
+}
+
 function fitGraph(cy, options = {}) {
-    if (rootStateForCy(cy)?.state?.viewMode === '3d') {
+    const rootState = rootStateForCy(cy);
+
+    if (rootState?.state?.viewMode === '3d') {
         return;
     }
 
     cy.resize();
+    ensureVisibleGraph(rootState?.root, cy, 'fit');
     const visibleNodes = cy.nodes().not('.network-filtered');
 
     if (!visibleNodes.length) {
@@ -4674,7 +4710,6 @@ async function loadPreparedGraph(root, detail) {
 
         const chunk = await response.json();
         addGraphChunk(root, cy, chunk);
-        applyFilters(root, cy, { layout: false });
         schedulePublicBadgeUpdate(root, cy);
 
         const progress = ((index + 1) / chunkCount) * 100;
@@ -4703,6 +4738,7 @@ async function loadPreparedGraph(root, detail) {
 
     applyAutoMinDegreeIfNeeded(root, cy);
     applyFilters(root, cy, { layout: false });
+    ensureVisibleGraph(root, cy, 'after-load-filters');
     state.isLoadingGraph = false;
     state.currentGraphLoadKey = '';
     state.loadedGraphKey = loadKey;
