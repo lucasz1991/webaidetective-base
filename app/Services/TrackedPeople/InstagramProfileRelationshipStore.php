@@ -372,6 +372,104 @@ class InstagramProfileRelationshipStore
         return $stored;
     }
 
+    public function syncLiveRelationshipListScan(
+        InstagramProfile $sourceProfile,
+        ?TrackedPerson $trackedPerson,
+        string $listType,
+        array $items,
+        mixed $observedAt = null,
+        array $payload = [],
+        ?int $userId = null,
+    ): ?InstagramProfileListScan {
+        if (! $this->isReady() || ! in_array($listType, ['followers', 'following'], true)) {
+            return null;
+        }
+
+        $observedAt = $this->parseTimestamp($observedAt) ?: now('UTC');
+        $normalizedItems = $this->normalizeRelationshipItems($items);
+
+        if ($normalizedItems === []) {
+            return null;
+        }
+
+        $resolvedUserId = $trackedPerson?->user_id ?: $userId;
+        $query = InstagramProfileListScan::query()
+            ->where('instagram_profile_id', $sourceProfile->id)
+            ->where('list_type', $listType)
+            ->where('scan_mode', 'profile_list_live')
+            ->where('complete', false)
+            ->whereNull('snapshot_id');
+
+        $resolvedUserId
+            ? $query->where('user_id', $resolvedUserId)
+            : $query->whereNull('user_id');
+
+        $scan = $query->latest('scanned_at')->first();
+
+        if (! $scan) {
+            $scan = InstagramProfileListScan::create([
+                'instagram_profile_id' => $sourceProfile->id,
+                'tracked_person_id' => $trackedPerson?->id,
+                'snapshot_id' => null,
+                'user_id' => $resolvedUserId,
+                'list_type' => $listType,
+                'scan_mode' => 'profile_list_live',
+                'status_level' => 'partial',
+                'status_message' => ($listType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' wird live gespeichert.',
+                'attempted' => true,
+                'available' => true,
+                'complete' => false,
+                'rate_limited' => false,
+                'gracefully_stopped' => false,
+                'expected_count' => $this->nullableInteger($payload['expected'] ?? null),
+                'observed_count' => 0,
+                'active_count' => 0,
+                'known_count' => 0,
+                'added_count' => 0,
+                'removed_count' => 0,
+                'search_attempted' => false,
+                'search_rounds' => 0,
+                'raw_payload' => [],
+                'scanned_at' => $observedAt,
+            ]);
+        }
+
+        foreach ($normalizedItems as $item) {
+            $this->upsertObservedRelationship($scan, $sourceProfile, $listType, $item, 'observed');
+        }
+
+        $activeCount = $scan->items()
+            ->whereIn('item_status', ['observed', 'added'])
+            ->count();
+        $existingPayload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
+
+        $scan->forceFill([
+            'tracked_person_id' => $scan->tracked_person_id ?: $trackedPerson?->id,
+            'user_id' => $scan->user_id ?: $resolvedUserId,
+            'status_level' => 'partial',
+            'status_message' => ($listType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' wird live gespeichert: '.number_format($activeCount, 0, ',', '.').' Eintraege.',
+            'attempted' => true,
+            'available' => $activeCount > 0,
+            'complete' => false,
+            'expected_count' => $this->nullableInteger($payload['expected'] ?? null) ?: $scan->expected_count,
+            'observed_count' => max($activeCount, $this->nullableInteger($payload['loaded'] ?? null) ?: 0),
+            'active_count' => $activeCount,
+            'known_count' => $activeCount,
+            'raw_payload' => [
+                ...$existingPayload,
+                'live' => true,
+                'source' => $payload['source'] ?? 'profile_list_live_delta',
+                'progress_stage' => $payload['progress_stage'] ?? null,
+                'loaded' => $payload['loaded'] ?? null,
+                'expected' => $payload['expected'] ?? null,
+                'last_progress_at' => $observedAt->toIso8601String(),
+            ],
+            'scanned_at' => $observedAt,
+        ])->save();
+
+        return $scan;
+    }
+
     public function ensureProfile(mixed $username, array $attributes = []): ?InstagramProfile
     {
         if (! $this->isReady()) {
@@ -757,7 +855,20 @@ class InstagramProfileRelationshipStore
         array $item,
         ?Carbon $observedAt,
     ): void {
-        InstagramProfileListScanItem::create([
+        $scanItem = InstagramProfileListScanItem::withTrashed()
+            ->where('list_scan_id', $scan->id)
+            ->where('relationship_id', $relationship->id)
+            ->where('item_status', $itemStatus)
+            ->first() ?: new InstagramProfileListScanItem([
+                'list_scan_id' => $scan->id,
+                'relationship_id' => $relationship->id,
+            ]);
+
+        if ($scanItem->trashed()) {
+            $scanItem->restore();
+        }
+
+        $scanItem->forceFill([
             'list_scan_id' => $scan->id,
             'relationship_id' => $relationship->id,
             'source_instagram_profile_id' => $sourceProfile->id,
@@ -769,7 +880,7 @@ class InstagramProfileRelationshipStore
             'profile_url_snapshot' => $item['profileUrl'] ?? null,
             'raw_item' => $item,
             'observed_at' => $observedAt ?: $scan->scanned_at,
-        ]);
+        ])->save();
     }
 
     private function storedRelationshipListFromSnapshot(

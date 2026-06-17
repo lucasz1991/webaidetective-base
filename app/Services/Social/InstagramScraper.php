@@ -986,6 +986,7 @@ class InstagramScraper
             && ! array_key_exists('suggestionConnections', $event)
             && ! array_key_exists('foundSuggestions', $event)
             && ! array_key_exists('observedSuggestionsPreview', $event)
+            && ! array_key_exists('observedSuggestionsDelta', $event)
             && ! array_key_exists('observedSuggestions', $event)
             && ! array_key_exists('suggestionsObserved', $event)
             && ! array_key_exists('suggestionBranchedConnections', $event)
@@ -1005,8 +1006,10 @@ class InstagramScraper
             'knownSuggestionCount' => (int) ($event['knownSuggestionCount'] ?? $event['knownObservedSuggestions'] ?? $event['suggestionKnownSeen'] ?? 0),
             'skippedSuggestions' => (int) ($event['skippedSuggestions'] ?? 0),
             'dismissedSuggestions' => (int) ($event['dismissedSuggestions'] ?? 0),
-            'observedSuggestions' => $this->normalizeConnectionProgressItems(
-                $event['observedSuggestionsPreview'] ?? $event['observedSuggestions'] ?? null,
+            'observedSuggestions' => $this->mergeConnectionProgressItems(
+                $this->normalizeConnectionProgressItems($event['observedSuggestions'] ?? null, 1000),
+                $this->normalizeConnectionProgressItems($event['observedSuggestionsPreview'] ?? null, 250),
+                $this->normalizeConnectionProgressItems($event['observedSuggestionsDelta'] ?? null, 1000),
             ),
             'suggestionBranchedConnections' => $this->normalizeSuggestionBranchProgressItems(
                 $event['suggestionBranchedConnections'] ?? $event['suggestionBranchedConnectionsPreview'] ?? null,
@@ -1116,14 +1119,38 @@ class InstagramScraper
     {
         if (
             ! in_array((string) ($event['relationship'] ?? ''), ['followers', 'following'], true)
-            || ! array_key_exists('itemsPreview', $event)
+            || (! array_key_exists('itemsPreview', $event) && ! array_key_exists('itemsDelta', $event))
         ) {
             return [];
         }
 
         return [
             'relationshipItems' => $this->normalizeConnectionProgressItems($event['itemsPreview'] ?? null, 250),
+            'relationshipItemsDelta' => $this->normalizeConnectionProgressItems($event['itemsDelta'] ?? null, 1000),
         ];
+    }
+
+    private function mergeConnectionProgressItems(array ...$itemGroups): array
+    {
+        $merged = [];
+
+        foreach ($itemGroups as $items) {
+            foreach ($items as $item) {
+                $username = $this->normalizeInstagramUsername((string) ($item['username'] ?? ''));
+
+                if ($username === null) {
+                    continue;
+                }
+
+                $merged[$username] = [
+                    ...($merged[$username] ?? []),
+                    ...$item,
+                    'username' => $username,
+                ];
+            }
+        }
+
+        return array_values($merged);
     }
 
     private function normalizeSuggestionDebugSamples(mixed $samples, int $limit): array

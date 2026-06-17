@@ -486,7 +486,7 @@
         </section>
     </div>
 
-    <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <section wire:poll.5s.visible class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h2 class="text-base font-bold text-slate-950">Letzte Listenscans</h2>
         <div class="mt-4 max-h-96 overflow-auto">
             <table class="min-w-full divide-y divide-slate-200 text-sm">

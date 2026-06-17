@@ -143,6 +143,7 @@ async function runProfileSuggestionConnectionScan(
   let rateLimitText = null;
   let dismissedCount = 0;
   let scraperProfileSwitchCount = 0;
+  const pendingObservedSuggestions = [];
   const maxScraperProfileSwitches = Math.max(0, Math.min(10, Number(runtimeConfig.suggestionMaxScraperProfileSwitches || 3)));
 
   const rememberObservedSuggestion = (candidate, extra = {}) => {
@@ -153,15 +154,19 @@ async function runProfileSuggestionConnectionScan(
     }
 
     const previous = observedSuggestionsByUsername.get(username) || {};
-    observedSuggestionsByUsername.set(username, {
+    const nextSuggestion = {
       ...previous,
       ...candidate,
       ...extra,
       username,
       profileUrl: candidate?.profileUrl || previous.profileUrl || `https://www.instagram.com/${username}/`,
-    });
+    };
+
+    observedSuggestionsByUsername.set(username, nextSuggestion);
+    pendingObservedSuggestions.push(nextSuggestion);
   };
   const observedSuggestionsPreview = () => Array.from(observedSuggestionsByUsername.values()).slice(-60);
+  const takeObservedSuggestionsDelta = () => pendingObservedSuggestions.splice(0, pendingObservedSuggestions.length);
   const switchScraperProfileFor429 = async (context, retryUrl) => {
     if (!switchScraperAccountAfterRateLimit || scraperProfileSwitchCount >= maxScraperProfileSwitches) {
       return false;
@@ -370,6 +375,7 @@ async function runProfileSuggestionConnectionScan(
       suggestionsObserved: observedSuggestions.length,
       observedSuggestionCount: observedSuggestions.length,
       observedSuggestionsPreview: observedSuggestions.slice(-60),
+      observedSuggestionsDelta: observedSuggestions,
       suggestionConnectionsPreview: [],
       gracefullyStopped: false,
       rateLimited,
@@ -557,6 +563,7 @@ async function runProfileSuggestionConnectionScan(
     suggestionsObserved: candidates.length,
     observedSuggestionCount: observedSuggestionsByUsername.size,
     observedSuggestionsPreview: observedSuggestionsPreview(),
+    observedSuggestionsDelta: takeObservedSuggestionsDelta(),
     profileLinkCandidatesSeen: targetSuggestions.profileLinkCandidatesSeen || 0,
     suggestionCollectionRounds: targetSuggestions.rounds || 0,
     suggestionKnownSeen: targetSuggestions.seenKnownCount || 0,
@@ -620,6 +627,7 @@ async function runProfileSuggestionConnectionScan(
         suggestionConnectionsPreview: matchedCandidates.slice(-40),
         observedSuggestionCount: observedSuggestionsByUsername.size,
         observedSuggestionsPreview: observedSuggestionsPreview(),
+        observedSuggestionsDelta: takeObservedSuggestionsDelta(),
         message: Number(candidate.previousNoMatchChecks || 0) > 0
           ? `@${candidate.username} wird nach frueherem Nichttreffer erneut geprueft.`
           : `@${candidate.username} wird auf Verbindung zu @${targetUsername} geprueft.`,
@@ -671,6 +679,7 @@ async function runProfileSuggestionConnectionScan(
             suggestionConnectionsPreview: matchedCandidates.slice(-40),
             observedSuggestionCount: observedSuggestionsByUsername.size,
             observedSuggestionsPreview: observedSuggestionsPreview(),
+            observedSuggestionsDelta: takeObservedSuggestionsDelta(),
             scraperProfileSwitchCount,
             maxScraperProfileSwitches,
             message: `HTTP 429 blieb nach ${scraperProfileSwitchCount} Scraper-Profilwechseln bestehen; Vorschlags-Scan wird pausiert.`,
@@ -728,6 +737,7 @@ async function runProfileSuggestionConnectionScan(
             suggestionConnectionsPreview: matchedCandidates.slice(-40),
             observedSuggestionCount: observedSuggestionsByUsername.size,
             observedSuggestionsPreview: observedSuggestionsPreview(),
+            observedSuggestionsDelta: takeObservedSuggestionsDelta(),
             message: `@${candidate.username} konnte nicht stabil geladen werden.`,
             ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
           });
@@ -759,6 +769,7 @@ async function runProfileSuggestionConnectionScan(
             foundSuggestions: matchedCandidates.length,
             suggestionConnectionsPreview: matchedCandidates.slice(-40),
             observedSuggestionCount: observedSuggestionsByUsername.size,
+            observedSuggestionsDelta: takeObservedSuggestionsDelta(),
             message: `@${candidate.username} ist oeffentlich; Follower und Gefolgt werden nach @${targetUsername} durchsucht.`,
             ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
           });
@@ -1041,6 +1052,7 @@ async function runProfileSuggestionConnectionScan(
           suggestionConnectionsPreview: matchedCandidates.slice(-40),
           observedSuggestionCount: observedSuggestionsByUsername.size,
           observedSuggestionsPreview: observedSuggestionsPreview(),
+          observedSuggestionsDelta: takeObservedSuggestionsDelta(),
           message: progressMessage,
           ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
         });
@@ -1105,6 +1117,7 @@ async function runProfileSuggestionConnectionScan(
           suggestionConnectionsPreview: matchedCandidates.slice(-40),
           observedSuggestionCount: observedSuggestionsByUsername.size,
           observedSuggestionsPreview: observedSuggestionsPreview(),
+          observedSuggestionsDelta: takeObservedSuggestionsDelta(),
           candidateError: errorMessage,
           skippedReason: 'candidate-error',
           message: `@${candidate.username} wurde wegen eines Fehlers uebersprungen; naechster Vorschlag wird geprueft.`,
@@ -1202,6 +1215,7 @@ async function runProfileSuggestionConnectionScan(
     suggestionConnectionsPreview: matchedCandidates.slice(-40),
     observedSuggestionCount: observedSuggestions.length,
     observedSuggestionsPreview: observedSuggestionsPreview(),
+    observedSuggestionsDelta: takeObservedSuggestionsDelta(),
     knownSuggestionCount: alreadyKnownObservedCount,
     knownObservedSuggestions: alreadyKnownObservedCount,
     gracefullyStopped,

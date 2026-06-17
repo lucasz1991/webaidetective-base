@@ -1266,12 +1266,12 @@ function parseInstagramMetricCount(rawValue = '') {
   return Number.isFinite(decimalValue) ? Math.round(decimalValue * multiplier) : null;
 }
 
-function buildRelationshipProgressPreview(usersByUsername, limit = 250) {
-  if (!(usersByUsername instanceof Map)) {
+function buildRelationshipProgressItems(items, limit = 250) {
+  if (!Array.isArray(items)) {
     return [];
   }
 
-  return Array.from(usersByUsername.values())
+  return items
     .slice(-Math.max(1, limit))
     .map((item) => ({
       username: item.username || null,
@@ -1289,6 +1289,14 @@ function buildRelationshipProgressPreview(usersByUsername, limit = 250) {
       sourceLists: Array.isArray(item.sourceLists) ? item.sourceLists : [],
     }))
     .filter((item) => item.username);
+}
+
+function buildRelationshipProgressPreview(usersByUsername, limit = 250) {
+  if (!(usersByUsername instanceof Map)) {
+    return [];
+  }
+
+  return buildRelationshipProgressItems(Array.from(usersByUsername.values()), limit);
 }
 
 function extractPostMetricFromHtml(html = '', keys = []) {
@@ -4141,7 +4149,7 @@ async function openFollowingDialog(page, username, runtimeConfig = {}) {
   return openInstagramRelationshipDialog(page, username, 'following', runtimeConfig);
 }
 
-function addRelationshipEntriesToMap(entries, usersByUsername, targetUsername) {
+function addRelationshipEntriesToMap(entries, usersByUsername, targetUsername, deltaItems = null) {
   let added = 0;
 
   for (const entry of entries) {
@@ -4169,6 +4177,10 @@ function addRelationshipEntriesToMap(entries, usersByUsername, targetUsername) {
 
     if (!existing) {
       added++;
+
+      if (Array.isArray(deltaItems)) {
+        deltaItems.push(nextEntry);
+      }
     }
   }
 
@@ -4555,7 +4567,8 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
         }
       }
 
-      const addedThisRound = addRelationshipEntriesToMap(entries, usersByUsername, targetUsername);
+      const addedItems = [];
+      const addedThisRound = addRelationshipEntriesToMap(entries, usersByUsername, targetUsername, addedItems);
       addedCount += addedThisRound;
       queryAddedCount += addedThisRound;
       searchRounds++;
@@ -4587,6 +4600,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
         source,
         queryIndex: queryIndex + 1,
         queryCount: queryQueue.length,
+        itemsDelta: buildRelationshipProgressItems(addedItems, checkpointSize),
         itemsPreview: buildRelationshipProgressPreview(usersByUsername, checkpointSize),
         ...livePreview,
       });
@@ -5070,7 +5084,8 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
         continue;
       }
 
-      addRelationshipEntriesToMap(entries, usersByUsername, targetUsername);
+      const addedItems = [];
+      addRelationshipEntriesToMap(entries, usersByUsername, targetUsername, addedItems);
 
       totalScrollRounds++;
       passRounds++;
@@ -5096,6 +5111,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
         unchangedRounds,
         atBottom: Boolean(lastScrollState?.atBottom),
         suggestionsVisible,
+        itemsDelta: buildRelationshipProgressItems(addedItems),
         itemsPreview: buildRelationshipProgressPreview(usersByUsername),
         ...livePreview,
       });

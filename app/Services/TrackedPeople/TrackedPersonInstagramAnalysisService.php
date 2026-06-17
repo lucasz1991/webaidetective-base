@@ -586,6 +586,8 @@ class TrackedPersonInstagramAnalysisService
             ? data_get($baselineSnapshot?->raw_payload, 'extractedProfile')
             : [];
         $relationshipItems = $this->normalizeProgressRelationshipItems($state['relationshipItems'] ?? []);
+        $relationshipDeltaItems = $this->normalizeProgressRelationshipItems($state['relationshipItemsDelta'] ?? []);
+        $relationshipPersistItems = $relationshipDeltaItems !== [] ? $relationshipDeltaItems : $relationshipItems;
         $now = now('UTC');
         $wasCancelled = $stage === 'scan-stop-requested'
             || (bool) ($state['gracefullyStopped'] ?? false);
@@ -719,20 +721,38 @@ class TrackedPersonInstagramAnalysisService
             'last_scanned_at' => $now,
         ]);
 
-        if ($sourceProfile && in_array($phase, ['followers', 'following'], true) && $relationshipItems !== []) {
+        if ($sourceProfile && in_array($phase, ['followers', 'following'], true) && $relationshipPersistItems !== []) {
+            $evidence = [
+                'source' => $relationshipDeltaItems !== [] ? 'tracked_person_live_delta' : 'tracked_person_live_preview',
+                'progress_stage' => $stage,
+                'loaded' => is_numeric($state['loaded'] ?? null) ? (int) $state['loaded'] : null,
+                'expected' => is_numeric($state['expected'] ?? null) ? (int) $state['expected'] : null,
+            ];
+
             $this->profileRelationshipStore->syncObservedRelationshipPreview(
                 $sourceProfile,
                 $trackedPerson,
                 $phase,
-                $relationshipItems,
+                $relationshipPersistItems,
                 $now,
+                $evidence,
+            );
+            $this->profileRelationshipStore->syncLiveRelationshipListScan(
+                $sourceProfile,
+                $trackedPerson,
+                $phase,
+                $relationshipPersistItems,
+                $now,
+                $evidence,
+                $trackedPerson->user_id,
             );
         }
     }
 
     private function shouldPersistProgressSnapshotState(string $phase, string $stage, array $state): bool
     {
-        $hasRelationshipItems = is_array($state['relationshipItems'] ?? null) && $state['relationshipItems'] !== [];
+        $hasRelationshipItems = (is_array($state['relationshipItems'] ?? null) && $state['relationshipItems'] !== [])
+            || (is_array($state['relationshipItemsDelta'] ?? null) && $state['relationshipItemsDelta'] !== []);
         $isTerminal = in_array($phase, ['done', 'error'], true)
             || in_array($stage, ['relationship-complete', 'relationship-rate-limited', 'scan-stop-requested', 'profile-collected'], true)
             || (bool) ($state['gracefullyStopped'] ?? false);
@@ -747,6 +767,7 @@ class TrackedPersonInstagramAnalysisService
             (string) ($state['loaded'] ?? ''),
             (string) ($state['expected'] ?? ''),
             (string) count(is_array($state['relationshipItems'] ?? null) ? $state['relationshipItems'] : []),
+            (string) count(is_array($state['relationshipItemsDelta'] ?? null) ? $state['relationshipItemsDelta'] : []),
             (string) ($state['percent'] ?? ''),
         ]);
         $now = microtime(true);

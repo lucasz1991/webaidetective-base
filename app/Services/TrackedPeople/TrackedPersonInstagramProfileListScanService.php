@@ -85,7 +85,7 @@ class TrackedPersonInstagramProfileListScanService
         array $relationships,
         int $userId,
     ): Collection {
-        $progress = $this->createLiveProgressCallback($contextPerson, $profile, $progress);
+        $progress = $this->createLiveProgressCallback($contextPerson, $profile, $userId, $progress);
         $relationships = collect($relationships)
             ->map(fn ($relationship): string => Str::lower(trim((string) $relationship)))
             ->filter(fn (string $relationship): bool => in_array($relationship, ['followers', 'following'], true))
@@ -327,13 +327,14 @@ class TrackedPersonInstagramProfileListScanService
     private function createLiveProgressCallback(
         ?TrackedPerson $contextPerson,
         InstagramProfile $profile,
+        int $userId,
         ?callable $progress = null,
     ): callable {
-        return function (array $state) use ($contextPerson, $profile, $progress): void {
+        return function (array $state) use ($contextPerson, $profile, $userId, $progress): void {
             DatabaseKeepAlive::ping(15);
 
             try {
-                $this->persistRelationshipPreviewProgress($contextPerson, $profile, $state);
+                $this->persistRelationshipPreviewProgress($contextPerson, $profile, $state, $userId);
             } catch (\Throwable) {
                 // Live-Fortschritt darf den eigentlichen Listen-Scan nicht abbrechen.
             }
@@ -348,6 +349,7 @@ class TrackedPersonInstagramProfileListScanService
         ?TrackedPerson $contextPerson,
         InstagramProfile $profile,
         array $state,
+        int $userId,
     ): void {
         $this->assertActiveScanCurrent();
 
@@ -357,7 +359,9 @@ class TrackedPersonInstagramProfileListScanService
             return;
         }
 
-        $items = collect(is_array($state['relationshipItems'] ?? null) ? $state['relationshipItems'] : [])
+        $deltaItems = is_array($state['relationshipItemsDelta'] ?? null) ? $state['relationshipItemsDelta'] : [];
+        $previewItems = is_array($state['relationshipItems'] ?? null) ? $state['relationshipItems'] : [];
+        $items = collect($deltaItems !== [] ? $deltaItems : $previewItems)
             ->filter(fn ($item): bool => is_array($item) && filled($item['username'] ?? null))
             ->values()
             ->all();
@@ -380,12 +384,30 @@ class TrackedPersonInstagramProfileListScanService
             'last_scanned_at' => now('UTC'),
         ]) ?: $profile;
 
+        $evidence = [
+            'source' => $deltaItems !== [] ? 'profile_list_live_delta' : 'profile_list_live_preview',
+            'progress_stage' => is_scalar($state['stage'] ?? null) ? (string) $state['stage'] : null,
+            'loaded' => is_numeric($state['loaded'] ?? null) ? (int) $state['loaded'] : null,
+            'expected' => is_numeric($state['expected'] ?? null) ? (int) $state['expected'] : null,
+        ];
+
         $this->profileRelationshipStore->syncObservedRelationshipPreview(
             $profile,
             $contextPerson,
             $phase,
             $items,
             now('UTC'),
+            $evidence,
+        );
+
+        $this->profileRelationshipStore->syncLiveRelationshipListScan(
+            $profile,
+            $contextPerson,
+            $phase,
+            $items,
+            now('UTC'),
+            $evidence,
+            $userId,
         );
     }
 

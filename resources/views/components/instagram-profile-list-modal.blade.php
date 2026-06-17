@@ -12,7 +12,7 @@
 @endphp
 
 <x-modal wire:model="{{ $model }}" maxWidth="3xl">
-    <div x-data="{ search: '', filter: 'active' }" class="flex max-h-[85vh] flex-col overflow-hidden">
+    <div wire:poll.5s.visible x-data="{ search: '', filter: 'active' }" class="flex max-h-[85vh] flex-col overflow-hidden">
         <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3 sm:px-5">
             <div>
                 <h3 class="text-lg font-bold text-slate-900">{{ $title }}</h3>

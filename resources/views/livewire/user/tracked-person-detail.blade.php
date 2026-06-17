@@ -306,7 +306,7 @@
 
 
     <x-modal wire:model="showFollowersModal" maxWidth="3xl">
-        <div x-data="{ search: '', showAdded: false, showScanRemoved: false, showCurrentRemoved: false, showHistory: false }" class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
+        <div wire:poll.5s.visible x-data="{ search: '', showAdded: false, showScanRemoved: false, showCurrentRemoved: false, showHistory: false }" class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
             <div class="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4 md:flex-row md:items-start md:justify-between">
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Followerliste</h3>
@@ -558,7 +558,7 @@
     </x-modal>
 
     <x-modal wire:model="showFollowingModal" maxWidth="3xl">
-        <div x-data="{ search: '', showAdded: false, showScanRemoved: false, showCurrentRemoved: false, showHistory: false }" class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
+        <div wire:poll.5s.visible x-data="{ search: '', showAdded: false, showScanRemoved: false, showCurrentRemoved: false, showHistory: false }" class="flex max-h-[calc(100vh-2rem)] flex-col overflow-hidden sm:max-h-[85vh]">
             <div class="flex flex-col gap-3 border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4 md:flex-row md:items-start md:justify-between">
                 <div>
                     <h3 class="text-lg font-bold text-slate-900">Gefolgt-Liste</h3>
