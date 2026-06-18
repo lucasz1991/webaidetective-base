@@ -108,6 +108,8 @@ class TrackedPersonDetail extends Component
 
     public bool $showPostEngagementModal = false;
 
+    public bool $showNetworkMap = false;
+
     public ?int $selectedPostId = null;
 
     public string $activePostEngagementType = 'comments';
@@ -139,6 +141,11 @@ class TrackedPersonDetail extends Component
         $this->trackedPersonId = $trackedPersonId;
         $this->compact = $compact;
         $this->fillFormFromModel($this->resolveTrackedPerson());
+    }
+
+    public function loadNetworkMap(): void
+    {
+        $this->showNetworkMap = true;
     }
 
     protected function rules(): array

@@ -111,16 +111,6 @@ class NetworkMap extends Component
         $this->loadNetworkGraph(dispatchPrepared: false);
     }
 
-    public function placeholder(): string
-    {
-        return <<<'HTML'
-        <div class="h-[420px] animate-pulse rounded-lg border border-slate-200 bg-slate-100 p-4">
-            <div class="h-4 w-40 rounded bg-slate-200"></div>
-            <div class="mt-3 h-3 w-64 max-w-full rounded bg-slate-200"></div>
-        </div>
-        HTML;
-    }
-
     private function generateDataHash(Collection $trackedPeople): string
     {
         $systemRelationshipState = InstagramProfileRelationship::query()

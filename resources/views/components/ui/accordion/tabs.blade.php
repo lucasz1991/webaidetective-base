@@ -40,6 +40,10 @@
         })(),
         get active() { return this.items.find(t => t.id === this.openTab) ?? this.items[0]; },
         get others() { return this.items.filter(t => t.id !== this.openTab); },
+        selectTab(id) {
+            this.openTab = id;
+            this.$dispatch('ui-tab-selected', { tab: id });
+        },
         mq: null,
         setupMQ(bp) {
             if (!bp) return;
@@ -68,7 +72,7 @@
             <template x-for="t in items" :key="t.id">
                 <button
                     type="button"
-                    @click.prevent="openTab = t.id"
+                    @click.prevent="selectTab(t.id)"
                     :class="openTab === t.id
                         ? 'text-blue-600 font-bold border-blue-300 bg-white border-b-0'
                         : 'text-gray-500 font-medium bg-white border-gray-300 border-b-blue-300'"
@@ -125,7 +129,7 @@
                                         type="button"
                                         class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 inline-flex items-center gap-2"
                                         role="menuitem"
-                                        @click="open=false; openTab = t.id"
+                                        @click="open=false; selectTab(t.id)"
                                     >
                                         <template x-if="t.icon">
                                             <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>

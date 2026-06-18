@@ -1028,7 +1028,17 @@
         </div>
     </x-modal>
 
-    <section id="profilinfos" class="scroll-mt-4">
+    <section
+        id="profilinfos"
+        class="scroll-mt-4"
+        x-data="{ networkMapRequested: @js($showNetworkMap) }"
+        x-on:ui-tab-selected="
+            if ($event.detail.tab === 'verbindungen' && !networkMapRequested) {
+                networkMapRequested = true;
+                $wire.loadNetworkMap();
+            }
+        "
+    >
         <x-ui.accordion.tabs
             :tabs="[
                 'analyse' => 'Analysen',
@@ -1086,12 +1096,17 @@
                 </div>
 
                 <div class="mt-4 rounded-xl border border-slate-200 bg-white p-3">
-                    <livewire:user.network-map
-                        lazy
-                        :tracked-person-id="$trackedPerson->id"
-                        :embedded="true"
-                        :key="'tracked-person-network-map-'.$trackedPerson->id"
-                    />
+                    @if($showNetworkMap)
+                        <livewire:user.network-map
+                            :tracked-person-id="$trackedPerson->id"
+                            :embedded="true"
+                            :key="'tracked-person-network-map-'.$trackedPerson->id"
+                        />
+                    @else
+                        <div class="flex h-[420px] items-center justify-center rounded-lg border border-slate-200 bg-slate-100 px-4 text-center text-sm font-semibold text-slate-500">
+                            Die Network Map wird beim Oeffnen dieses Tabs geladen.
+                        </div>
+                    @endif
                 </div>
 
                 <div class="mt-3 space-y-2">
