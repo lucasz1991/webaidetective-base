@@ -5514,7 +5514,19 @@ async function handlePreparedGraph(event) {
 }
 
 export function initNetworkMaps(scope = document) {
-    scope.querySelectorAll('[data-network-map-root]').forEach(initNetworkMap);
+    const roots = [];
+
+    if (scope?.matches?.('[data-network-map-root]')) {
+        roots.push(scope);
+    }
+
+    scope?.querySelectorAll?.('[data-network-map-root]').forEach((root) => {
+        if (!roots.includes(root)) {
+            roots.push(root);
+        }
+    });
+
+    roots.forEach(initNetworkMap);
 }
 
 export function destroyNetworkMaps() {
@@ -5572,11 +5584,14 @@ document.addEventListener('DOMContentLoaded', () => initNetworkMaps());
 document.addEventListener('livewire:navigating', () => destroyNetworkMaps());
 document.addEventListener('livewire:navigated', () => initNetworkMaps());
 document.addEventListener('livewire:init', () => {
-    window.Livewire?.hook?.('morph.updated', ({ el }) => {
+    const initializeMorphedNetworkMap = ({ el }) => {
         if (el?.matches?.('[data-network-map-root]') || el?.querySelector?.('[data-network-map-root]')) {
             refreshNetworkMapsSoon(el);
         }
-    });
+    };
+
+    window.Livewire?.hook?.('morph.added', initializeMorphedNetworkMap);
+    window.Livewire?.hook?.('morph.updated', initializeMorphedNetworkMap);
 });
 window.addEventListener('network-map-graph-prepared', handlePreparedGraph);
 window.addEventListener('network-map-empty', (event) => {
