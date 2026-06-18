@@ -242,6 +242,7 @@ class InstagramRelationshipListData
             ->keyBy(fn (InstagramProfile $profile): string => Str::lower((string) $profile->username));
 
         $profileIds = $profiles->pluck('id')->filter()->values();
+        $listScanStatuses = InstagramListScanStatus::forProfileIds($profileIds, (int) $trackedPerson->user_id);
         $trackedByProfileId = $trackedPerson->newQuery()
             ->where('user_id', $trackedPerson->user_id)
             ->whereIn('current_instagram_profile_id', $profileIds->all())
@@ -253,7 +254,7 @@ class InstagramRelationshipListData
             ->get(['id', 'current_instagram_profile_id', 'instagram_username'])
             ->keyBy(fn (TrackedPerson $person): string => Str::lower(ltrim((string) $person->instagram_username, '@')));
 
-        return $profiles->map(function (InstagramProfile $profile) use ($trackedByProfileId, $trackedByUsername): array {
+        return $profiles->map(function (InstagramProfile $profile) use ($trackedByProfileId, $trackedByUsername, $listScanStatuses): array {
             $username = Str::lower((string) $profile->username);
             $tracked = $trackedByProfileId->get($profile->id) ?: $trackedByUsername->get($username);
 
@@ -270,6 +271,7 @@ class InstagramRelationshipListData
                 'followingCount' => $profile->following_count,
                 'trackedPersonId' => $tracked?->id,
                 'isTracked' => (bool) $tracked,
+                'listScanStatuses' => $listScanStatuses[(int) $profile->id] ?? InstagramListScanStatus::defaultStatuses(),
             ];
         });
     }
@@ -301,6 +303,7 @@ class InstagramRelationshipListData
                     'followingCount' => $raw['followingCount'] ?? $profile['followingCount'],
                     'trackedPersonId' => $raw['trackedPersonId'] ?? $profile['trackedPersonId'],
                     'isTracked' => $raw['isTracked'] ?? $profile['isTracked'],
+                    'listScanStatuses' => $raw['listScanStatuses'] ?? $profile['listScanStatuses'],
                 ];
             })
             ->values();

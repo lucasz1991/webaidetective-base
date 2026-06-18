@@ -96,6 +96,44 @@
         ?? data_get($item, 'followingCount')
         ?? data_get($item, 'following_count')
         ?? $profile?->following_count;
+    $listScanStatuses = data_get($raw, 'listScanStatuses') ?? data_get($item, 'listScanStatuses') ?? [];
+
+    if (! is_array($listScanStatuses) || $listScanStatuses === []) {
+        $listScanStatuses = $profileId > 0
+            ? \App\Support\InstagramListScanStatus::forProfile($profileId, $userId)
+            : \App\Support\InstagramListScanStatus::defaultStatuses();
+    }
+
+    $followersListScanState = \App\Support\InstagramListScanStatus::normalizeState(
+        data_get($raw, 'followersListScanState')
+            ?? data_get($item, 'followersListScanState')
+            ?? data_get($listScanStatuses, 'followers.state')
+    );
+    $followingListScanState = \App\Support\InstagramListScanStatus::normalizeState(
+        data_get($raw, 'followingListScanState')
+            ?? data_get($item, 'followingListScanState')
+            ?? data_get($listScanStatuses, 'following.state')
+    );
+    $followersStatusState = \App\Support\InstagramListScanStatus::normalizeState(data_get($listScanStatuses, 'followers.state'));
+    $followingStatusState = \App\Support\InstagramListScanStatus::normalizeState(data_get($listScanStatuses, 'following.state'));
+    $scanStateTitle = fn (string $listType, string $state): string => match ($state) {
+        'complete' => ($listType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' vollstaendig gescannt',
+        'partial' => ($listType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' teilweise gescannt',
+        default => ($listType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' noch nicht gescannt',
+    };
+    $followersListScanTitle = $followersStatusState === $followersListScanState
+        ? (data_get($listScanStatuses, 'followers.title') ?: $scanStateTitle('followers', $followersListScanState))
+        : $scanStateTitle('followers', $followersListScanState);
+    $followingListScanTitle = $followingStatusState === $followingListScanState
+        ? (data_get($listScanStatuses, 'following.title') ?: $scanStateTitle('following', $followingListScanState))
+        : $scanStateTitle('following', $followingListScanState);
+    $scanMetricClass = fn (string $state): string => match ($state) {
+        'complete' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
+        'partial' => 'bg-amber-50 text-amber-800 ring-amber-200',
+        default => 'bg-slate-50 text-slate-500 ring-slate-200',
+    };
+    $followersMetricClass = $scanMetricClass($followersListScanState);
+    $followingMetricClass = $scanMetricClass($followingListScanState);
     $formatMetric = fn ($value): string => is_numeric($value) ? number_format((int) $value, 0, ',', '.') : '-';
     $trackedPersonId = (int) (data_get($item, 'trackedPersonId') ?? 0);
 
@@ -236,24 +274,22 @@
         @endif
     </div>
 
-    <div class="hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-slate-200 bg-white/70 px-2 py-1 text-[11px] font-semibold text-slate-600 md:flex">
-        <span title="Beitraege" class="inline-flex items-center gap-1">
+    <div class="hidden shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-slate-200 bg-white/70 px-2 py-1 text-[11px] font-semibold text-slate-600 md:flex">
+        <span title="Beitraege" class="inline-flex items-center gap-1 rounded px-1 py-0.5">
             <svg class="h-3.5 w-3.5 text-violet-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <rect x="4" y="5" width="16" height="14" rx="2" stroke="currentColor" stroke-width="2"/>
                 <path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
             </svg>
             {{ $formatMetric($postsCount) }}
         </span>
-        <span class="text-slate-300">/</span>
-        <span title="Follower" class="inline-flex items-center gap-1">
-            <svg class="h-3.5 w-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <span title="{{ $followersListScanTitle }}" aria-label="{{ $followersListScanTitle }}" class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 ring-1 {{ $followersMetricClass }}">
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M16 19c0-2.2-1.8-4-4-4s-4 1.8-4 4M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM19 19c0-1.6-.9-3-2.2-3.6M17 5.2a3 3 0 0 1 0 5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
             </svg>
             {{ $formatMetric($followersCount) }}
         </span>
-        <span class="text-slate-300">/</span>
-        <span title="Folgt" class="inline-flex items-center gap-1">
-            <svg class="h-3.5 w-3.5 text-sky-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <span title="{{ $followingListScanTitle }}" aria-label="{{ $followingListScanTitle }}" class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 ring-1 {{ $followingMetricClass }}">
+            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M10 19c0-2.2-1.8-4-4-4m0 0a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM14 7h6M17 4v6M14 19h6M17 16l3 3-3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             {{ $formatMetric($followingCount) }}

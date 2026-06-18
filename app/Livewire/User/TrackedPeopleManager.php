@@ -5,7 +5,6 @@ namespace App\Livewire\User;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonQuotaService;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\DB;
 use Livewire\Component;
 
 class TrackedPeopleManager extends Component
@@ -36,15 +35,7 @@ class TrackedPeopleManager extends Component
 
     public $snapchat_username = '';
 
-    public ?int $selectedTrackedPersonId = null;
-
-    public bool $showDetailModal = false;
-
     public bool $showCreateForm = false;
-
-    public ?int $trackedPersonIdPendingDeletion = null;
-
-    public bool $showDeleteConfirmationModal = false;
 
     public $managerStatus = null;
 
@@ -76,141 +67,6 @@ class TrackedPeopleManager extends Component
     public function toggleCreateForm(): void
     {
         $this->showCreateForm = ! $this->showCreateForm;
-    }
-
-    public function selectTrackedPerson(int $trackedPersonId): void
-    {
-        $user = Auth::user();
-
-        if (! $user || ! $user->trackedPeople()->whereKey($trackedPersonId)->exists()) {
-            return;
-        }
-
-        $this->selectedTrackedPersonId = $trackedPersonId;
-        $this->showDetailModal = true;
-    }
-
-    public function closeDetailModal(): void
-    {
-        $this->showDetailModal = false;
-    }
-
-    public function setMonitoringEnabled(int $trackedPersonId, bool $enabled): void
-    {
-        $trackedPerson = $this->trackedPersonForCurrentUser($trackedPersonId);
-
-        if (! $trackedPerson) {
-            return;
-        }
-
-        $trackedPerson->update([
-            'monitoring_enabled' => $enabled,
-            'monitoring_interval_minutes' => max(15, (int) ($trackedPerson->monitoring_interval_minutes ?: 60)),
-        ]);
-
-        $this->setManagerStatus(
-            $enabled
-                ? 'Dauerbeobachtung fuer "'.$trackedPerson->display_name.'" wurde aktiviert.'
-                : 'Dauerbeobachtung fuer "'.$trackedPerson->display_name.'" wurde deaktiviert.',
-            'success',
-        );
-    }
-
-    public function setMonitoringInterval(int $trackedPersonId, int $intervalMinutes): void
-    {
-        $trackedPerson = $this->trackedPersonForCurrentUser($trackedPersonId);
-
-        if (! $trackedPerson) {
-            return;
-        }
-
-        $allowedIntervals = [15, 30, 60, 120, 360, 720, 1440, 4320, 10080];
-        $intervalMinutes = in_array($intervalMinutes, $allowedIntervals, true)
-            ? $intervalMinutes
-            : 60;
-
-        $trackedPerson->update([
-            'monitoring_enabled' => true,
-            'monitoring_interval_minutes' => $intervalMinutes,
-        ]);
-
-        $this->setManagerStatus(
-            'Dauerbeobachtung fuer "'.$trackedPerson->display_name.'" laeuft jetzt alle '.$this->formatMonitoringInterval($intervalMinutes).'.',
-            'success',
-        );
-    }
-
-    public function confirmTrackedPersonDeletion(int $trackedPersonId): void
-    {
-        $user = Auth::user();
-
-        if (! $user || ! $user->trackedPeople()->whereKey($trackedPersonId)->exists()) {
-            return;
-        }
-
-        $this->trackedPersonIdPendingDeletion = $trackedPersonId;
-        $this->showDeleteConfirmationModal = true;
-    }
-
-    public function cancelTrackedPersonDeletion(): void
-    {
-        $this->trackedPersonIdPendingDeletion = null;
-        $this->showDeleteConfirmationModal = false;
-    }
-
-    public function deleteTrackedPerson(): void
-    {
-        $user = Auth::user();
-
-        if (! $user || ! $this->trackedPersonIdPendingDeletion) {
-            $this->cancelTrackedPersonDeletion();
-
-            return;
-        }
-
-        $trackedPerson = $user->trackedPeople()->whereKey($this->trackedPersonIdPendingDeletion)->first();
-
-        if (! $trackedPerson) {
-            $this->cancelTrackedPersonDeletion();
-
-            return;
-        }
-
-        $displayName = $trackedPerson->display_name;
-        $wasPrimary = (bool) $trackedPerson->is_primary;
-
-        try {
-            DB::transaction(function () use ($user, $trackedPerson, $wasPrimary): void {
-                $trackedPerson->delete();
-
-                if ($wasPrimary) {
-                    $user->trackedPeople()
-                        ->orderByRaw('instagram_username IS NULL')
-                        ->orderByDesc('last_instagram_analyzed_at')
-                        ->orderBy('instagram_username')
-                        ->first()
-                        ?->update(['is_primary' => true]);
-                }
-            });
-        } catch (\Throwable $exception) {
-            $this->setManagerStatus(
-                'Person "'.$displayName.'" konnte nicht geloescht werden: '.$exception->getMessage(),
-                'error',
-            );
-
-            return;
-        }
-
-        if ($this->selectedTrackedPersonId === $trackedPerson->id) {
-            $this->selectedTrackedPersonId = null;
-            $this->showDetailModal = false;
-        }
-
-        $this->cancelTrackedPersonDeletion();
-        $this->setManagerStatus(
-            'Person "'.$displayName.'" wurde geloescht.',
-            'success',
-        );
     }
 
     public function createTrackedPerson(): void
@@ -246,10 +102,9 @@ class TrackedPeopleManager extends Component
         $person = $user->trackedPeople()->create($validated);
         app(InstagramProfileRelationshipStore::class)->syncTrackedPersonProfile($person);
 
-        $this->selectedTrackedPersonId = $person->id;
-        $this->showDetailModal = true;
         $this->showCreateForm = false;
         $this->resetForm();
+        $this->dispatch('tracked-person-list-open', trackedPersonId: $person->id);
         $this->setManagerStatus(
             'Person "'.$person->display_name.'" wurde angelegt.',
             'success',
@@ -258,39 +113,7 @@ class TrackedPeopleManager extends Component
 
     public function render()
     {
-        $user = Auth::user();
-        $trackedPeople = $user
-            ? $user->trackedPeople()
-                ->with(['latestInstagramSnapshot', 'latestChangedInstagramSnapshot'])
-                ->orderByRaw('instagram_username IS NULL')
-                ->orderByDesc('last_instagram_analyzed_at')
-                ->orderBy('instagram_username')
-                ->get()
-            : collect();
-
-        if ($this->selectedTrackedPersonId && ! $trackedPeople->contains('id', $this->selectedTrackedPersonId)) {
-            $this->selectedTrackedPersonId = null;
-            $this->showDetailModal = false;
-        }
-
-        if ($trackedPeople->isEmpty()) {
-            $this->selectedTrackedPersonId = null;
-            $this->showDetailModal = false;
-        }
-
-        if ($this->selectedTrackedPersonId && $selectedTrackedPerson = $trackedPeople->firstWhere('id', $this->selectedTrackedPersonId)) {
-            $selectedTrackedPerson->load([
-                'instagramSnapshots' => fn ($query) => $query
-                    ->where('has_changes', true)
-                    ->latest('analyzed_at')
-                    ->limit(10),
-            ]);
-        }
-
-        return view('livewire.user.tracked-people-manager', [
-            'trackedPeople' => $trackedPeople,
-            'trackingLimit' => $user ? app(TrackedPersonQuotaService::class)->maxProfiles($user) : null,
-        ]);
+        return view('livewire.user.tracked-people-manager');
     }
 
     private function resetForm(): void
@@ -316,31 +139,6 @@ class TrackedPeopleManager extends Component
     {
         $this->managerStatus = $message;
         $this->managerStatusLevel = $level;
-    }
-
-    private function trackedPersonForCurrentUser(int $trackedPersonId)
-    {
-        $user = Auth::user();
-
-        return $user
-            ? $user->trackedPeople()->whereKey($trackedPersonId)->first()
-            : null;
-    }
-
-    private function formatMonitoringInterval(int $minutes): string
-    {
-        return match ($minutes) {
-            15 => '15 Minuten',
-            30 => '30 Minuten',
-            60 => '1 Stunde',
-            120 => '2 Stunden',
-            360 => '6 Stunden',
-            720 => '12 Stunden',
-            1440 => '1 Tag',
-            4320 => '3 Tage',
-            10080 => '7 Tage',
-            default => $minutes.' Minuten',
-        };
     }
 
     private function nullableTrim(?string $value): ?string
