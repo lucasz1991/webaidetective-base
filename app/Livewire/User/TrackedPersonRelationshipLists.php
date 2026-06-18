@@ -7,9 +7,16 @@ use App\Support\InstagramRelationshipListData;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Attributes\On;
 use Livewire\Component;
+use Livewire\WithoutUrlPagination;
+use Livewire\WithPagination;
 
 class TrackedPersonRelationshipLists extends Component
 {
+    use WithoutUrlPagination;
+    use WithPagination;
+
+    private const LIST_ITEMS_PER_PAGE = 50;
+
     public int $trackedPersonId;
 
     public bool $showFollowersModal = false;
@@ -25,12 +32,23 @@ class TrackedPersonRelationshipLists extends Component
     public function openList(string $listType): void
     {
         if ($listType === 'followers') {
+            $this->resetPage($this->relationshipPageName('followers'));
             $this->showFollowersModal = true;
         }
 
         if ($listType === 'following') {
+            $this->resetPage($this->relationshipPageName('following'));
             $this->showFollowingModal = true;
         }
+    }
+
+    public function loadMoreRelationshipList(string $listType): void
+    {
+        if (! in_array($listType, ['followers', 'following'], true)) {
+            return;
+        }
+
+        $this->nextPage($this->relationshipPageName($listType));
     }
 
     #[On('tracked-person-refresh')]
@@ -47,9 +65,34 @@ class TrackedPersonRelationshipLists extends Component
         return view('livewire.user.tracked-person-relationship-lists', [
             'trackedPerson' => $trackedPerson,
             'latestProfileIsPublic' => $latestProfileVisibility === 'public',
-            'followersListData' => $relationshipLists->forTrackedPerson($trackedPerson, 'followers'),
-            'followingListData' => $relationshipLists->forTrackedPerson($trackedPerson, 'following'),
+            'followersListData' => $this->paginateRelationshipListData(
+                $relationshipLists->forTrackedPerson($trackedPerson, 'followers'),
+            ),
+            'followingListData' => $this->paginateRelationshipListData(
+                $relationshipLists->forTrackedPerson($trackedPerson, 'following'),
+            ),
         ]);
+    }
+
+    private function paginateRelationshipListData(array $listData): array
+    {
+        $page = max(1, (int) $this->getPage($this->relationshipPageName($listData['listType'])));
+        $visibleLimit = $page * self::LIST_ITEMS_PER_PAGE;
+        $activeItems = $listData['activeItems'];
+
+        return [
+            ...$listData,
+            'visibleActiveItems' => $activeItems->take($visibleLimit),
+            'visibleActiveCount' => min($activeItems->count(), $visibleLimit),
+            'visibleLimit' => $visibleLimit,
+            'itemsPerPage' => self::LIST_ITEMS_PER_PAGE,
+            'hasMoreActiveItems' => $activeItems->count() > $visibleLimit,
+        ];
+    }
+
+    private function relationshipPageName(string $listType): string
+    {
+        return ($listType === 'following' ? 'following' : 'followers').'RelationshipPage';
     }
 
     private function resolveTrackedPerson(): TrackedPerson

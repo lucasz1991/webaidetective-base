@@ -169,9 +169,14 @@
                         @endif
 
                         @if($listData['activeItems']->isNotEmpty())
-                            <h4 class="mb-2 text-sm font-bold text-slate-900">{{ $listData['activeTitle'] }}</h4>
+                            <div class="mb-2 flex items-center justify-between gap-3">
+                                <h4 class="text-sm font-bold text-slate-900">{{ $listData['activeTitle'] }}</h4>
+                                <div class="text-xs font-semibold text-slate-500">
+                                    {{ number_format($listData['visibleActiveCount'], 0, ',', '.') }} / {{ number_format($listData['activeItems']->count(), 0, ',', '.') }}
+                                </div>
+                            </div>
                             <div class="space-y-2">
-                                @foreach($listData['activeItems'] as $item)
+                                @foreach($listData['visibleActiveItems'] as $item)
                                     <x-instagram.profile-list-item
                                         :item="$item"
                                         :tone="$tone"
@@ -179,6 +184,16 @@
                                     />
                                 @endforeach
                             </div>
+                            @if($listData['hasMoreActiveItems'])
+                                <div
+                                    wire:key="{{ $listType }}-relationship-load-more-{{ $listData['visibleLimit'] }}"
+                                    x-intersect.once="$wire.loadMoreRelationshipList('{{ $listType }}')"
+                                    class="mt-3 flex items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-xs font-semibold text-slate-500"
+                                >
+                                    <span class="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500"></span>
+                                    <span>Weitere {{ number_format($listData['itemsPerPage'], 0, ',', '.') }} laden</span>
+                                </div>
+                            @endif
                         @endif
                     @else
                         <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">

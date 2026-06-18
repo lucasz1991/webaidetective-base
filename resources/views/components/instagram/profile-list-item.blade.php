@@ -63,16 +63,6 @@
         $visibility = $isPrivate === true ? 'private' : ($isPrivate === false ? 'public' : 'unknown');
     }
 
-    $visibilityLabel = match ($visibility) {
-        'public' => 'Oeffentlich',
-        'private' => 'Privat',
-        default => 'Unbekannt',
-    };
-    $visibilityClass = match ($visibility) {
-        'public' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-        'private' => 'bg-slate-100 text-slate-700 ring-slate-200',
-        default => 'bg-amber-50 text-amber-800 ring-amber-200',
-    };
     $toneClass = match ($tone) {
         'emerald' => 'border-emerald-100 bg-white',
         'rose' => 'border-rose-100 bg-white',
@@ -85,6 +75,9 @@
         'sky' => 'bg-sky-50 text-sky-700',
         default => 'bg-slate-100 text-slate-600',
     };
+    $avatarRingClass = $visibility === 'public'
+        ? 'border-emerald-300 ring-2 ring-emerald-200'
+        : 'border-slate-200';
     $statusClass = match ($statusTone) {
         'emerald' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
         'rose' => 'bg-rose-50 text-rose-700 ring-rose-200',
@@ -120,6 +113,7 @@
     $trackedProfileUrl = $trackedPersonId > 0 ? route('tracked-people.show', $trackedPersonId) : null;
     $initial = strtoupper(substr($username !== '' ? $username : '?', 0, 1));
     $searchText = strtolower(trim($username.' '.$displayName.' '.$meta.' '.$statusLabel.' '.($isTracked ? 'beobachtet' : 'nicht beobachtet')));
+    $statusTitle = $statusLabel ?: 'Status';
 @endphp
 
 <div
@@ -129,9 +123,9 @@
     ]) }}
 >
     @if($imageUrl)
-        <img src="{{ $imageUrl }}" alt="{{ $username !== '' ? '@'.$username : 'Instagram-Profilbild' }}" loading="lazy" class="h-10 w-10 shrink-0 rounded-full border border-slate-200 object-cover {{ $avatarToneClass }}">
+        <img src="{{ $imageUrl }}" alt="{{ $username !== '' ? '@'.$username : 'Instagram-Profilbild' }}" loading="lazy" class="h-10 w-10 shrink-0 rounded-full border object-cover {{ $avatarToneClass }} {{ $avatarRingClass }}">
     @else
-        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200 text-xs font-bold {{ $avatarToneClass }}">{{ $initial }}</div>
+        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-bold {{ $avatarToneClass }} {{ $avatarRingClass }}">{{ $initial }}</div>
     @endif
 
     <div class="flex min-w-0 flex-1 items-center gap-2">
@@ -147,24 +141,65 @@
             @endif
         </div>
 
-        <div class="hidden shrink-0 items-center gap-1 lg:flex">
-            @if($showVisibility)
-                <span class="inline-flex rounded-md px-2 py-0.5 text-[10px] font-semibold ring-1 {{ $visibilityClass }}">{{ $visibilityLabel }}</span>
-            @endif
-            <span class="inline-flex rounded-md px-2 py-0.5 text-[10px] font-semibold ring-1 {{ $isTracked ? 'bg-sky-50 text-sky-700 ring-sky-200' : 'bg-slate-100 text-slate-600 ring-slate-200' }}">
-                {{ $isTracked ? 'Beobachtet' : 'Nicht beobachtet' }}
+        <div class="flex shrink-0 items-center gap-1">
+            <span title="{{ $isTracked ? 'Beobachtet' : 'Nicht beobachtet' }}" aria-label="{{ $isTracked ? 'Beobachtet' : 'Nicht beobachtet' }}" class="inline-flex h-6 w-6 items-center justify-center rounded-md ring-1 {{ $isTracked ? 'bg-sky-50 text-sky-700 ring-sky-200' : 'bg-slate-100 text-slate-500 ring-slate-200' }}">
+                @if($isTracked)
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                @else
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M3 3l18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        <path d="M10.6 6.2A10.5 10.5 0 0 1 12 6c6 0 9.5 6 9.5 6a17.5 17.5 0 0 1-2.8 3.4M6.2 6.8A17 17 0 0 0 2.5 12s3.5 6 9.5 6c1.3 0 2.5-.3 3.5-.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                @endif
             </span>
             @if($statusLabel)
-                <span class="inline-flex max-w-44 truncate rounded-md px-2 py-0.5 text-[10px] font-semibold ring-1 {{ $statusClass }}">{{ $statusLabel }}</span>
+                <span title="{{ $statusTitle }}" aria-label="{{ $statusTitle }}" class="inline-flex h-6 w-6 items-center justify-center rounded-md ring-1 {{ $statusClass }}">
+                    @if(str_contains(strtolower($statusLabel), 'entfernt') || str_contains(strtolower($statusLabel), 'removed'))
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                    @elseif(str_contains(strtolower($statusLabel), 'neu') || str_contains(strtolower($statusLabel), 'added'))
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
+                    @elseif(str_contains(strtolower($statusLabel), 'rekonstruiert'))
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M6 7a3 3 0 1 0 0 .1M18 17a3 3 0 1 0 0 .1M9 7h3a4 4 0 0 1 4 4v3M9 7l3-3M9 7l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    @else
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    @endif
+                </span>
             @endif
         </div>
 
         <div class="hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-slate-200 bg-white/70 px-2 py-1 text-[11px] font-semibold text-slate-600 md:flex">
-            <span title="Beitraege">P {{ $formatMetric($postsCount) }}</span>
+            <span title="Beitraege" class="inline-flex items-center gap-1">
+                <svg class="h-3.5 w-3.5 text-violet-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <rect x="4" y="5" width="16" height="14" rx="2" stroke="currentColor" stroke-width="2"/>
+                    <path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                {{ $formatMetric($postsCount) }}
+            </span>
             <span class="text-slate-300">/</span>
-            <span title="Follower">F {{ $formatMetric($followersCount) }}</span>
+            <span title="Follower" class="inline-flex items-center gap-1">
+                <svg class="h-3.5 w-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M16 19c0-2.2-1.8-4-4-4s-4 1.8-4 4M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM19 19c0-1.6-.9-3-2.2-3.6M17 5.2a3 3 0 0 1 0 5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                {{ $formatMetric($followersCount) }}
+            </span>
             <span class="text-slate-300">/</span>
-            <span title="Folgt">G {{ $formatMetric($followingCount) }}</span>
+            <span title="Folgt" class="inline-flex items-center gap-1">
+                <svg class="h-3.5 w-3.5 text-sky-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M10 19c0-2.2-1.8-4-4-4m0 0a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM14 7h6M17 4v6M14 19h6M17 16l3 3-3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                {{ $formatMetric($followingCount) }}
+            </span>
         </div>
     </div>
 
@@ -178,9 +213,10 @@
                 content-classes="w-56 rounded-xl border border-slate-200 bg-white"
             >
                 <x-slot name="trigger">
-                    <button type="button" x-bind:aria-expanded="open" class="inline-flex h-8 items-center justify-center rounded-lg border border-slate-300 bg-white px-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                        Profil
-                        <span class="ml-1 text-slate-400">v</span>
+                    <button type="button" x-bind:aria-expanded="open" title="Profilaktionen" aria-label="Profilaktionen" class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
+                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 20a8 8 0 0 1 16 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        </svg>
                     </button>
                 </x-slot>
 
@@ -216,9 +252,11 @@
                 content-classes="w-64 rounded-xl border border-slate-200 bg-white"
             >
                 <x-slot name="trigger">
-                    <button type="button" x-bind:aria-expanded="open" @disabled(! $profileId) class="inline-flex h-8 items-center justify-center rounded-lg border border-pink-200 bg-pink-50 px-2.5 text-xs font-semibold text-pink-700 hover:bg-pink-100 disabled:cursor-not-allowed disabled:opacity-50">
-                        Scans
-                        <span class="ml-1 text-pink-400">v</span>
+                    <button type="button" x-bind:aria-expanded="open" title="Scanaktionen" aria-label="Scanaktionen" @disabled(! $profileId) class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-pink-200 bg-pink-50 text-pink-700 hover:bg-pink-100 disabled:cursor-not-allowed disabled:opacity-50">
+                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <path d="M12 3v3M12 18v3M3 12h3M18 12h3M6.6 6.6l2.1 2.1M15.3 15.3l2.1 2.1M17.4 6.6l-2.1 2.1M8.7 15.3l-2.1 2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                            <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                        </svg>
                     </button>
                 </x-slot>
 
