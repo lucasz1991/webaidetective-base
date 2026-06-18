@@ -9,6 +9,7 @@ use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\TrackedPersonInstagramSuggestionScan;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Log;
 
 class TrackedPersonInstagramWorkflowService
 {
@@ -16,6 +17,7 @@ class TrackedPersonInstagramWorkflowService
         private readonly TrackedPersonInstagramSuggestionScanService $suggestionScanService,
         private readonly TrackedPersonInstagramAnalysisService $analysisService,
         private readonly TrackedPersonInstagramPostScanService $postScanService,
+        private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
     ) {}
 
     /**
@@ -91,16 +93,13 @@ class TrackedPersonInstagramWorkflowService
                         .' gefundenen Vorschlaegen.';
                     $followUpMessages[] = trim($privateSuggestionScanMessage);
                 } catch (TrackedPersonInstagramScanCancelledException $exception) {
-                    throw $exception;
+                    $privateSuggestionScanFailed = true;
+                    $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlaege-Folgescan wurde beendet. Der erfolgreiche Basisscan bleibt gespeichert.';
+                    $followUpFailures[] = trim($privateSuggestionScanMessage);
                 } catch (\Throwable $exception) {
                     $privateSuggestionScanFailed = true;
                     $privateSuggestionScanMessage = ' Privates Profil erkannt; Vorschlaege-Scan fehlgeschlagen: '.$exception->getMessage();
                     $followUpFailures[] = trim($privateSuggestionScanMessage);
-
-                    ($trackedPerson->fresh() ?: $trackedPerson)->forceFill([
-                        'last_instagram_status_level' => 'partial',
-                        'last_instagram_status_message' => 'Instagram-Analyse abgeschlossen; Vorschlaege-Scan fehlgeschlagen: '.$exception->getMessage(),
-                    ])->save();
                 }
             }
         }
@@ -125,7 +124,7 @@ class TrackedPersonInstagramWorkflowService
                     );
                     $followUpMessages[] = $config['label'].' wurde wegen einer geaenderten Kennzahl aktualisiert.';
                 } catch (TrackedPersonInstagramScanCancelledException $exception) {
-                    throw $exception;
+                    $followUpFailures[] = $config['label'].'-Folgescan wurde beendet. Der erfolgreiche Basisscan bleibt gespeichert.';
                 } catch (\Throwable $exception) {
                     $followUpFailures[] = $config['label'].' konnte nicht aktualisiert werden: '.$exception->getMessage();
                 }
@@ -146,7 +145,7 @@ class TrackedPersonInstagramWorkflowService
                         .number_format($postScan->new_count, 0, ',', '.').' neu und '
                         .number_format($postScan->updated_count, 0, ',', '.').' aktualisiert.';
                 } catch (TrackedPersonInstagramScanCancelledException $exception) {
-                    throw $exception;
+                    $followUpFailures[] = 'Beitrags-Folgescan wurde beendet. Der erfolgreiche Basisscan bleibt gespeichert.';
                 } catch (\Throwable $exception) {
                     $followUpFailures[] = 'Beitragsscan fehlgeschlagen: '.$exception->getMessage();
                 }
@@ -173,10 +172,21 @@ class TrackedPersonInstagramWorkflowService
                     .number_format($postScan->new_count, 0, ',', '.').' neu und '
                     .number_format($postScan->updated_count, 0, ',', '.').' aktualisiert.';
             } catch (TrackedPersonInstagramScanCancelledException $exception) {
-                throw $exception;
+                $followUpFailures[] = 'Beitrags-Folgescan wurde beendet. Der erfolgreiche Basisscan bleibt gespeichert.';
             } catch (\Throwable $exception) {
                 $followUpFailures[] = 'Beitragsscan fehlgeschlagen: '.$exception->getMessage();
             }
+        }
+
+        try {
+            $this->restoreBaseScanResult($trackedPerson, $snapshot);
+        } catch (\Throwable $exception) {
+            $followUpFailures[] = 'Basisscan wurde gespeichert, konnte aber nicht an alle verbundenen Profile synchronisiert werden: '.$exception->getMessage();
+            Log::warning('Gespeichertes Instagram-Basisergebnis konnte nach Folge-Scans nicht vollstaendig synchronisiert werden.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'snapshot_id' => $snapshot->id,
+                'error' => $exception->getMessage(),
+            ]);
         }
 
         $resolvedStatusLevel = $snapshot->status_level === 'success'
@@ -184,15 +194,6 @@ class TrackedPersonInstagramWorkflowService
             : (in_array($snapshot->status_level, ['partial', 'cancelled'], true)
                 ? $snapshot->status_level
                 : 'error');
-
-        if (
-            $privateSuggestionScanFailed
-            || ($privateSuggestionScan && $privateSuggestionScan->status_level !== 'success')
-            || ($postScan && $postScan->status_level !== 'success')
-            || $followUpFailures !== []
-        ) {
-            $resolvedStatusLevel = 'partial';
-        }
 
         return [
             'snapshot' => $snapshot,
@@ -207,7 +208,7 @@ class TrackedPersonInstagramWorkflowService
                 .' abgeschlossen: '
                 .$snapshot->status_message
                 .($followUpMessages !== [] ? ' '.implode(' ', $followUpMessages) : '')
-                .($followUpFailures !== [] ? ' '.implode(' ', $followUpFailures) : ''),
+                .($followUpFailures !== [] ? ' Folgescans teilweise fehlgeschlagen; Basisscan wurde gespeichert. '.implode(' ', $followUpFailures) : ''),
         ];
     }
 
@@ -231,6 +232,57 @@ class TrackedPersonInstagramWorkflowService
         ?callable $progress = null,
     ): InstagramPostScan {
         return $this->postScanService->scan($trackedPerson, $snapshot, $progress);
+    }
+
+    private function restoreBaseScanResult(
+        TrackedPerson $trackedPerson,
+        TrackedPersonInstagramSnapshot $snapshot,
+    ): void {
+        $snapshot = $snapshot->fresh() ?: $snapshot;
+        $trackedPerson = $trackedPerson->fresh() ?: $trackedPerson;
+        $trackedPersonUpdates = [
+            'last_instagram_status_level' => $snapshot->status_level,
+            'last_instagram_status_message' => $snapshot->status_message,
+            'last_instagram_analyzed_at' => $snapshot->analyzed_at,
+        ];
+
+        foreach ([
+            'instagram_followers_count' => $snapshot->followers_count,
+            'instagram_following_count' => $snapshot->following_count,
+            'instagram_posts_count' => $snapshot->posts_count,
+            'instagram_profile_image_path' => $snapshot->profile_image_path,
+            'instagram_profile_image_hash' => $snapshot->profile_image_hash,
+            'profile_image_path' => $snapshot->profile_image_path,
+            'profile_image_hash' => $snapshot->profile_image_hash,
+        ] as $field => $value) {
+            if ($value !== null && $value !== '') {
+                $trackedPersonUpdates[$field] = $value;
+            }
+        }
+
+        $trackedPerson->forceFill($trackedPersonUpdates)->save();
+
+        $profile = $this->profileRelationshipStore->ensureProfile(
+            $snapshot->instagram_username ?: $trackedPerson->instagram_username,
+            [
+                'display_name' => $snapshot->full_name ?: $trackedPerson->display_name,
+                'full_name' => $snapshot->full_name,
+                'biography' => $snapshot->biography,
+                'profile_image_url' => $snapshot->profile_image_url,
+                'profile_image_path' => $snapshot->profile_image_path,
+                'profile_image_hash' => $snapshot->profile_image_hash,
+                'followers_count' => $snapshot->followers_count,
+                'following_count' => $snapshot->following_count,
+                'posts_count' => $snapshot->posts_count,
+                'last_status_level' => $snapshot->status_level,
+                'last_status_message' => $snapshot->status_message,
+                'last_scanned_at' => $snapshot->analyzed_at,
+            ],
+        );
+
+        if ($profile) {
+            $this->profileRelationshipStore->propagateProfileDataToLinkedTrackedPeople($profile);
+        }
     }
 
     private function changedFields(TrackedPersonInstagramSnapshot $snapshot, int $minimumCountDelta = 1): array

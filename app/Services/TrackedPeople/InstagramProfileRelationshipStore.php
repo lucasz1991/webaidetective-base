@@ -237,7 +237,7 @@ class InstagramProfileRelationshipStore
             return null;
         }
 
-        DatabaseKeepAlive::reconnect();
+        DatabaseKeepAlive::ping(0);
 
         $scannedAt = $this->parseTimestamp($payload['analyzedAt'] ?? null) ?: now('UTC');
         $scan = InstagramProfileListScan::create([
@@ -285,11 +285,68 @@ class InstagramProfileRelationshipStore
             );
         }
 
+        foreach ($this->normalizeRelationshipItems($relationshipList['preservedItems'] ?? []) as $item) {
+            $this->attachPreservedRelationshipToScan(
+                $scan,
+                $sourceProfile,
+                $listType,
+                $item,
+            );
+        }
+
         foreach ($this->normalizeRelationshipItems($relationshipList['removedItems'] ?? []) as $item) {
             $this->markRemovedRelationship($scan, $sourceProfile, $listType, $item);
         }
 
         return $scan;
+    }
+
+    private function attachPreservedRelationshipToScan(
+        InstagramProfileListScan $scan,
+        InstagramProfile $sourceProfile,
+        string $listType,
+        array $item,
+    ): void {
+        $relatedProfile = $this->ensureProfile($item['username'] ?? null, [
+            'display_name' => $item['displayName'] ?? null,
+            'profile_url' => $item['profileUrl'] ?? null,
+            'profile_image_url' => $item['profileImageUrl'] ?? $item['profile_image_url'] ?? null,
+            'is_private' => $item['isPrivate'] ?? null,
+            'profile_visibility' => $item['profileVisibility'] ?? null,
+            'followers_count' => $item['followersCount'] ?? null,
+            'following_count' => $item['followingCount'] ?? null,
+            'posts_count' => $item['postsCount'] ?? null,
+        ]);
+
+        if (! $relatedProfile) {
+            return;
+        }
+
+        $relationship = InstagramProfileRelationship::query()
+            ->where('source_instagram_profile_id', $sourceProfile->id)
+            ->where('related_instagram_profile_id', $relatedProfile->id)
+            ->where('list_type', $listType)
+            ->where('status', 'active')
+            ->whereNull('removed_at')
+            ->first();
+
+        if (! $relationship) {
+            return;
+        }
+
+        $this->createScanItem(
+            $scan,
+            $relationship,
+            $sourceProfile,
+            $relatedProfile,
+            $listType,
+            'observed',
+            [
+                ...$item,
+                'preservedWithoutCurrentObservation' => true,
+            ],
+            $relationship->last_seen_at,
+        );
     }
 
     public function syncObservedRelationshipPreview(
@@ -1041,6 +1098,9 @@ class InstagramProfileRelationshipStore
             'search_queries' => array_values(is_array($relationshipList['searchQueries'] ?? null) ? $relationshipList['searchQueries'] : []),
             'search_added_count' => (int) ($relationshipList['searchAddedCount'] ?? 0),
             'search_stop_reason' => $relationshipList['searchStopReason'] ?? null,
+            'verified_missing_usernames' => array_values(is_array($relationshipList['verifiedMissingUsernames'] ?? null) ? $relationshipList['verifiedMissingUsernames'] : []),
+            'verified_present_usernames' => array_values(is_array($relationshipList['verifiedPresentUsernames'] ?? null) ? $relationshipList['verifiedPresentUsernames'] : []),
+            'preserved_count' => count(is_array($relationshipList['preservedItems'] ?? null) ? $relationshipList['preservedItems'] : []),
             'partitioned' => (bool) ($relationshipList['partitioned'] ?? false),
             'partition_threshold' => (int) ($relationshipList['partitionThreshold'] ?? 250),
             'partition_max_items' => (int) ($relationshipList['partitionMaxItems'] ?? 250),

@@ -133,6 +133,18 @@ class InstagramProfileDataExtractor
             'searchStopReason' => data_get($relationshipList, 'searchStopReason'),
             'searchMaxDepth' => (int) data_get($relationshipList, 'searchMaxDepth', 0),
             'searchExpandedQueryCount' => (int) data_get($relationshipList, 'searchExpandedQueryCount', 0),
+            'verifiedMissingUsernames' => array_values(array_filter(
+                is_array(data_get($relationshipList, 'verifiedMissingUsernames'))
+                    ? data_get($relationshipList, 'verifiedMissingUsernames')
+                    : [],
+                'is_scalar',
+            )),
+            'verifiedPresentUsernames' => array_values(array_filter(
+                is_array(data_get($relationshipList, 'verifiedPresentUsernames'))
+                    ? data_get($relationshipList, 'verifiedPresentUsernames')
+                    : [],
+                'is_scalar',
+            )),
             'partitioned' => (bool) data_get($relationshipList, 'partitioned', false),
             'partitionThreshold' => (int) data_get($relationshipList, 'partitionThreshold', 250),
             'partitionMaxItems' => (int) data_get($relationshipList, 'partitionMaxItems', 250),

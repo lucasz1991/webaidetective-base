@@ -4,6 +4,7 @@ namespace App\Services\TrackedPeople;
 
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScan;
+use App\Models\InstagramProfileRelationship;
 use App\Models\TrackedPerson;
 use App\Services\Billing\ScanCreditService;
 use App\Services\Social\InstagramProfileDataExtractor;
@@ -130,6 +131,7 @@ class TrackedPersonInstagramProfileListScanService
             $label = $relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste';
             $expectedOverride = $relationship === 'followers' ? 'expectedFollowerCount' : 'expectedFollowingCount';
             $expectedCount = $relationship === 'followers' ? $profile->followers_count : $profile->following_count;
+            $previousActiveItems = $this->activeRelationshipItems($profile, $relationship);
 
             // Resume-Entscheidung: Fuer grosse Listen (>= 250) und unvollstaendigen letzten Lauf direkt die alphabetische Suche nutzen
             $shouldResumeViaSearch = false;
@@ -144,6 +146,9 @@ class TrackedPersonInstagramProfileListScanService
             $operationMode = $relationship;
             $runtimeOverrides = [
                 $expectedOverride => max(0, (int) $expectedCount),
+                'relationshipPrioritizedSearchUsernames' => [
+                    $relationship => collect($previousActiveItems)->pluck('username')->values()->all(),
+                ],
             ];
 
             if ($shouldResumeViaSearch) {
@@ -152,8 +157,7 @@ class TrackedPersonInstagramProfileListScanService
                 $runtimeOverrides = [
                     ...$runtimeOverrides,
                     'relationshipSearchOnly' => true,
-                    // Scroll-Phase auslassen / minimal halten
-                    'relationshipListMaxScrollRounds' => 1,
+                    'relationshipListMaxScrollRounds' => 100000,
                 ];
             }
 
@@ -177,6 +181,10 @@ class TrackedPersonInstagramProfileListScanService
             $extracted = $this->extractor->extract($payload);
             $listKey = $relationship === 'followers' ? 'followers_list' : 'following_list';
             $relationshipList = is_array($extracted[$listKey] ?? null) ? $extracted[$listKey] : [];
+            $relationshipList = $this->reconcileRelationshipList(
+                $relationshipList,
+                $previousActiveItems,
+            );
             $this->refreshDatabaseConnection();
 
             $profileAttributes = [
@@ -266,6 +274,82 @@ class TrackedPersonInstagramProfileListScanService
             ->orderByDesc('scanned_at')
             ->orderByDesc('id')
             ->first();
+    }
+
+    private function activeRelationshipItems(InstagramProfile $profile, string $relationship): array
+    {
+        return InstagramProfileRelationship::query()
+            ->where('source_instagram_profile_id', $profile->id)
+            ->where('list_type', $relationship)
+            ->where('status', 'active')
+            ->whereNull('removed_at')
+            ->with('relatedInstagramProfile')
+            ->get()
+            ->map(function (InstagramProfileRelationship $storedRelationship): array {
+                $related = $storedRelationship->relatedInstagramProfile;
+
+                return [
+                    'username' => $related?->username,
+                    'displayName' => $related?->display_name ?: $storedRelationship->display_name_snapshot,
+                    'profileUrl' => $related?->profile_url ?: $storedRelationship->profile_url_snapshot,
+                    'profileImageUrl' => $related?->profile_image_url,
+                    'profileVisibility' => $related?->profile_visibility,
+                    'isPrivate' => $related?->is_private,
+                    'followersCount' => $related?->followers_count,
+                    'followingCount' => $related?->following_count,
+                    'postsCount' => $related?->posts_count,
+                    'firstSeenAt' => optional($storedRelationship->first_seen_at)->toIso8601String(),
+                    'lastSeenAt' => optional($storedRelationship->last_seen_at)->toIso8601String(),
+                ];
+            })
+            ->filter(fn (array $item): bool => filled($item['username'] ?? null))
+            ->values()
+            ->all();
+    }
+
+    private function reconcileRelationshipList(array $relationshipList, array $previousActiveItems): array
+    {
+        $normalize = fn ($value): string => Str::lower(ltrim(trim((string) $value), '@'));
+        $observedItems = collect(is_array($relationshipList['items'] ?? null) ? $relationshipList['items'] : [])
+            ->filter(fn ($item): bool => is_array($item) && filled($item['username'] ?? null))
+            ->keyBy(fn (array $item): string => $normalize($item['username']));
+        $previousItems = collect($previousActiveItems)
+            ->filter(fn ($item): bool => is_array($item) && filled($item['username'] ?? null))
+            ->keyBy(fn (array $item): string => $normalize($item['username']));
+        $verifiedMissing = collect($relationshipList['verifiedMissingUsernames'] ?? [])
+            ->filter(fn ($username): bool => is_scalar($username))
+            ->map($normalize)
+            ->filter()
+            ->unique()
+            ->flip();
+        $removedItems = $previousItems
+            ->filter(fn (array $item, string $username): bool => $verifiedMissing->has($username))
+            ->values();
+        $preservedItems = $previousItems
+            ->reject(fn (array $item, string $username): bool => $verifiedMissing->has($username) || $observedItems->has($username))
+            ->values();
+        $activeItems = $previousItems
+            ->reject(fn (array $item, string $username): bool => $verifiedMissing->has($username))
+            ->merge($observedItems)
+            ->keyBy(fn (array $item): string => $normalize($item['username']))
+            ->values();
+
+        return [
+            ...$relationshipList,
+            'available' => $activeItems->isNotEmpty(),
+            'count' => $activeItems->count(),
+            'activeCount' => $activeItems->count(),
+            'knownCount' => $activeItems->count(),
+            'observedCount' => $observedItems->count(),
+            'items' => $activeItems->all(),
+            'observedItems' => $observedItems->values()->all(),
+            'preservedItems' => $preservedItems->all(),
+            'addedItems' => $observedItems->reject(fn (array $item, string $username): bool => $previousItems->has($username))->values()->all(),
+            'removedItems' => $removedItems->all(),
+            'addedCount' => $observedItems->keys()->diff($previousItems->keys())->count(),
+            'removedCount' => $removedItems->count(),
+            'trimmed' => $removedItems->isNotEmpty(),
+        ];
     }
 
     private function refreshDatabaseConnection(): void

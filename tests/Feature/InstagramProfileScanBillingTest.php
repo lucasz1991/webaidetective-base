@@ -17,6 +17,8 @@ use App\Models\User;
 use App\Services\Billing\ScanCreditService;
 use App\Services\TrackedPeople\InstagramProfileChangeNotificationService;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
+use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
 use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\Cache;
@@ -239,6 +241,157 @@ class InstagramProfileScanBillingTest extends TestCase
         ]);
         $mail = Mail::query()->latest('id')->firstOrFail();
         $this->assertSame($observingUser->id, (int) data_get($mail->recipients, '0.user_id'));
+    }
+
+    public function test_successful_base_scan_metrics_are_restored_after_followup_overwrites(): void
+    {
+        $user = User::factory()->create();
+        $profile = InstagramProfile::create([
+            'username' => 'base_scan_restore_test',
+            'followers_count' => 100,
+            'following_count' => 10,
+            'posts_count' => 5,
+            'last_status_level' => 'partial',
+            'last_status_message' => 'Follow-up failed.',
+            'last_scanned_at' => now('UTC'),
+        ]);
+        $person = TrackedPerson::create([
+            'user_id' => $user->id,
+            'first_name' => 'Base',
+            'last_name' => 'Restore',
+            'instagram_username' => $profile->username,
+            'current_instagram_profile_id' => $profile->id,
+            'instagram_followers_count' => 100,
+            'instagram_following_count' => 10,
+            'instagram_posts_count' => 5,
+            'last_instagram_status_level' => 'partial',
+            'last_instagram_status_message' => 'Follow-up failed.',
+        ]);
+        $snapshot = TrackedPersonInstagramSnapshot::create([
+            'tracked_person_id' => $person->id,
+            'instagram_profile_id' => $profile->id,
+            'instagram_username' => $profile->username,
+            'followers_count' => 250,
+            'following_count' => 25,
+            'posts_count' => 8,
+            'status_level' => 'success',
+            'status_message' => 'Mini scan successful.',
+            'has_changes' => true,
+            'detected_changes' => [],
+            'analyzed_at' => now('UTC'),
+        ]);
+        $method = new ReflectionMethod(
+            app(TrackedPersonInstagramWorkflowService::class),
+            'restoreBaseScanResult',
+        );
+        $method->setAccessible(true);
+        $method->invoke(
+            app(TrackedPersonInstagramWorkflowService::class),
+            $person,
+            $snapshot,
+        );
+
+        $person = $person->fresh();
+        $profile = $profile->fresh();
+
+        $this->assertSame(250, $person->instagram_followers_count);
+        $this->assertSame(25, $person->instagram_following_count);
+        $this->assertSame(8, $person->instagram_posts_count);
+        $this->assertSame('success', $person->last_instagram_status_level);
+        $this->assertSame('Mini scan successful.', $person->last_instagram_status_message);
+        $this->assertSame(250, $profile->followers_count);
+        $this->assertSame(25, $profile->following_count);
+        $this->assertSame(8, $profile->posts_count);
+        $this->assertSame('success', $profile->last_status_level);
+    }
+
+    public function test_list_reconciliation_removes_only_individually_verified_missing_profiles(): void
+    {
+        $source = InstagramProfile::create(['username' => 'list_reconcile_source']);
+        $seen = InstagramProfile::create(['username' => 'list_seen']);
+        $verifiedMissing = InstagramProfile::create(['username' => 'list_verified_missing']);
+        $unverifiedMissing = InstagramProfile::create(['username' => 'list_unverified_missing']);
+
+        foreach ([$seen, $verifiedMissing, $unverifiedMissing] as $related) {
+            InstagramProfileRelationship::create([
+                'source_instagram_profile_id' => $source->id,
+                'related_instagram_profile_id' => $related->id,
+                'list_type' => 'followers',
+                'status' => 'active',
+                'first_seen_at' => now('UTC')->subDay(),
+                'last_seen_at' => now('UTC')->subDay(),
+            ]);
+        }
+
+        $service = app(TrackedPersonInstagramProfileListScanService::class);
+        $method = new ReflectionMethod($service, 'reconcileRelationshipList');
+        $method->setAccessible(true);
+        $reconciled = $method->invoke(
+            $service,
+            [
+                'attempted' => true,
+                'available' => true,
+                'complete' => true,
+                'items' => [
+                    ['username' => $seen->username],
+                    ['username' => 'list_new_profile'],
+                ],
+                'verifiedMissingUsernames' => [$verifiedMissing->username],
+                'verifiedPresentUsernames' => [$seen->username],
+            ],
+            [
+                ['username' => $seen->username],
+                ['username' => $verifiedMissing->username],
+                ['username' => $unverifiedMissing->username],
+            ],
+        );
+
+        $this->assertEqualsCanonicalizing(
+            ['list_seen', 'list_unverified_missing', 'list_new_profile'],
+            collect($reconciled['items'])->pluck('username')->all(),
+        );
+        $this->assertSame(
+            ['list_verified_missing'],
+            collect($reconciled['removedItems'])->pluck('username')->all(),
+        );
+        $this->assertSame(
+            ['list_unverified_missing'],
+            collect($reconciled['preservedItems'])->pluck('username')->all(),
+        );
+
+        $scan = app(InstagramProfileRelationshipStore::class)->storeDirectRelationshipListScan(
+            $source,
+            null,
+            'followers',
+            $reconciled,
+            ['statusLevel' => 'success', 'statusMessage' => 'List scan completed.'],
+            'test',
+            null,
+        );
+
+        $this->assertNotNull($scan);
+        $this->assertDatabaseHas('instagram_profile_relationships', [
+            'source_instagram_profile_id' => $source->id,
+            'related_instagram_profile_id' => $unverifiedMissing->id,
+            'list_type' => 'followers',
+            'status' => 'active',
+        ]);
+        $this->assertDatabaseHas('instagram_profile_list_scan_items', [
+            'list_scan_id' => $scan->id,
+            'related_instagram_profile_id' => $unverifiedMissing->id,
+            'item_status' => 'observed',
+        ]);
+        $this->assertSoftDeleted('instagram_profile_relationships', [
+            'source_instagram_profile_id' => $source->id,
+            'related_instagram_profile_id' => $verifiedMissing->id,
+            'list_type' => 'followers',
+            'status' => 'removed',
+        ]);
+        $this->assertDatabaseHas('instagram_profile_list_scan_items', [
+            'list_scan_id' => $scan->id,
+            'related_instagram_profile_id' => $verifiedMissing->id,
+            'item_status' => 'removed',
+        ]);
     }
 
     public function test_suggestion_scan_can_be_stored_without_tracked_person(): void

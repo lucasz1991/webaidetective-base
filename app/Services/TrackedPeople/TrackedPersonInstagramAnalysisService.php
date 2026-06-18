@@ -11,6 +11,7 @@ use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -293,7 +294,15 @@ class TrackedPersonInstagramAnalysisService
             $this->profileRelationshipStore->propagateProfileDataToLinkedTrackedPeople($storedProfile);
         }
 
-        $this->profileChangeNotifications->notifySnapshotChanges($snapshot->fresh() ?: $snapshot);
+        try {
+            $this->profileChangeNotifications->notifySnapshotChanges($snapshot->fresh() ?: $snapshot);
+        } catch (\Throwable $exception) {
+            Log::warning('Instagram-Basisscan wurde gespeichert, aber Aenderungsbenachrichtigungen konnten nicht verteilt werden.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'snapshot_id' => $snapshot->id,
+                'error' => $exception->getMessage(),
+            ]);
+        }
 
         $this->reportProgress($progress, [
             'phase' => 'done',
@@ -1494,6 +1503,8 @@ class TrackedPersonInstagramAnalysisService
             'searchStopReason' => $relationshipList['searchStopReason'] ?? null,
             'searchMaxDepth' => (int) ($relationshipList['searchMaxDepth'] ?? 0),
             'searchExpandedQueryCount' => (int) ($relationshipList['searchExpandedQueryCount'] ?? 0),
+            'verifiedMissingUsernames' => array_values(is_array($relationshipList['verifiedMissingUsernames'] ?? null) ? $relationshipList['verifiedMissingUsernames'] : []),
+            'verifiedPresentUsernames' => array_values(is_array($relationshipList['verifiedPresentUsernames'] ?? null) ? $relationshipList['verifiedPresentUsernames'] : []),
             'reason' => $relationshipList['reason'] ?? null,
             'rateLimited' => (bool) ($relationshipList['rateLimited'] ?? false),
             'rateLimitText' => $relationshipList['rateLimitText'] ?? null,
@@ -1896,6 +1907,12 @@ class TrackedPersonInstagramAnalysisService
             $previousItems = $previousState['items'];
             $previousRemovedHistoryItems = $previousState['removedHistoryItems'];
             $currentIsComplete = (bool) ($relationshipList['complete'] ?? false);
+            $verifiedMissingUsernames = collect($relationshipList['verifiedMissingUsernames'] ?? [])
+                ->filter(fn ($username): bool => is_scalar($username))
+                ->map(fn ($username): string => Str::lower(ltrim(trim((string) $username), '@')))
+                ->filter()
+                ->unique()
+                ->flip();
             $analyzedAt = optional($snapshot->analyzed_at)->toIso8601String();
             $preserveExistingState = (bool) ($relationshipList['preserveExistingState'] ?? false);
             unset($relationshipList['preserveExistingState']);
@@ -1912,17 +1929,33 @@ class TrackedPersonInstagramAnalysisService
             } else {
                 $observedItems = $this->stampObservedRelationshipItems($observedItems, $previousItems, $analyzedAt);
                 $activeItems = $this->sortRelationshipItemsNewestFirst(
-                    $this->mergeRelationshipItems($previousItems, $observedItems, $currentIsComplete),
+                    collect($this->mergeRelationshipItemSets($previousItems, $observedItems))
+                        ->reject(fn (array $item): bool => (
+                            $verifiedMissingUsernames->has(Str::lower((string) ($item['username'] ?? '')))
+                            && ! collect($observedItems)->contains(
+                                fn (array $observed): bool => Str::lower((string) ($observed['username'] ?? ''))
+                                    === Str::lower((string) ($item['username'] ?? '')),
+                            )
+                        ))
+                        ->values()
+                        ->all(),
                 );
                 $addedItems = $this->sortRelationshipItemsNewestFirst(
                     $this->diffRelationshipItems($observedItems, $previousItems),
                 );
-                $removedItems = $currentIsComplete
-                    ? $this->stampRemovedRelationshipItems(
-                        $this->diffRelationshipItems($previousItems, $observedItems),
-                        $analyzedAt,
-                    )
-                    : [];
+                $removedItems = $this->stampRemovedRelationshipItems(
+                    collect($previousItems)
+                        ->filter(fn (array $item): bool => $verifiedMissingUsernames->has(
+                            Str::lower((string) ($item['username'] ?? '')),
+                        ))
+                        ->reject(fn (array $item): bool => collect($observedItems)->contains(
+                            fn (array $observed): bool => Str::lower((string) ($observed['username'] ?? ''))
+                                === Str::lower((string) ($item['username'] ?? '')),
+                        ))
+                        ->values()
+                        ->all(),
+                    $analyzedAt,
+                );
                 $removedHistoryItems = $this->sortRelationshipItemsNewestFirst(
                     $this->mergeRelationshipItemSets($previousRemovedHistoryItems, $removedItems),
                     ['removedAt', 'lastSeenAt', 'firstSeenAt'],
@@ -1952,7 +1985,7 @@ class TrackedPersonInstagramAnalysisService
             $relationshipList['removedCount'] = count($removedItems);
             $relationshipList['removedHistoryCount'] = count($removedHistoryItems);
             $relationshipList['currentlyRemovedCount'] = count($currentlyRemovedItems);
-            $relationshipList['trimmed'] = $currentIsComplete && $removedItems !== [];
+            $relationshipList['trimmed'] = $removedItems !== [];
 
             if ($observedItems === [] && $activeItems === [] && $removedHistoryItems === []) {
                 $extracted[$extractedKey] = $relationshipList;
@@ -1990,6 +2023,8 @@ class TrackedPersonInstagramAnalysisService
                 'searchStopReason' => $relationshipList['searchStopReason'] ?? null,
                 'searchMaxDepth' => (int) ($relationshipList['searchMaxDepth'] ?? 0),
                 'searchExpandedQueryCount' => (int) ($relationshipList['searchExpandedQueryCount'] ?? 0),
+                'verifiedMissingUsernames' => array_values($relationshipList['verifiedMissingUsernames'] ?? []),
+                'verifiedPresentUsernames' => array_values($relationshipList['verifiedPresentUsernames'] ?? []),
                 'reason' => $relationshipList['reason'] ?? null,
                 'rateLimited' => (bool) ($relationshipList['rateLimited'] ?? false),
                 'rateLimitText' => $relationshipList['rateLimitText'] ?? null,
@@ -2203,7 +2238,6 @@ class TrackedPersonInstagramAnalysisService
             ->map(fn ($username) => Str::lower(ltrim(trim((string) $username), '@')))
             ->filter()
             ->unique()
-            ->take(500)
             ->values()
             ->all();
     }

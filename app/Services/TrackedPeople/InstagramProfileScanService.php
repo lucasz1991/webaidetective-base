@@ -9,6 +9,7 @@ use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
 use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 class InstagramProfileScanService
 {
@@ -129,13 +130,21 @@ class InstagramProfileScanService
             $changes = $this->profileMetricChanges($previousMetrics, $freshProfile);
 
             $this->profileRelationshipStore->propagateProfileDataToLinkedTrackedPeople($freshProfile);
-            $this->profileChangeNotifications->notifyProfileChanges(
-                $freshProfile,
-                $changes,
-                $statusMessage,
-                $profileScan->scanned_at,
-                'profile-scan-'.$profileScan->id,
-            );
+            try {
+                $this->profileChangeNotifications->notifyProfileChanges(
+                    $freshProfile,
+                    $changes,
+                    $statusMessage,
+                    $profileScan->scanned_at,
+                    'profile-scan-'.$profileScan->id,
+                );
+            } catch (\Throwable $exception) {
+                Log::warning('Instagram-Profilscan wurde gespeichert, aber Aenderungsbenachrichtigungen konnten nicht verteilt werden.', [
+                    'instagram_profile_id' => $freshProfile->id,
+                    'profile_scan_id' => $profileScan->id,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
 
             $this->scanCreditService->charge(
                 $userId,

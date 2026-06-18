@@ -4280,7 +4280,8 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     normalizedRelationship,
     usersByUsername,
   );
-  const queries = getRelationshipSearchPartitionQueries(runtimeConfig);
+  const verifyMissingOnly = Boolean(runtimeConfig.relationshipSearchVerifyMissingOnly);
+  const queries = verifyMissingOnly ? [] : getRelationshipSearchPartitionQueries(runtimeConfig);
   const maxSearchDepth = Math.min(
     2,
     Math.max(1, normalizeOptionalPositiveInteger(runtimeConfig.relationshipSearchMaxDepth, 2) || 2),
@@ -4307,13 +4308,14 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     25,
     normalizeOptionalPositiveInteger(runtimeConfig.relationshipSearchPartitionMaxItems, 250) || 250,
   );
-  const queryQueue = [
-    ...prioritizedQueries.map((query) => ({ query, depth: 0, source: 'missing-known-profile' })),
-    ...queries.map((query) => ({ query, depth: 1, source: 'alphabet-partition' })),
-  ];
+  const queryQueue = queries.length > 0
+    ? queries.map((query) => ({ query, depth: 1, source: 'alphabet-partition' }))
+    : prioritizedQueries.map((query) => ({ query, depth: 0, source: 'missing-known-profile' }));
   const queuedQueries = new Set([...prioritizedQueries, ...queries]);
   const queryStats = [];
   const queriesRun = [];
+  const verifiedMissingUsernames = new Set();
+  const verifiedPresentUsernames = new Set();
   let searchRounds = 0;
   let openAttempts = 0;
   let addedCount = 0;
@@ -4329,7 +4331,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       return true;
     }
 
-    return expectedCount > 0 && usersByUsername.size >= expectedCount;
+    return false;
   };
 
   progressLog('relationship-search-opening', {
@@ -4422,6 +4424,8 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       stopReason: searchStopReason,
       rateLimited: false,
       rateLimitText: null,
+      verifiedMissingUsernames: [],
+      verifiedPresentUsernames: [],
       gracefullyStopped: searchStopReason === 'ui-stop-requested',
     };
   }
@@ -4439,12 +4443,19 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       stopReason: searchStopReason,
       rateLimited: false,
       rateLimitText: null,
+      verifiedMissingUsernames: [],
+      verifiedPresentUsernames: [],
       gracefullyStopped: searchStopReason === 'ui-stop-requested',
     };
   }
 
   for (let queryIndex = 0; queryIndex < queryQueue.length; queryIndex++) {
     const { query, depth, source } = queryQueue[queryIndex];
+
+    if (source === 'missing-known-profile' && usersByUsername.has(query)) {
+      verifiedPresentUsernames.add(query);
+      continue;
+    }
 
     if (targetReached() || searchRounds >= maxScrollRounds) {
       break;
@@ -4556,6 +4567,8 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
           rateLimitText: collection.rateLimitText || null,
           maxDepth: maxSearchDepth,
           expandedQueryCount,
+          verifiedMissingUsernames: Array.from(verifiedMissingUsernames),
+          verifiedPresentUsernames: Array.from(verifiedPresentUsernames),
         };
       }
 
@@ -4687,6 +4700,18 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       itemsPreview: buildRelationshipProgressPreview(usersByUsername, checkpointSize),
     });
 
+    if (source === 'missing-known-profile') {
+      if (usersByUsername.has(query) || queryVisibleUsernames.has(query)) {
+        verifiedPresentUsernames.add(query);
+      } else if (
+        queryStopReason !== 'ui-stop-requested'
+        && stopReason !== 'instagram-rate-limit'
+        && queryApplied
+      ) {
+        verifiedMissingUsernames.add(query);
+      }
+    }
+
     queryStats.push({
       query,
       depth,
@@ -4713,7 +4738,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
 
     if (
       depth === 1
-      && queryIndex === prioritizedQueries.length + queries.length - 1
+      && queryIndex === queries.length - 1
       && maxSearchDepth >= 2
       && !targetReached()
       && searchRounds < maxScrollRounds
@@ -4747,6 +4772,16 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       });
     }
 
+    if (queries.length > 0 && depth === 1 && queryIndex === queries.length - 1) {
+      for (const prioritizedQuery of prioritizedQueries) {
+        queryQueue.push({
+          query: prioritizedQuery,
+          depth: 0,
+          source: 'missing-known-profile',
+        });
+      }
+    }
+
     await sleep(450);
   }
 
@@ -4769,6 +4804,8 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     rateLimitText: null,
     maxDepth: maxSearchDepth,
     expandedQueryCount,
+    verifiedMissingUsernames: Array.from(verifiedMissingUsernames),
+    verifiedPresentUsernames: Array.from(verifiedPresentUsernames),
     gracefullyStopped: stopReason === 'ui-stop-requested',
   };
 }
@@ -4807,6 +4844,8 @@ async function collectPublicRelationshipSearchOnlyList(page, username, profile, 
     searchStopReason: null,
     searchMaxDepth: 0,
     searchExpandedQueryCount: 0,
+    verifiedMissingUsernames: [],
+    verifiedPresentUsernames: [],
     listTemporarilyUnavailable: false,
   };
 
@@ -4858,6 +4897,12 @@ async function collectPublicRelationshipSearchOnlyList(page, username, profile, 
   result.searchStopReason = searchResult.stopReason || null;
   result.searchMaxDepth = searchResult.maxDepth || 0;
   result.searchExpandedQueryCount = searchResult.expandedQueryCount || 0;
+  result.verifiedMissingUsernames = Array.isArray(searchResult.verifiedMissingUsernames)
+    ? searchResult.verifiedMissingUsernames
+    : [];
+  result.verifiedPresentUsernames = Array.isArray(searchResult.verifiedPresentUsernames)
+    ? searchResult.verifiedPresentUsernames
+    : [];
   result.openAttempts = searchResult.openAttempts || 0;
   result.scrollRounds = searchResult.rounds || 0;
   result.rateLimited = Boolean(searchResult.rateLimited);
@@ -4912,7 +4957,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     normalizeOptionalPositiveInteger(runtimeConfig.relationshipPartitionThreshold, 250) || 250,
   );
   let usePartitionedCollection = runtimeConfig.relationshipPartitionLargeLists !== false
-    && expectedCount > partitionThreshold;
+    && expectedCount >= partitionThreshold;
   const result = {
     attempted: false,
     available: false,
@@ -4935,6 +4980,8 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     searchStopReason: null,
     searchMaxDepth: 0,
     searchExpandedQueryCount: 0,
+    verifiedMissingUsernames: [],
+    verifiedPresentUsernames: [],
     partitioned: usePartitionedCollection,
     partitionThreshold,
     partitionMaxItems: runtimeConfig.relationshipSearchPartitionMaxItems || 250,
@@ -5249,10 +5296,12 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     stopReason !== 'instagram-rate-limit'
     && stopReason !== 'ui-stop-requested'
     && stopReason !== 'relationship-list-temporarily-unavailable'
-    && !targetReached()
-    && expectedCount > 0
-    && usersByUsername.size < expectedCount
     && shouldAttemptRelationshipSearch
+    && (
+      (expectedCount > 0 && usersByUsername.size < expectedCount)
+      || missingKnownRelationshipSearchQueries.length > 0
+      || usePartitionedCollection
+    )
   ) {
     const searchResult = await collectRelationshipSearchPartitions(
       page,
@@ -5262,6 +5311,11 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
         ...options,
         maxScrollRounds,
         hoverCardUsernames,
+        runtimeConfig: {
+          ...runtimeConfig,
+          relationshipSearchVerifyMissingOnly: !usePartitionedCollection
+            && missingKnownRelationshipSearchQueries.length > 0,
+        },
       },
       usersByUsername,
     );
@@ -5274,6 +5328,12 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     result.searchStopReason = searchResult.stopReason || null;
     result.searchMaxDepth = searchResult.maxDepth || 0;
     result.searchExpandedQueryCount = searchResult.expandedQueryCount || 0;
+    result.verifiedMissingUsernames = Array.isArray(searchResult.verifiedMissingUsernames)
+      ? searchResult.verifiedMissingUsernames
+      : [];
+    result.verifiedPresentUsernames = Array.isArray(searchResult.verifiedPresentUsernames)
+      ? searchResult.verifiedPresentUsernames
+      : [];
     openAttempts += searchResult.openAttempts || 0;
     totalScrollRounds += searchResult.rounds || 0;
 
@@ -5288,7 +5348,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
       searchMaxDepth: result.searchMaxDepth,
       searchExpandedQueryCount: result.searchExpandedQueryCount,
       reason: result.searchStopReason,
-      complete: targetReached(),
+      complete: !searchResult.rateLimited && !searchResult.gracefullyStopped,
       itemsPreview: buildRelationshipProgressPreview(
         usersByUsername,
         runtimeConfig.relationshipProgressCheckpointSize || 250,
@@ -5302,9 +5362,11 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
       result.rateLimited = true;
       result.rateLimitText = searchResult.rateLimitText || null;
     } else {
-      stopReason = targetReached()
-        ? (expectedCount > 0 && usersByUsername.size >= expectedCount ? 'expected-count-reached-after-search' : 'max-items-reached-after-search')
-        : (searchResult.stopReason || 'search-partitions-exhausted');
+      stopReason = searchResult.stopReason || (
+        expectedCount > 0 && usersByUsername.size >= expectedCount
+          ? 'expected-count-reached-after-search'
+          : 'search-partitions-exhausted'
+      );
     }
   }
 
@@ -5315,16 +5377,26 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   result.available = result.count > 0;
   result.openAttempts = openAttempts;
   result.scrollRounds = totalScrollRounds;
-  result.complete = stopReason !== 'instagram-rate-limit' && (expectedCount > 0
-    ? result.count >= expectedCount
-    : ((!hasItemLimit || result.count < maxItems) && [
-      'suggestions-section-reached',
-      'no-new-items-after-reopen',
-      'pass-bottom-stale',
-      'pass-scroll-stale',
-      'pass-no-new-items',
-      'search-partitions-exhausted',
-    ].includes(stopReason)));
+  result.complete = stopReason !== 'instagram-rate-limit'
+    && stopReason !== 'ui-stop-requested'
+    && stopReason !== 'relationship-list-temporarily-unavailable'
+    && (
+      result.searchAttempted
+        ? result.searchInputAvailable && ![
+          'search-dialog-not-found',
+          'search-input-not-found',
+          'search-input-lost',
+          'search-query-not-applied',
+          'search-max-scroll-rounds-reached',
+        ].includes(result.searchStopReason)
+        : ((!hasItemLimit || result.count < maxItems) && [
+          'suggestions-section-reached',
+          'no-new-items-after-reopen',
+          'pass-bottom-stale',
+          'pass-scroll-stale',
+          'pass-no-new-items',
+        ].includes(stopReason))
+    );
   result.reason = stopReason === 'instagram-rate-limit'
     ? stopReason
     : stopReason === 'ui-stop-requested'
@@ -5346,6 +5418,8 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     rateLimited: result.rateLimited,
     partitioned: usePartitionedCollection,
     partitionThreshold,
+    verifiedMissingUsernames: result.verifiedMissingUsernames,
+    verifiedPresentUsernames: result.verifiedPresentUsernames,
     itemsPreview: buildRelationshipProgressPreview(
       usersByUsername,
       runtimeConfig.relationshipProgressCheckpointSize || 250,
@@ -8259,7 +8333,10 @@ async function collectRelationshipListForRuntime(page, username, profile, relati
   const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
   const options = buildRelationshipCollectionOptions(runtimeConfig, normalizedRelationship);
 
-  if (runtimeConfig.relationshipSearchOnly || isRelationshipSearchOnlyMode) {
+  if (
+    (runtimeConfig.relationshipSearchOnly || isRelationshipSearchOnlyMode)
+    && normalizeInstagramUsername(runtimeConfig.relationshipSearchTargetUsername || '')
+  ) {
     return collectPublicRelationshipSearchOnlyList(page, username, profile, normalizedRelationship, options);
   }
 
@@ -8301,6 +8378,18 @@ function mergeRelationshipLists(previousList, nextList) {
   const recoveredFromRateLimit = Boolean(
     (previousList.rateLimited || previousList.rateLimitRecovered) && !nextList.rateLimited,
   );
+  const verifiedPresentUsernames = new Set([
+    ...(Array.isArray(previousList.verifiedPresentUsernames) ? previousList.verifiedPresentUsernames : []),
+    ...(Array.isArray(nextList.verifiedPresentUsernames) ? nextList.verifiedPresentUsernames : []),
+  ].map(normalizeInstagramUsername).filter(Boolean));
+  const verifiedMissingUsernames = new Set([
+    ...(Array.isArray(previousList.verifiedMissingUsernames) ? previousList.verifiedMissingUsernames : []),
+    ...(Array.isArray(nextList.verifiedMissingUsernames) ? nextList.verifiedMissingUsernames : []),
+  ].map(normalizeInstagramUsername).filter(Boolean));
+
+  for (const presentUsername of verifiedPresentUsernames) {
+    verifiedMissingUsernames.delete(presentUsername);
+  }
 
   return {
     ...previousList,
@@ -8327,6 +8416,8 @@ function mergeRelationshipLists(previousList, nextList) {
     searchStopReason: nextList.searchStopReason || previousList.searchStopReason || null,
     searchMaxDepth: Math.max(Number(previousList.searchMaxDepth) || 0, Number(nextList.searchMaxDepth) || 0),
     searchExpandedQueryCount: (Number(previousList.searchExpandedQueryCount) || 0) + (Number(nextList.searchExpandedQueryCount) || 0),
+    verifiedMissingUsernames: Array.from(verifiedMissingUsernames),
+    verifiedPresentUsernames: Array.from(verifiedPresentUsernames),
   };
 }
 
