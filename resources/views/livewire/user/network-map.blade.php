@@ -8,7 +8,6 @@
     data-network-layout-mode="clusters"
     data-network-background-mode="light"
     data-network-lazy="true"
-    data-network-intersected="false"
     @if($graphToken && ($cacheDebug['chunk_count'] ?? 0) > 0)
         data-network-graph-token="{{ $graphToken }}"
         data-network-graph-hash="{{ $cacheDebug['data_hash'] ?? '' }}"
@@ -17,38 +16,11 @@
     @endif
     wire:loading.class="cursor-wait"
     x-data="{
-        livewireComponentId: @js($this->getId()),
-        mapLoadRequested: @js((bool) $graphToken),
         mapFullscreen: false,
         filterMenu: null,
         profileListOpen: false,
         networkNode: { id: null, type: null, isKnownProfile: false },
         nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, detailUrl: null, name: '', handle: '', x: 0, y: 0 },
-        mapWire() {
-            return window.Livewire?.find?.(this.livewireComponentId) || null;
-        },
-        callMapMethod(method, ...args) {
-            const wire = this.mapWire();
-
-            if (!wire || typeof wire.$call !== 'function') {
-                return null;
-            }
-
-            return wire.$call(method, ...args);
-        },
-        loadMapWhenVisible() {
-            this.$root.dataset.networkIntersected = 'true';
-            window.dispatchEvent(new CustomEvent('network-map-intersect', {
-                detail: { mapId: '{{ $mapId }}' },
-            }));
-
-            if (this.mapLoadRequested) {
-                return;
-            }
-
-            this.mapLoadRequested = true;
-            this.callMapMethod('loadNetworkGraph');
-        },
         notifyAssistantContext() {
             window.dispatchEvent(new CustomEvent('assistant-network-context', {
                 detail: {
@@ -67,8 +39,6 @@
             return !detail?.mapId || detail.mapId === '{{ $mapId }}';
         },
         openMap() {
-            this.loadMapWhenVisible();
-
             if (this.mapFullscreen) {
                 return;
             }
@@ -110,11 +80,11 @@
             }
 
             if (event.detail.action === 'scan') {
-                this.callMapMethod('scanProfile', event.detail.id);
+                this.$wire.scanProfile(event.detail.id);
                 return;
             }
 
-            this.callMapMethod('openProfilePreview', event.detail.id);
+            this.$wire.openProfilePreview(event.detail.id);
         },
         setNetworkNode(event) {
             if (event.detail?.mapId && event.detail.mapId !== '{{ $mapId }}') {
@@ -154,7 +124,7 @@
             }
 
             if (event.detail?.id) {
-                this.callMapMethod('openProfilePreview', event.detail.id);
+                this.$wire.openProfilePreview(event.detail.id);
             }
         },
         handleMapCommand(event) {
@@ -487,7 +457,6 @@
                         data-network-surface
                         x-bind:class="mapFullscreen ? 'h-screen min-h-0' : 'h-[420px] min-h-[420px] cursor-zoom-in'"
                         x-on:click="if (!mapFullscreen) openMap()"
-                        x-intersect.once="loadMapWhenVisible()"
                         wire:ignore
                     >
                         <div data-network-canvas class="absolute inset-0 bg-slate-100"></div>
@@ -504,8 +473,8 @@
                         <div data-network-loading-panel class="absolute left-4 top-4 z-10 w-[min(420px,calc(100%-2rem))] rounded-lg border border-slate-200 bg-white/95 p-4 shadow-sm backdrop-blur">
                             <div class="flex items-start justify-between gap-3">
                                 <div>
-                                    <div class="text-sm font-bold text-slate-950" data-network-build-label>Netzwerk wartet</div>
-                                    <div class="mt-1 text-xs leading-5 text-slate-500" data-network-build-text>Die Karte wird geladen, sobald sie sichtbar ist.</div>
+                                    <div class="text-sm font-bold text-slate-950" data-network-build-label>Netzwerk wird vorbereitet</div>
+                                    <div class="mt-1 text-xs leading-5 text-slate-500" data-network-build-text>Die gespeicherten Profile und Listen werden nachgeladen.</div>
                                 </div>
                                 <div class="h-2.5 w-2.5 rounded-full bg-sky-500" data-network-build-dot></div>
                             </div>
@@ -580,7 +549,7 @@
                                 type="button"
                                 class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
                                 wire:loading.attr="disabled"
-                                x-on:click="callMapMethod('openProfilePreview', networkNode.id)"
+                                x-on:click="$wire.openProfilePreview(networkNode.id)"
                             >
                                 Profil öffnen
                             </button>
@@ -589,7 +558,7 @@
                                 class="w-full rounded-lg border border-pink-200 bg-pink-50 px-3 py-2 text-sm font-semibold text-pink-700 transition hover:bg-pink-100 disabled:opacity-50"
                                 x-show="!networkNode.isKnownProfile"
                                 wire:loading.attr="disabled"
-                                x-on:click="callMapMethod('addProfileAsKnown', networkNode.id)"
+                                x-on:click="$wire.addProfileAsKnown(networkNode.id)"
                             >
                                 Als bekanntes Profil speichern
                             </button>
@@ -597,7 +566,7 @@
                                 type="button"
                                 class="w-full rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100 disabled:opacity-50"
                                 wire:loading.attr="disabled"
-                                x-on:click="callMapMethod('scanProfile', networkNode.id)"
+                                x-on:click="$wire.scanProfile(networkNode.id)"
                             >
                                 Profil im Hintergrund scannen
                             </button>
@@ -648,13 +617,13 @@
         <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-show="nodeMenu.type === 'person' && nodeMenu.detailUrl" x-on:click="window.location.href = nodeMenu.detailUrl; closeNodeMenu()">
             Person öffnen
         </button>
-        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-show="nodeMenu.type !== 'person'" x-on:click="callMapMethod('openProfilePreview', nodeMenu.id); closeNodeMenu()">
+        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-slate-700 hover:bg-slate-50" x-show="nodeMenu.type !== 'person'" x-on:click="$wire.openProfilePreview(nodeMenu.id); closeNodeMenu()">
             Profil öffnen
         </button>
-        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-pink-700 hover:bg-pink-50" x-show="nodeMenu.type !== 'person' && !nodeMenu.isKnownProfile" x-on:click="callMapMethod('addProfileAsKnown', nodeMenu.id); closeNodeMenu()">
+        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-pink-700 hover:bg-pink-50" x-show="nodeMenu.type !== 'person' && !nodeMenu.isKnownProfile" x-on:click="$wire.addProfileAsKnown(nodeMenu.id); closeNodeMenu()">
             Als bekannt speichern
         </button>
-        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-sky-700 hover:bg-sky-50" x-show="nodeMenu.type !== 'person'" x-on:click="callMapMethod('scanProfile', nodeMenu.id); closeNodeMenu()">
+        <button type="button" class="block w-full px-3 py-2 text-left font-semibold text-sky-700 hover:bg-sky-50" x-show="nodeMenu.type !== 'person'" x-on:click="$wire.scanProfile(nodeMenu.id); closeNodeMenu()">
             Scan im Hintergrund starten
         </button>
     </div>

@@ -107,6 +107,8 @@ class NetworkMap extends Component
             'status' => 'idle',
             'scope' => $this->contextTrackedPersonId ? 'person-'.$this->contextTrackedPersonId : 'global',
         ];
+
+        $this->loadNetworkGraph(dispatchPrepared: false);
     }
 
     private function generateDataHash(Collection $trackedPeople): string
