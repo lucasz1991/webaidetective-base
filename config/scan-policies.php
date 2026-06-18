@@ -47,6 +47,9 @@ return [
             'max_scroll_rounds' => 40,
             'max_likes_per_post' => 250,
             'max_comments_per_post' => 250,
+            'open_likes_dialog_enabled' => true,
+            'like_dialog_max_scroll_rounds' => 40,
+            'comment_dialog_max_scroll_rounds' => 40,
         ],
         'suggestions' => [
             'error_attempts' => 1,

@@ -184,6 +184,17 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
       input?.postScanMaxCommentsPerPost || input?.post_scan_max_comments_per_post,
       merged.postScanMaxCommentsPerPost || 250,
     ) || 250,
+    postScanOpenLikesDialogEnabled: input?.postScanOpenLikesDialogEnabled !== false
+      && input?.post_scan_open_likes_dialog_enabled !== false
+      && merged.postScanOpenLikesDialogEnabled !== false,
+    postScanLikeDialogMaxScrollRounds: normalizeOptionalPositiveInteger(
+      input?.postScanLikeDialogMaxScrollRounds || input?.post_scan_like_dialog_max_scroll_rounds,
+      merged.postScanLikeDialogMaxScrollRounds || 40,
+    ) || 40,
+    postScanCommentDialogMaxScrollRounds: normalizeOptionalPositiveInteger(
+      input?.postScanCommentDialogMaxScrollRounds || input?.post_scan_comment_dialog_max_scroll_rounds,
+      merged.postScanCommentDialogMaxScrollRounds || 40,
+    ) || 40,
     profileHoverCardsEnabled: input?.profileHoverCardsEnabled !== false
       && input?.profile_hover_cards_enabled !== false
       && merged.profileHoverCardsEnabled !== false,

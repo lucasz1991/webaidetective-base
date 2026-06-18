@@ -102,6 +102,9 @@ class InstagramScanPolicyService
                 'postScanMaxScrollRounds' => max(1, (int) ($policy['max_scroll_rounds'] ?? 40)),
                 'postScanMaxLikesPerPost' => max(1, (int) ($policy['max_likes_per_post'] ?? 250)),
                 'postScanMaxCommentsPerPost' => max(1, (int) ($policy['max_comments_per_post'] ?? 250)),
+                'postScanOpenLikesDialogEnabled' => (bool) ($policy['open_likes_dialog_enabled'] ?? true),
+                'postScanLikeDialogMaxScrollRounds' => max(1, min(1000, (int) ($policy['like_dialog_max_scroll_rounds'] ?? 40))),
+                'postScanCommentDialogMaxScrollRounds' => max(1, min(1000, (int) ($policy['comment_dialog_max_scroll_rounds'] ?? 40))),
             ];
         }
 

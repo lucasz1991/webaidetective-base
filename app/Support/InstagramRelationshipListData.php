@@ -6,7 +6,6 @@ use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScan;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
-use App\Models\TrackedPersonInstagramSnapshot;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
@@ -48,6 +47,21 @@ class InstagramRelationshipListData
         $scanRemovedItems = $this->sortNewest($this->loadItems($relationshipList, 'removedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
         $removedItems = $this->sortNewest($this->loadItems($relationshipList, 'currentlyRemovedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
         $removedHistoryItems = $this->sortNewest($this->loadItems($relationshipList, 'removedHistoryItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
+        $profileIndex = $this->profileIndex(
+            collect()
+                ->merge($addedItems)
+                ->merge($activeItems)
+                ->merge($scanRemovedItems)
+                ->merge($removedItems)
+                ->merge($removedHistoryItems),
+            $trackedPerson,
+        );
+
+        $addedItems = $this->enrichItems($addedItems, $profileIndex);
+        $activeItems = $this->enrichItems($activeItems, $profileIndex);
+        $scanRemovedItems = $this->enrichItems($scanRemovedItems, $profileIndex);
+        $removedItems = $this->enrichItems($removedItems, $profileIndex);
+        $removedHistoryItems = $this->enrichItems($removedHistoryItems, $profileIndex);
         $stats = $this->stats($relationshipList, $activeItems);
         $stats['activeCount'] = max($stats['activeCount'], $activeItems->count());
         $stats['observedCount'] = max($stats['observedCount'], $activeItems->count());
@@ -72,36 +86,6 @@ class InstagramRelationshipListData
                 || $removedItems->isNotEmpty()
                 || $removedHistoryItems->isNotEmpty(),
         ];
-    }
-
-    public function relationshipProfileImagesForSnapshot(?TrackedPersonInstagramSnapshot $snapshot): array
-    {
-        $rawPayload = is_array($snapshot?->raw_payload) ? $snapshot->raw_payload : [];
-        $usernames = collect(['followersList', 'followingList'])
-            ->flatMap(fn (string $payloadKey): Collection => $this->relationshipListUsernames(
-                data_get($rawPayload, 'extractedProfile.'.$payloadKey, []),
-            ))
-            ->filter()
-            ->unique()
-            ->values();
-
-        if ($usernames->isEmpty()) {
-            return [];
-        }
-
-        return $usernames
-            ->chunk(1000)
-            ->flatMap(fn (Collection $chunk): Collection => InstagramProfile::withTrashed()
-                ->whereIn('username', $chunk->all())
-                ->whereNotNull('profile_image_path')
-                ->get(['username', 'profile_image_url', 'profile_image_path']))
-            ->mapWithKeys(function (InstagramProfile $profile): array {
-                $username = Str::lower(ltrim((string) $profile->username, '@'));
-                $imageUrl = PublicAssetUrl::fromStorageOrRemote($profile->profile_image_path, $profile->profile_image_url);
-
-                return $username !== '' && $imageUrl ? [$username => $imageUrl] : [];
-            })
-            ->all();
     }
 
     private function loadItems(mixed $relationshipList, string $key = 'items'): Collection
@@ -163,9 +147,13 @@ class InstagramRelationshipListData
                     'username' => $raw['username'] ?? $item->username_snapshot,
                     'displayName' => $raw['displayName'] ?? $item->display_name_snapshot,
                     'profileUrl' => $raw['profileUrl'] ?? $item->profile_url_snapshot,
-                    'profileImageUrl' => $raw['profileImageUrl'] ?? $related?->profile_image_storage_url,
+                    'instagramProfileId' => $related?->id,
+                    'profileImagePath' => $related?->profile_image_path,
                     'profileVisibility' => $raw['profileVisibility'] ?? $related?->profile_visibility,
                     'isPrivate' => array_key_exists('isPrivate', $raw) ? $raw['isPrivate'] : $related?->is_private,
+                    'postsCount' => $raw['postsCount'] ?? $related?->posts_count,
+                    'followersCount' => $raw['followersCount'] ?? $related?->followers_count,
+                    'followingCount' => $raw['followingCount'] ?? $related?->following_count,
                     'firstSeenAt' => $raw['firstSeenAt'] ?? $item->observed_at?->toIso8601String(),
                     'lastSeenAt' => $raw['lastSeenAt'] ?? $item->observed_at?->toIso8601String(),
                 ];
@@ -206,15 +194,113 @@ class InstagramRelationshipListData
                     'username' => $connection->candidate_username,
                     'displayName' => $connection->candidate_display_name ?: $profile?->display_name,
                     'profileUrl' => $connection->candidate_profile_url ?: $profile?->profile_url,
-                    'profileImageUrl' => $profile?->profile_image_storage_url,
+                    'instagramProfileId' => $profile?->id,
+                    'profileImagePath' => $profile?->profile_image_path,
                     'profileVisibility' => $profile?->profile_visibility,
                     'isPrivate' => $profile?->is_private,
+                    'postsCount' => $profile?->posts_count,
+                    'followersCount' => $profile?->followers_count,
+                    'followingCount' => $profile?->following_count,
                     'firstSeenAt' => $connection->first_seen_at?->toIso8601String(),
                     'lastSeenAt' => $connection->last_seen_at?->toIso8601String(),
                     'meta' => $meta,
                     'statusLabel' => $relationshipType === 'follows_target' ? 'Rekonstruierter Follower' : 'Rekonstruiert gefolgt',
                     'statusTone' => 'amber',
                     'reconstructed' => true,
+                ];
+            })
+            ->values();
+    }
+
+    private function profileIndex(Collection $items, TrackedPerson $trackedPerson): Collection
+    {
+        $usernames = $items
+            ->map(fn ($item): string => Str::lower(ltrim(trim((string) data_get($item, 'username', data_get($item, 'username_snapshot', ''))), '@')))
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($usernames->isEmpty()) {
+            return collect();
+        }
+
+        $profiles = InstagramProfile::withTrashed()
+            ->whereIn('username', $usernames->all())
+            ->get([
+                'id',
+                'username',
+                'display_name',
+                'full_name',
+                'profile_url',
+                'profile_image_path',
+                'is_private',
+                'profile_visibility',
+                'posts_count',
+                'followers_count',
+                'following_count',
+            ])
+            ->keyBy(fn (InstagramProfile $profile): string => Str::lower((string) $profile->username));
+
+        $profileIds = $profiles->pluck('id')->filter()->values();
+        $trackedByProfileId = $trackedPerson->newQuery()
+            ->where('user_id', $trackedPerson->user_id)
+            ->whereIn('current_instagram_profile_id', $profileIds->all())
+            ->get(['id', 'current_instagram_profile_id', 'instagram_username'])
+            ->keyBy('current_instagram_profile_id');
+        $trackedByUsername = $trackedPerson->newQuery()
+            ->where('user_id', $trackedPerson->user_id)
+            ->whereIn('instagram_username', $usernames->all())
+            ->get(['id', 'current_instagram_profile_id', 'instagram_username'])
+            ->keyBy(fn (TrackedPerson $person): string => Str::lower(ltrim((string) $person->instagram_username, '@')));
+
+        return $profiles->map(function (InstagramProfile $profile) use ($trackedByProfileId, $trackedByUsername): array {
+            $username = Str::lower((string) $profile->username);
+            $tracked = $trackedByProfileId->get($profile->id) ?: $trackedByUsername->get($username);
+
+            return [
+                'id' => $profile->id,
+                'username' => $profile->username,
+                'displayName' => $profile->display_name ?: $profile->full_name,
+                'profileUrl' => $profile->profile_url,
+                'profileImagePath' => $profile->profile_image_path,
+                'profileVisibility' => $profile->profile_visibility,
+                'isPrivate' => $profile->is_private,
+                'postsCount' => $profile->posts_count,
+                'followersCount' => $profile->followers_count,
+                'followingCount' => $profile->following_count,
+                'trackedPersonId' => $tracked?->id,
+                'isTracked' => (bool) $tracked,
+            ];
+        });
+    }
+
+    private function enrichItems(Collection $items, Collection $profileIndex): Collection
+    {
+        return $items
+            ->map(function ($item) use ($profileIndex) {
+                $username = Str::lower(ltrim(trim((string) data_get($item, 'username', data_get($item, 'username_snapshot', ''))), '@'));
+                $profile = $profileIndex->get($username);
+
+                if (! $profile) {
+                    return $item;
+                }
+
+                $raw = is_array($item) ? $item : (array) $item;
+
+                return [
+                    ...$raw,
+                    'username' => $raw['username'] ?? $profile['username'],
+                    'displayName' => $raw['displayName'] ?? $profile['displayName'],
+                    'profileUrl' => $raw['profileUrl'] ?? $profile['profileUrl'],
+                    'instagramProfileId' => $raw['instagramProfileId'] ?? $profile['id'],
+                    'profileImagePath' => $profile['profileImagePath'],
+                    'profileVisibility' => $raw['profileVisibility'] ?? $profile['profileVisibility'],
+                    'isPrivate' => array_key_exists('isPrivate', $raw) ? $raw['isPrivate'] : $profile['isPrivate'],
+                    'postsCount' => $raw['postsCount'] ?? $profile['postsCount'],
+                    'followersCount' => $raw['followersCount'] ?? $profile['followersCount'],
+                    'followingCount' => $raw['followingCount'] ?? $profile['followingCount'],
+                    'trackedPersonId' => $raw['trackedPersonId'] ?? $profile['trackedPersonId'],
+                    'isTracked' => $raw['isTracked'] ?? $profile['isTracked'],
                 ];
             })
             ->values();
@@ -280,55 +366,4 @@ class InstagramRelationshipListData
         return 0;
     }
 
-    private function relationshipListUsernames(mixed $relationshipList): Collection
-    {
-        if (! is_array($relationshipList) || $relationshipList === []) {
-            return collect();
-        }
-
-        $items = collect();
-
-        foreach ($this->itemKeys() as $key) {
-            $items = $items->merge(collect(data_get($relationshipList, $key, [])));
-        }
-
-        $itemsPath = data_get($relationshipList, 'itemsPath');
-
-        if (is_string($itemsPath) && $itemsPath !== '' && Storage::disk('public')->exists($itemsPath)) {
-            try {
-                $decoded = json_decode(Storage::disk('public')->get($itemsPath), true);
-
-                if (is_array($decoded)) {
-                    foreach ($this->itemKeys() as $key) {
-                        $items = $items->merge(collect(data_get($decoded, $key, [])));
-                    }
-                }
-            } catch (\Throwable) {
-                // Snapshot sidecar files are optional for image lookup.
-            }
-        }
-
-        return $items
-            ->filter(fn ($item): bool => is_array($item) && filled($item['username'] ?? null))
-            ->map(fn (array $item): string => Str::lower(ltrim(trim((string) $item['username']), '@')))
-            ->filter()
-            ->values();
-    }
-
-    private function itemKeys(): array
-    {
-        return [
-            'items',
-            'activeItems',
-            'observedItems',
-            'observedPreview',
-            'itemsPreview',
-            'addedItems',
-            'removedItems',
-            'currentlyRemovedItems',
-            'removedHistoryItems',
-            'removedHistoryPreview',
-            'allKnownItems',
-        ];
-    }
 }

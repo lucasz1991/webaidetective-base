@@ -6,7 +6,7 @@
     </div>
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramRelationshipList,scanPublicProfileConnections,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramRelationshipList,scanInstagramProfileFromList,scanPublicProfileConnections,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts"
         class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">

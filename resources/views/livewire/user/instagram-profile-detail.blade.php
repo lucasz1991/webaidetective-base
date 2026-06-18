@@ -38,7 +38,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagramMini,analyzeInstagram,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts"
+        wire:target="analyzeInstagramMini,analyzeInstagram,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts,scanInstagramProfileFromList"
         class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="w-full max-w-md rounded-lg bg-white p-6 text-center shadow-2xl">

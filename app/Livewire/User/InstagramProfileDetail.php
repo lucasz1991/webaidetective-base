@@ -35,6 +35,10 @@ class InstagramProfileDetail extends Component
 
     public string $detailStatusLevel = 'neutral';
 
+    protected $listeners = [
+        'scan-instagram-profile-from-list' => 'scanInstagramProfileFromList',
+    ];
+
     public function mount(int $instagramProfileId): void
     {
         $this->instagramProfileId = $instagramProfileId;
@@ -76,26 +80,42 @@ class InstagramProfileDetail extends Component
                 ->where('status', 'active')
                 ->whereNull('removed_at')
                 ->whereHas('scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
-                ->with('relatedInstagramProfile')
+                ->with([
+                    'relatedInstagramProfile.trackedPersonLinks' => fn ($links) => $links
+                        ->where('user_id', $userId)
+                        ->whereNull('unlinked_at'),
+                ])
                 ->latest('last_seen_at'),
             'relatedRelationships' => fn ($query) => $query
                 ->where('status', 'active')
                 ->whereNull('removed_at')
                 ->whereHas('scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
-                ->with('sourceInstagramProfile')
+                ->with([
+                    'sourceInstagramProfile.trackedPersonLinks' => fn ($links) => $links
+                        ->where('user_id', $userId)
+                        ->whereNull('unlinked_at'),
+                ])
                 ->latest('last_seen_at'),
         ]);
         $latestFollowersScan = $profile->listScans()
             ->where('user_id', $userId)
             ->where('list_type', 'followers')
             ->latest('scanned_at')
-            ->with(['items.relatedInstagramProfile'])
+            ->with([
+                'items.relatedInstagramProfile.trackedPersonLinks' => fn ($links) => $links
+                    ->where('user_id', $userId)
+                    ->whereNull('unlinked_at'),
+            ])
             ->first();
         $latestFollowingScan = $profile->listScans()
             ->where('user_id', $userId)
             ->where('list_type', 'following')
             ->latest('scanned_at')
-            ->with(['items.relatedInstagramProfile'])
+            ->with([
+                'items.relatedInstagramProfile.trackedPersonLinks' => fn ($links) => $links
+                    ->where('user_id', $userId)
+                    ->whereNull('unlinked_at'),
+            ])
             ->first();
         $selectedPost = null;
 
@@ -253,11 +273,11 @@ class InstagramProfileDetail extends Component
         $this->runSuggestionScan(true);
     }
 
-    private function runSuggestionScan(bool $deepSearch): void
+    private function runSuggestionScan(bool $deepSearch, ?InstagramProfile $profile = null): void
     {
         @set_time_limit(0);
 
-        $profile = $this->resolveProfile();
+        $profile ??= $this->resolveProfile();
         $trackedPerson = $this->findTrackedPerson($profile);
         $scanLabel = $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan';
         $usedCreditsBefore = $this->usedCredits();
@@ -295,9 +315,37 @@ class InstagramProfileDetail extends Component
 
     public function scanInstagramPosts(): void
     {
+        $this->runPostScan();
+    }
+
+    public function scanInstagramProfileFromList(?int $profileId = null, ?string $username = null, string $scanType = 'mini'): void
+    {
         @set_time_limit(0);
 
-        $profile = $this->resolveProfile();
+        $profile = $this->resolveListProfile($profileId, $username);
+
+        if (! $profile) {
+            $this->setStatus('Das ausgewaehlte Instagram-Profil wurde nicht gefunden oder ist nicht freigegeben.', 'error');
+
+            return;
+        }
+
+        match ($scanType) {
+            'full' => $this->runAnalysis(true, $profile),
+            'followers' => $this->runRelationshipListScan('followers', $profile),
+            'following' => $this->runRelationshipListScan('following', $profile),
+            'posts' => $this->runPostScan($profile),
+            'suggestions' => $this->runSuggestionScan(false, $profile),
+            'suggestion_deepsearch' => $this->runSuggestionScan(true, $profile),
+            default => $this->runAnalysis(false, $profile),
+        };
+    }
+
+    private function runPostScan(?InstagramProfile $profile = null): void
+    {
+        @set_time_limit(0);
+
+        $profile ??= $this->resolveProfile();
         $usedCreditsBefore = $this->usedCredits();
 
         try {
@@ -319,11 +367,11 @@ class InstagramProfileDetail extends Component
         }
     }
 
-    private function runAnalysis(bool $fullScan): void
+    private function runAnalysis(bool $fullScan, ?InstagramProfile $profile = null): void
     {
         @set_time_limit(0);
 
-        $profile = $this->resolveProfile();
+        $profile ??= $this->resolveProfile();
         $usedCreditsBefore = $this->usedCredits();
 
         try {
@@ -343,11 +391,11 @@ class InstagramProfileDetail extends Component
         }
     }
 
-    private function runRelationshipListScan(string $relationship): void
+    private function runRelationshipListScan(string $relationship, ?InstagramProfile $profile = null): void
     {
         @set_time_limit(0);
 
-        $profile = $this->resolveProfile();
+        $profile ??= $this->resolveProfile();
         $label = $relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste';
         $usedCreditsBefore = $this->usedCredits();
 
@@ -426,8 +474,29 @@ class InstagramProfileDetail extends Component
     {
         $userId = (int) Auth::id();
 
-        return InstagramProfile::query()
+        return $this->accessibleProfileQuery($userId)
             ->whereKey($this->instagramProfileId)
+            ->firstOrFail();
+    }
+
+    private function resolveListProfile(?int $profileId = null, ?string $username = null): ?InstagramProfile
+    {
+        $userId = (int) Auth::id();
+        $username = strtolower(ltrim(trim((string) $username), '@'));
+
+        if (! $profileId && $username === '') {
+            return null;
+        }
+
+        return $this->accessibleProfileQuery($userId)
+            ->when($profileId, fn ($query) => $query->whereKey($profileId))
+            ->when(! $profileId && $username !== '', fn ($query) => $query->where('username', $username))
+            ->first();
+    }
+
+    private function accessibleProfileQuery(int $userId)
+    {
+        return InstagramProfile::query()
             ->where(function ($query) use ($userId): void {
                 $query
                     ->whereHas('trackedPersonLinks', fn ($links) => $links->where('user_id', $userId))
@@ -446,8 +515,7 @@ class InstagramProfileDetail extends Component
                         'sourceInferredConnections.trackedPerson',
                         fn ($people) => $people->where('user_id', $userId),
                     );
-            })
-            ->firstOrFail();
+            });
     }
 
     private function usedCredits(): int

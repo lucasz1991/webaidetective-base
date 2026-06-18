@@ -12,9 +12,13 @@ use App\Models\TrackedPersonInstagramMedia;
 use App\Models\TrackedPersonInstagramPublicProfileScan;
 use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
+use App\Services\TrackedPeople\InstagramProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
+use App\Services\TrackedPeople\TrackedPersonInstagramPostScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
+use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
 use App\Services\TrackedPeople\TrackedPersonScanDispatcher;
 use App\Support\InstagramRelationshipListData;
@@ -129,6 +133,7 @@ class TrackedPersonDetail extends Component
     protected $listeners = [
         'tracked-person-refresh' => '$refresh',
         'scan-instagram-relationship-list' => 'scanInstagramRelationshipList',
+        'scan-instagram-profile-from-list' => 'scanInstagramProfileFromList',
     ];
 
     public function mount(int $trackedPersonId, bool $compact = false): void
@@ -350,6 +355,36 @@ class TrackedPersonDetail extends Component
         }
 
         $this->runInstagramRelationshipListScan($relationship);
+    }
+
+    public function scanInstagramProfileFromList(?int $profileId = null, ?string $username = null, string $scanType = 'mini'): void
+    {
+        @set_time_limit(0);
+
+        $profile = $this->resolveAccessibleInstagramProfile($profileId, $username);
+
+        if (! $profile) {
+            $this->setDetailStatus('Das ausgewaehlte Instagram-Profil wurde nicht gefunden oder ist nicht freigegeben.', 'error');
+
+            return;
+        }
+
+        try {
+            [$message, $level] = match ($scanType) {
+                'full' => $this->scanListInstagramProfileAnalysis($profile, true),
+                'followers' => $this->scanListInstagramProfileRelationship($profile, 'followers'),
+                'following' => $this->scanListInstagramProfileRelationship($profile, 'following'),
+                'posts' => $this->scanListInstagramProfilePosts($profile),
+                'suggestions' => $this->scanListInstagramProfileSuggestions($profile, false),
+                'suggestion_deepsearch' => $this->scanListInstagramProfileSuggestions($profile, true),
+                default => $this->scanListInstagramProfileAnalysis($profile, false),
+            };
+
+            $this->setDetailStatus($message, $level);
+            $this->dispatch('tracked-person-refresh');
+        } catch (\Throwable $exception) {
+            $this->setDetailStatus('Scan fuer @'.$profile->username.' fehlgeschlagen: '.$exception->getMessage(), 'error');
+        }
     }
 
     public function openPostEngagementModal(int $postId, string $type): void
@@ -2122,6 +2157,111 @@ class TrackedPersonDetail extends Component
                 'screenshots' => $this->snapshotScreenshots($historySnapshot),
             ])
             ->values();
+    }
+
+    private function scanListInstagramProfileAnalysis(InstagramProfile $profile, bool $fullScan): array
+    {
+        $result = app(InstagramProfileScanService::class)
+            ->scan($profile, (int) Auth::id(), $fullScan);
+
+        return [
+            '@'.$profile->username.' '.($fullScan ? 'Vollanalyse' : 'Mini-Scan').': '.$result['statusMessage'],
+            $result['statusLevel'],
+        ];
+    }
+
+    private function scanListInstagramProfileRelationship(InstagramProfile $profile, string $relationship): array
+    {
+        $label = $relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste';
+        $scan = app(TrackedPersonInstagramProfileListScanService::class)
+            ->scan(null, $profile, null, [$relationship], (int) Auth::id())
+            ->first();
+
+        return [
+            '@'.$profile->username.' '.$label.' gescannt: '.number_format((int) ($scan?->active_count ?? 0), 0, ',', '.').' aktive Eintraege.',
+            $scan?->status_level === 'success' ? 'success' : 'partial',
+        ];
+    }
+
+    private function scanListInstagramProfilePosts(InstagramProfile $profile): array
+    {
+        $scan = app(TrackedPersonInstagramPostScanService::class)
+            ->scanProfile($profile, (int) Auth::id());
+
+        return [
+            '@'.$profile->username.' Beitragsscan abgeschlossen: '
+                .number_format($scan->observed_count, 0, ',', '.').' geprueft, '
+                .number_format($scan->new_count, 0, ',', '.').' neu und '
+                .number_format($scan->updated_count, 0, ',', '.').' aktualisiert.',
+            $scan->status_level === 'success' ? 'success' : 'partial',
+        ];
+    }
+
+    private function scanListInstagramProfileSuggestions(InstagramProfile $profile, bool $deepSearch): array
+    {
+        $trackedPerson = Auth::user()
+            ->trackedPeople()
+            ->where(function ($query) use ($profile): void {
+                $query->where('current_instagram_profile_id', $profile->id)
+                    ->orWhereRaw(
+                        "LOWER(TRIM(LEADING '@' FROM instagram_username)) = ?",
+                        [$profile->username],
+                    );
+            })
+            ->first();
+
+        if ($trackedPerson) {
+            $workflow = app(TrackedPersonInstagramWorkflowService::class);
+            $scan = $deepSearch
+                ? $workflow->runSuggestionDeepSearch($trackedPerson)
+                : $workflow->runSuggestionScan($trackedPerson);
+        } else {
+            $service = app(TrackedPersonInstagramSuggestionScanService::class);
+            $scan = $deepSearch
+                ? $service->scanProfileDeepSearch($profile, (int) Auth::id())
+                : $service->scanProfile($profile, (int) Auth::id());
+        }
+
+        return [
+            '@'.$profile->username.' '.($deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan').' abgeschlossen: '
+                .number_format($scan->suggestions_observed_count, 0, ',', '.').' Vorschlaege, '
+                .number_format($scan->suggestion_matches_count, 0, ',', '.').' Verbindungen.',
+            $scan->status_level === 'success' ? 'success' : 'partial',
+        ];
+    }
+
+    private function resolveAccessibleInstagramProfile(?int $profileId = null, ?string $username = null): ?InstagramProfile
+    {
+        $userId = (int) Auth::id();
+        $username = Str::lower(ltrim(trim((string) $username), '@'));
+
+        if (! $profileId && $username === '') {
+            return null;
+        }
+
+        return InstagramProfile::query()
+            ->when($profileId, fn ($query) => $query->whereKey($profileId))
+            ->when(! $profileId && $username !== '', fn ($query) => $query->where('username', $username))
+            ->where(function ($query) use ($userId): void {
+                $query
+                    ->whereHas('trackedPersonLinks', fn ($links) => $links->where('user_id', $userId))
+                    ->orWhereHas('publicProfileLinks', fn ($links) => $links->where('user_id', $userId))
+                    ->orWhereHas('listScans', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas('profileScans', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas('postScans', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas('suggestionScans', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas('sourceRelationships.scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas('relatedRelationships.scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
+                    ->orWhereHas(
+                        'candidateInferredConnections.trackedPerson',
+                        fn ($people) => $people->where('user_id', $userId),
+                    )
+                    ->orWhereHas(
+                        'sourceInferredConnections.trackedPerson',
+                        fn ($people) => $people->where('user_id', $userId),
+                    );
+            })
+            ->first();
     }
 
     private function resolveTrackedPerson(): TrackedPerson

@@ -140,6 +140,9 @@ const runtimeConfigDefaults = {
   postScanMaxScrollRounds: 40,
   postScanMaxLikesPerPost: 250,
   postScanMaxCommentsPerPost: 250,
+  postScanOpenLikesDialogEnabled: true,
+  postScanLikeDialogMaxScrollRounds: 40,
+  postScanCommentDialogMaxScrollRounds: 40,
   profileHoverCardsEnabled: true,
   profileHoverCardWaitMs: 850,
   suggestionDismissChecked: false,
@@ -1728,7 +1731,7 @@ async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeCon
   let truncated = false;
   let previousCount = -1;
   let staleRounds = 0;
-  const maxRounds = Math.max(8, Math.min(80, Number(runtimeConfig.postScanCommentDialogMaxScrollRounds || 40)));
+  const maxRounds = Math.max(1, Math.min(1000, Number(runtimeConfig.postScanCommentDialogMaxScrollRounds || 40)));
 
   await expandVisibleInstagramPostReplies(page, 6);
 
@@ -2121,7 +2124,7 @@ async function collectInstagramPostLikesFromDialog(page, runtimeConfig = {}) {
   let complete = false;
   let previousCount = -1;
   let staleRounds = 0;
-  const maxRounds = Math.max(8, Math.min(80, Number(runtimeConfig.postScanLikeDialogMaxScrollRounds || 40)));
+  const maxRounds = Math.max(1, Math.min(1000, Number(runtimeConfig.postScanLikeDialogMaxScrollRounds || 40)));
 
   for (let round = 0; round < maxRounds && likesByKey.size < maxLikes; round += 1) {
     const collected = await page.evaluate(({ limit }) => {
@@ -2460,6 +2463,39 @@ async function collectInstagramPostEngagementFromUi(page, post = {}, runtimeConf
   return result;
 }
 
+async function collectInstagramPostLikesFromUi(page, post = {}, runtimeConfig = {}) {
+  const result = {
+    likes: [],
+    likesComplete: false,
+    errors: [],
+  };
+
+  if (post.postUrl && !page.url().includes(`/${post.shortcode || ''}`)) {
+    const navigation = await navigateWithSoftTimeout(page, post.postUrl, runtimeConfig);
+
+    if (!navigation.ok) {
+      result.errors.push(`ui-navigation: ${navigation.error || 'unbekannter Fehler'}`);
+
+      return result;
+    }
+  }
+
+  await sleep(900);
+
+  const likesDialogOpened = await openInstagramPostLikesDialogReliable(page);
+
+  if (likesDialogOpened) {
+    const likes = await collectInstagramPostLikesFromDialog(page, runtimeConfig);
+    result.likes = likes.likes;
+    result.likesComplete = likes.complete;
+    await closeInstagramDialog(page);
+  } else {
+    result.errors.push('ui-likes-dialog-unavailable');
+  }
+
+  return result;
+}
+
 async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {}) {
   const maxLikes = Math.max(1, Number(runtimeConfig.postScanMaxLikesPerPost || 250));
   const maxComments = Math.max(1, Number(runtimeConfig.postScanMaxCommentsPerPost || 250));
@@ -2634,13 +2670,35 @@ async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {
   }
 
   const expectedLikes = hasFiniteNumericValue(post.likesCount) ? Number(post.likesCount) : null;
+  const openLikesDialogEnabled = runtimeConfig.postScanOpenLikesDialogEnabled !== false
+    && runtimeConfig.post_scan_open_likes_dialog_enabled !== false;
+  const shouldOpenLikesDialog = openLikesDialogEnabled
+    && post.postUrl
+    && maxLikes > 0
+    && expectedLikes !== 0;
+
+  if (shouldOpenLikesDialog) {
+    const uiLikes = await collectInstagramPostLikesFromUi(page, post, runtimeConfig);
+
+    for (const like of uiLikes.likes || []) {
+      addLikeToMap(likesByKey, like, maxLikes);
+    }
+
+    likesComplete = likesComplete || uiLikes.likesComplete
+      || (expectedLikes !== null && likesByKey.size >= Math.min(expectedLikes, maxLikes));
+
+    if (uiLikes.errors?.length) {
+      errors.push(...uiLikes.errors);
+    }
+  }
+
   const uiFallbackEnabled = runtimeConfig.postScanUiFallbackEnabled !== false
     && runtimeConfig.post_scan_ui_fallback_enabled !== false;
   const shouldUseUiFallback = uiFallbackEnabled
     && post.postUrl
     && (
-      (expectedLikes !== null && expectedLikes > 0 && likesByKey.size < Math.min(expectedLikes, maxLikes))
-      || (expectedLikes === null && likesByKey.size === 0)
+      (!shouldOpenLikesDialog && expectedLikes !== null && expectedLikes > 0 && likesByKey.size < Math.min(expectedLikes, maxLikes))
+      || (!shouldOpenLikesDialog && expectedLikes === null && likesByKey.size === 0)
       || (expectedComments !== null && expectedComments > 0 && commentsById.size < Math.min(expectedComments, maxComments))
       || errors.length > 0
     );

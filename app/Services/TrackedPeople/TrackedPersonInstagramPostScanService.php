@@ -113,6 +113,7 @@ class TrackedPersonInstagramPostScanService
         $posts = $this->normalizePosts($postPayload['items'] ?? []);
         $rawPayload = $this->withoutPostEngagementDetails($payload);
         $scannedAt = now('UTC');
+        $actorProfileIds = $this->ensureEngagementActorProfiles($posts);
 
         $stored = DatabaseKeepAlive::transaction(function () use (
             $trackedPerson,
@@ -124,6 +125,7 @@ class TrackedPersonInstagramPostScanService
             $posts,
             $scannedAt,
             $userId,
+            $actorProfileIds,
         ): array {
             $scan = InstagramPostScan::create([
                 'instagram_profile_id' => $profile->id,
@@ -146,9 +148,6 @@ class TrackedPersonInstagramPostScanService
             ]);
             $counts = ['new' => 0, 'updated' => 0, 'unchanged' => 0];
             $mediaQueue = [];
-            $actorProfileIds = InstagramProfile::query()
-                ->whereIn('username', $this->engagementUsernames($posts))
-                ->pluck('id', 'username');
 
             foreach ($posts as $postData) {
                 $mediaItems = $postData['media_items'] ?? [];
@@ -222,7 +221,7 @@ class TrackedPersonInstagramPostScanService
                     $scan,
                     $likes,
                     $likesComplete,
-                    $actorProfileIds->all(),
+                    $actorProfileIds,
                     $scannedAt,
                 );
                 $this->storePostComments(
@@ -230,7 +229,7 @@ class TrackedPersonInstagramPostScanService
                     $scan,
                     $comments,
                     $commentsComplete,
-                    $actorProfileIds->all(),
+                    $actorProfileIds,
                     $scannedAt,
                 );
 
@@ -453,16 +452,85 @@ class TrackedPersonInstagramPostScanService
         return array_values($normalized);
     }
 
-    private function engagementUsernames(array $posts): array
+    private function ensureEngagementActorProfiles(array $posts): array
     {
-        return collect($posts)
-            ->flatMap(fn (array $post): array => [
-                ...collect($post['likes'] ?? [])->pluck('username')->all(),
-                ...collect($post['comments'] ?? [])->pluck('username')->all(),
-            ])
-            ->filter()
-            ->unique()
-            ->values()
+        $actorsByUsername = [];
+
+        foreach ($posts as $post) {
+            foreach ([...($post['likes'] ?? []), ...($post['comments'] ?? [])] as $actor) {
+                if (! is_array($actor)) {
+                    continue;
+                }
+
+                $username = $this->normalizeUsername($actor['username'] ?? null);
+
+                if (! $username) {
+                    continue;
+                }
+
+                $actorsByUsername[$username] = [
+                    'display_name' => $this->nullableString($actor['full_name'] ?? null),
+                    'full_name' => $this->nullableString($actor['full_name'] ?? null),
+                    'profile_image_url' => $this->nullableString($actor['profile_image_url'] ?? null),
+                    'profile_url' => 'https://www.instagram.com/'.$username.'/',
+                    'raw_profile' => array_filter([
+                        'source' => 'post_engagement',
+                        'instagram_user_id' => $this->nullableString($actor['instagram_user_id'] ?? null),
+                        'is_verified' => is_bool($actor['is_verified'] ?? null) ? $actor['is_verified'] : null,
+                        'raw_like' => is_array($actor['raw_like'] ?? null) ? $actor['raw_like'] : null,
+                        'raw_comment' => is_array($actor['raw_comment'] ?? null) ? $actor['raw_comment'] : null,
+                    ], static fn ($value): bool => $value !== null),
+                ];
+            }
+        }
+
+        if ($actorsByUsername === []) {
+            return [];
+        }
+
+        $profileIds = [];
+
+        foreach ($actorsByUsername as $username => $attributes) {
+            $profile = InstagramProfile::withTrashed()
+                ->where('username', $username)
+                ->first();
+
+            $payload = array_filter([
+                'display_name' => $attributes['display_name'] ?? null,
+                'full_name' => $attributes['full_name'] ?? null,
+                'profile_url' => $attributes['profile_url'] ?? 'https://www.instagram.com/'.$username.'/',
+                'profile_image_url' => $attributes['profile_image_url'] ?? null,
+                'raw_profile' => $attributes['raw_profile'] ?? null,
+            ], static fn ($value): bool => $value !== null && $value !== []);
+
+            if ($profile) {
+                if ($profile->trashed()) {
+                    $profile->restore();
+                }
+
+                if ($payload !== []) {
+                    $profile->forceFill($payload)->save();
+                }
+            } else {
+                $profile = InstagramProfile::create([
+                    'username' => $username,
+                    'profile_url' => 'https://www.instagram.com/'.$username.'/',
+                    ...$payload,
+                ]);
+            }
+
+            if ($profile) {
+                $profileIds[$username] = $profile->id;
+            }
+        }
+
+        if ($profileIds !== []) {
+            return $profileIds;
+        }
+
+        return InstagramProfile::query()
+            ->whereIn('username', array_keys($actorsByUsername))
+            ->pluck('id', 'username')
             ->all();
     }
 
