@@ -122,101 +122,34 @@
         'data-profile-search' => e($searchText),
     ]) }}
 >
-    @if($imageUrl)
-        <img src="{{ $imageUrl }}" alt="{{ $username !== '' ? '@'.$username : 'Instagram-Profilbild' }}" loading="lazy" class="h-10 w-10 shrink-0 rounded-full border object-cover {{ $avatarToneClass }} {{ $avatarRingClass }}">
-    @else
-        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-bold {{ $avatarToneClass }} {{ $avatarRingClass }}">{{ $initial }}</div>
-    @endif
-
-    <div class="flex min-w-0 flex-1 items-center gap-2">
-        <div class="min-w-0 flex-1">
-            <div class="flex min-w-0 items-center gap-2">
-                <span class="truncate font-semibold text-slate-900">{{ $username !== '' ? '@'.$username : 'Unbekanntes Profil' }}</span>
-                @if($displayName !== '')
-                    <span class="hidden min-w-0 truncate text-xs text-slate-500 sm:inline">{{ $displayName }}</span>
-                @endif
-            </div>
-            @if($meta)
-                <div class="truncate text-[11px] text-slate-500">{{ $meta }}</div>
-            @endif
-        </div>
-
-        <div class="flex shrink-0 items-center gap-1">
-            <span title="{{ $isTracked ? 'Beobachtet' : 'Nicht beobachtet' }}" aria-label="{{ $isTracked ? 'Beobachtet' : 'Nicht beobachtet' }}" class="inline-flex h-6 w-6 items-center justify-center rounded-md ring-1 {{ $isTracked ? 'bg-sky-50 text-sky-700 ring-sky-200' : 'bg-slate-100 text-slate-500 ring-slate-200' }}">
-                @if($isTracked)
-                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
-                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
-                    </svg>
-                @else
-                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                        <path d="M3 3l18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                        <path d="M10.6 6.2A10.5 10.5 0 0 1 12 6c6 0 9.5 6 9.5 6a17.5 17.5 0 0 1-2.8 3.4M6.2 6.8A17 17 0 0 0 2.5 12s3.5 6 9.5 6c1.3 0 2.5-.3 3.5-.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                    </svg>
-                @endif
-            </span>
-            @if($statusLabel)
-                <span title="{{ $statusTitle }}" aria-label="{{ $statusTitle }}" class="inline-flex h-6 w-6 items-center justify-center rounded-md ring-1 {{ $statusClass }}">
-                    @if(str_contains(strtolower($statusLabel), 'entfernt') || str_contains(strtolower($statusLabel), 'removed'))
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                            <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                        </svg>
-                    @elseif(str_contains(strtolower($statusLabel), 'neu') || str_contains(strtolower($statusLabel), 'added'))
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                        </svg>
-                    @elseif(str_contains(strtolower($statusLabel), 'rekonstruiert'))
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                            <path d="M6 7a3 3 0 1 0 0 .1M18 17a3 3 0 1 0 0 .1M9 7h3a4 4 0 0 1 4 4v3M9 7l3-3M9 7l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                    @else
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                            <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                        </svg>
-                    @endif
-                </span>
-            @endif
-        </div>
-
-        <div class="hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-slate-200 bg-white/70 px-2 py-1 text-[11px] font-semibold text-slate-600 md:flex">
-            <span title="Beitraege" class="inline-flex items-center gap-1">
-                <svg class="h-3.5 w-3.5 text-violet-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <rect x="4" y="5" width="16" height="14" rx="2" stroke="currentColor" stroke-width="2"/>
-                    <path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-                {{ $formatMetric($postsCount) }}
-            </span>
-            <span class="text-slate-300">/</span>
-            <span title="Follower" class="inline-flex items-center gap-1">
-                <svg class="h-3.5 w-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M16 19c0-2.2-1.8-4-4-4s-4 1.8-4 4M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM19 19c0-1.6-.9-3-2.2-3.6M17 5.2a3 3 0 0 1 0 5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                </svg>
-                {{ $formatMetric($followersCount) }}
-            </span>
-            <span class="text-slate-300">/</span>
-            <span title="Folgt" class="inline-flex items-center gap-1">
-                <svg class="h-3.5 w-3.5 text-sky-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M10 19c0-2.2-1.8-4-4-4m0 0a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM14 7h6M17 4v6M14 19h6M17 16l3 3-3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-                </svg>
-                {{ $formatMetric($followingCount) }}
-            </span>
-        </div>
-    </div>
-
     @if($showAction)
-        <div class="flex shrink-0 items-center gap-1">
+        <div class="min-w-0 flex-1">
             <x-ui.dropdown.anchor-dropdown
-                align="right"
+                align="left"
                 width="auto"
                 :offset="6"
                 dropdown-classes=""
                 content-classes="w-56 rounded-xl border border-slate-200 bg-white"
             >
                 <x-slot name="trigger">
-                    <button type="button" x-bind:aria-expanded="open" title="Profilaktionen" aria-label="Profilaktionen" class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
-                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                            <path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 20a8 8 0 0 1 16 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                        </svg>
+                    <button type="button" x-bind:aria-expanded="open" title="Profilaktionen" aria-label="Profilaktionen {{ $username !== '' ? '@'.$username : 'Instagram-Profil' }}" class="flex w-full min-w-0 items-center gap-3 rounded-lg text-left focus:outline-none focus:ring-2 focus:ring-slate-200">
+                        @if($imageUrl)
+                            <img src="{{ $imageUrl }}" alt="{{ $username !== '' ? '@'.$username : 'Instagram-Profilbild' }}" loading="lazy" class="h-10 w-10 shrink-0 rounded-full border object-cover {{ $avatarToneClass }} {{ $avatarRingClass }}">
+                        @else
+                            <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-bold {{ $avatarToneClass }} {{ $avatarRingClass }}">{{ $initial }}</span>
+                        @endif
+
+                        <span class="min-w-0 flex-1">
+                            <span class="flex min-w-0 items-center gap-2">
+                                <span class="truncate font-semibold text-slate-900">{{ $username !== '' ? '@'.$username : 'Unbekanntes Profil' }}</span>
+                                @if($displayName !== '')
+                                    <span class="hidden min-w-0 truncate text-xs text-slate-500 sm:inline">{{ $displayName }}</span>
+                                @endif
+                            </span>
+                            @if($meta)
+                                <span class="block truncate text-[11px] text-slate-500">{{ $meta }}</span>
+                            @endif
+                        </span>
                     </button>
                 </x-slot>
 
@@ -243,7 +176,92 @@
                     </div>
                 </x-slot>
             </x-ui.dropdown.anchor-dropdown>
+        </div>
+    @else
+        <div class="flex min-w-0 flex-1 items-center gap-3">
+            @if($imageUrl)
+                <img src="{{ $imageUrl }}" alt="{{ $username !== '' ? '@'.$username : 'Instagram-Profilbild' }}" loading="lazy" class="h-10 w-10 shrink-0 rounded-full border object-cover {{ $avatarToneClass }} {{ $avatarRingClass }}">
+            @else
+                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border text-xs font-bold {{ $avatarToneClass }} {{ $avatarRingClass }}">{{ $initial }}</div>
+            @endif
 
+            <div class="min-w-0 flex-1">
+                <div class="flex min-w-0 items-center gap-2">
+                    <span class="truncate font-semibold text-slate-900">{{ $username !== '' ? '@'.$username : 'Unbekanntes Profil' }}</span>
+                    @if($displayName !== '')
+                        <span class="hidden min-w-0 truncate text-xs text-slate-500 sm:inline">{{ $displayName }}</span>
+                    @endif
+                </div>
+                @if($meta)
+                    <div class="truncate text-[11px] text-slate-500">{{ $meta }}</div>
+                @endif
+            </div>
+        </div>
+    @endif
+
+    <div class="flex shrink-0 items-center gap-1">
+        <span title="{{ $isTracked ? 'Beobachtet' : 'Nicht beobachtet' }}" aria-label="{{ $isTracked ? 'Beobachtet' : 'Nicht beobachtet' }}" class="inline-flex h-6 w-6 items-center justify-center rounded-md ring-1 {{ $isTracked ? 'bg-sky-50 text-sky-700 ring-sky-200' : 'bg-slate-100 text-slate-500 ring-slate-200' }}">
+            @if($isTracked)
+                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                    <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                </svg>
+            @else
+                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M3 3l18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M10.6 6.2A10.5 10.5 0 0 1 12 6c6 0 9.5 6 9.5 6a17.5 17.5 0 0 1-2.8 3.4M6.2 6.8A17 17 0 0 0 2.5 12s3.5 6 9.5 6c1.3 0 2.5-.3 3.5-.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            @endif
+        </span>
+        @if($statusLabel)
+            <span title="{{ $statusTitle }}" aria-label="{{ $statusTitle }}" class="inline-flex h-6 w-6 items-center justify-center rounded-md ring-1 {{ $statusClass }}">
+                @if(str_contains(strtolower($statusLabel), 'entfernt') || str_contains(strtolower($statusLabel), 'removed'))
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                @elseif(str_contains(strtolower($statusLabel), 'neu') || str_contains(strtolower($statusLabel), 'added'))
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                @elseif(str_contains(strtolower($statusLabel), 'rekonstruiert'))
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M6 7a3 3 0 1 0 0 .1M18 17a3 3 0 1 0 0 .1M9 7h3a4 4 0 0 1 4 4v3M9 7l3-3M9 7l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                @else
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                @endif
+            </span>
+        @endif
+    </div>
+
+    <div class="hidden shrink-0 items-center gap-2 whitespace-nowrap rounded-md border border-slate-200 bg-white/70 px-2 py-1 text-[11px] font-semibold text-slate-600 md:flex">
+        <span title="Beitraege" class="inline-flex items-center gap-1">
+            <svg class="h-3.5 w-3.5 text-violet-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <rect x="4" y="5" width="16" height="14" rx="2" stroke="currentColor" stroke-width="2"/>
+                <path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            {{ $formatMetric($postsCount) }}
+        </span>
+        <span class="text-slate-300">/</span>
+        <span title="Follower" class="inline-flex items-center gap-1">
+            <svg class="h-3.5 w-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M16 19c0-2.2-1.8-4-4-4s-4 1.8-4 4M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM19 19c0-1.6-.9-3-2.2-3.6M17 5.2a3 3 0 0 1 0 5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+            {{ $formatMetric($followersCount) }}
+        </span>
+        <span class="text-slate-300">/</span>
+        <span title="Folgt" class="inline-flex items-center gap-1">
+            <svg class="h-3.5 w-3.5 text-sky-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M10 19c0-2.2-1.8-4-4-4m0 0a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM14 7h6M17 4v6M14 19h6M17 16l3 3-3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            {{ $formatMetric($followingCount) }}
+        </span>
+    </div>
+
+    @if($showAction)
+        <div class="flex shrink-0 items-center gap-1">
             <x-ui.dropdown.anchor-dropdown
                 align="right"
                 width="auto"
