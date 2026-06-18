@@ -5514,13 +5514,7 @@ async function handlePreparedGraph(event) {
 }
 
 export function initNetworkMaps(scope = document) {
-    scope.querySelectorAll('[data-network-map-root]').forEach((root) => {
-        if (root.dataset.networkLazy === 'true' && root.dataset.networkIntersected !== 'true') {
-            return;
-        }
-
-        initNetworkMap(root);
-    });
+    scope.querySelectorAll('[data-network-map-root]').forEach(initNetworkMap);
 }
 
 export function destroyNetworkMaps() {
@@ -5572,20 +5566,6 @@ window.addEventListener('network-map-layout-refresh', (event) => {
         window.requestAnimationFrame(refreshAndFit);
         window.setTimeout(refreshAndFit, 180);
     });
-});
-
-window.addEventListener('network-map-intersect', (event) => {
-    const detail = eventDetail(event);
-    const root = detail.mapId
-        ? document.querySelector(`[data-network-map-root][data-network-map-id="${detail.mapId}"]`)
-        : document.querySelector('[data-network-map-root]');
-
-    if (!root) {
-        return;
-    }
-
-    root.dataset.networkIntersected = 'true';
-    initNetworkMap(root);
 });
 
 document.addEventListener('DOMContentLoaded', () => initNetworkMaps());
