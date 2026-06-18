@@ -139,6 +139,11 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
     relationshipSearchTargetMaxItems: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxItems, merged.relationshipSearchTargetMaxItems),
     relationshipSearchTargetMaxScrollRounds: normalizeOptionalPositiveInteger(input?.relationshipSearchTargetMaxScrollRounds, merged.relationshipSearchTargetMaxScrollRounds),
     relationshipSearchInputMaxAttempts: Math.floor(normalizeNumberAtLeast(input?.relationshipSearchInputMaxAttempts, merged.relationshipSearchInputMaxAttempts || 3, 1)),
+    relationshipSearchWaitMs: normalizeNumberAtLeast(
+      input?.relationshipSearchWaitMs || input?.relationship_search_wait_ms,
+      merged.relationshipSearchWaitMs || 900,
+      250,
+    ),
     suggestionScanMaxItems: normalizeOptionalPositiveInteger(input?.suggestionScanMaxItems, merged.suggestionScanMaxItems || 140) || 140,
     suggestionCandidateMaxItems: normalizeOptionalPositiveInteger(input?.suggestionCandidateMaxItems, merged.suggestionCandidateMaxItems || 80) || 80,
     suggestionPublicListSearchMaxScrollRounds: normalizeOptionalPositiveInteger(
@@ -200,6 +205,10 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
     publicConnectionRateLimitAccountSwitchEnabled: input?.publicConnectionRateLimitAccountSwitchEnabled !== false
       && input?.public_connection_rate_limit_account_switch_enabled !== false
       && merged.publicConnectionRateLimitAccountSwitchEnabled !== false,
+    publicConnectionMaxScraperProfileSwitches: Math.min(
+      10,
+      Math.floor(normalizeNumberAtLeast(input?.publicConnectionMaxScraperProfileSwitches, merged.publicConnectionMaxScraperProfileSwitches || 3, 0)),
+    ),
     gracefulStopFilePath: normalizeText(String(input?.gracefulStopFilePath || input?.graceful_stop_file_path || merged.gracefulStopFilePath || '')),
     livePreviewPath: normalizeText(String(input?.livePreviewPath || input?.live_preview_path || merged.livePreviewPath || '')),
     livePreviewEnabled: input?.livePreviewEnabled !== false && input?.live_preview_enabled !== false && merged.livePreviewEnabled !== false,

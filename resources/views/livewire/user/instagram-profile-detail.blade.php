@@ -448,10 +448,11 @@
                 @forelse($profile->sourceRelationships as $relationship)
                     @php($related = $relationship->relatedInstagramProfile)
                     @if($related)
-                        <a href="{{ route('instagram-profiles.show', $related->id) }}" wire:navigate class="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50">
-                            <span class="font-semibold text-slate-800">{{ $related->display_handle }}</span>
-                            <span class="text-xs text-slate-500">{{ $relationship->list_type }}</span>
-                        </a>
+                        <x-instagram.profile-list-item
+                            :item="$related"
+                            :meta="$relationship->list_type"
+                            :show-visibility="false"
+                        />
                     @endif
                 @empty
                     <p class="text-sm text-slate-500">Keine aktiven ausgehenden Beziehungen gespeichert.</p>
@@ -474,10 +475,11 @@
                 @forelse($profile->relatedRelationships as $relationship)
                     @php($source = $relationship->sourceInstagramProfile)
                     @if($source)
-                        <a href="{{ route('instagram-profiles.show', $source->id) }}" wire:navigate class="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50">
-                            <span class="font-semibold text-slate-800">{{ $source->display_handle }}</span>
-                            <span class="text-xs text-slate-500">{{ $relationship->list_type }}</span>
-                        </a>
+                        <x-instagram.profile-list-item
+                            :item="$source"
+                            :meta="$relationship->list_type"
+                            :show-visibility="false"
+                        />
                     @endif
                 @empty
                     <p class="text-sm text-slate-500">Keine aktiven eingehenden Beziehungen gespeichert.</p>

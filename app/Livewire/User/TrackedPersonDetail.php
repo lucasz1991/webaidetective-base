@@ -10,7 +10,6 @@ use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramMedia;
 use App\Models\TrackedPersonInstagramPublicProfileScan;
-use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
@@ -18,13 +17,12 @@ use App\Services\TrackedPeople\TrackedPersonInstagramPublicProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
 use App\Services\TrackedPeople\TrackedPersonScanDispatcher;
-use App\Support\PublicAssetUrl;
+use App\Support\InstagramRelationshipListData;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\HtmlString;
 use Illuminate\Support\Str;
 use Livewire\Component;
 
@@ -98,10 +96,6 @@ class TrackedPersonDetail extends Component
 
     public $notify_snapchat_changes = true;
 
-    public bool $showFollowersModal = false;
-
-    public bool $showFollowingModal = false;
-
     public bool $showSettingsModal = false;
 
     public bool $showDeleteConfirmationModal = false;
@@ -134,6 +128,7 @@ class TrackedPersonDetail extends Component
 
     protected $listeners = [
         'tracked-person-refresh' => '$refresh',
+        'scan-instagram-relationship-list' => 'scanInstagramRelationshipList',
     ];
 
     public function mount(int $trackedPersonId, bool $compact = false): void
@@ -346,6 +341,15 @@ class TrackedPersonDetail extends Component
     public function scanInstagramFollowingList(): void
     {
         $this->runInstagramRelationshipListScan('following');
+    }
+
+    public function scanInstagramRelationshipList(string $relationship): void
+    {
+        if (! in_array($relationship, ['followers', 'following'], true)) {
+            return;
+        }
+
+        $this->runInstagramRelationshipListScan($relationship);
     }
 
     public function openPostEngagementModal(int $postId, string $type): void
@@ -1117,30 +1121,17 @@ class TrackedPersonDetail extends Component
         $html .= '<div class="mt-2 max-h-48 space-y-1 overflow-y-auto pr-1">';
 
         foreach (array_slice($items, 0, 20) as $item) {
-            $username = e($item['username']);
-            $displayName = trim((string) ($item['displayName'] ?? ''));
             $sourcePublicUsername = trim((string) ($item['sourcePublicUsername'] ?? ''));
             $relationshipOriginLabel = trim((string) ($item['relationshipOriginLabel'] ?? ''));
             $fromSuggestionScan = (bool) ($item['fromSuggestionScan'] ?? false);
-
-            $html .= '<div class="rounded-md bg-slate-50 px-3 py-2 text-xs">'
-                .'<div class="font-semibold text-slate-900">@'.$username.'</div>';
-
-            if ($displayName !== '') {
-                $html .= '<div class="truncate text-slate-500">'.e($displayName).'</div>';
-            }
-
-            if ($sourcePublicUsername !== '') {
-                $html .= '<div class="mt-1 text-[11px] text-slate-500">Quelle: @'.e($sourcePublicUsername).'</div>';
-            }
+            $meta = $sourcePublicUsername !== '' ? 'Quelle: @'.$sourcePublicUsername : null;
+            $statusLabel = null;
 
             if ($fromSuggestionScan || $relationshipOriginLabel !== '') {
-                $html .= '<div class="mt-1 inline-flex rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">'
-                    .e($relationshipOriginLabel !== '' ? $relationshipOriginLabel : 'Aus Vorschlaege-Scan')
-                    .'</div>';
+                $statusLabel = $relationshipOriginLabel !== '' ? $relationshipOriginLabel : 'Aus Vorschlaege-Scan';
             }
 
-            $html .= '</div>';
+            $html .= $this->renderProgressProfileListItem($item, $meta, $statusLabel, 'amber');
         }
 
         if (count($items) > 20) {
@@ -1167,25 +1158,10 @@ class TrackedPersonDetail extends Component
         $html .= '<div class="mt-2 max-h-48 space-y-1 overflow-y-auto pr-1">';
 
         foreach (array_slice($items, 0, 24) as $item) {
-            $username = e($item['username']);
-            $displayName = trim((string) ($item['displayName'] ?? ''));
             $status = $this->progressSuggestionStatusLabel($item);
+            $statusTone = $status === 'Treffer' ? 'emerald' : ($status === 'Fehler' ? 'rose' : 'slate');
 
-            $html .= '<div class="rounded-md bg-slate-50 px-3 py-2 text-xs">'
-                .'<div class="flex items-start justify-between gap-2">'
-                .'<div class="min-w-0">'
-                .'<div class="font-semibold text-slate-900">@'.$username.'</div>';
-
-            if ($displayName !== '') {
-                $html .= '<div class="truncate text-slate-500">'.e($displayName).'</div>';
-            }
-
-            $html .= '</div>'
-                .'<span class="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-700">'
-                .e($status)
-                .'</span>'
-                .'</div>'
-                .'</div>';
+            $html .= $this->renderProgressProfileListItem($item, null, $status, $statusTone);
         }
 
         if (count($items) > 24) {
@@ -1195,6 +1171,20 @@ class TrackedPersonDetail extends Component
         }
 
         return $html.'</div></div>';
+    }
+
+    private function renderProgressProfileListItem(array $item, ?string $meta = null, ?string $statusLabel = null, string $statusTone = 'slate'): string
+    {
+        return view('components.instagram.profile-list-item', [
+            'item' => $item,
+            'meta' => $meta,
+            'statusLabel' => $statusLabel,
+            'statusTone' => $statusTone,
+            'showVisibility' => false,
+            'showAction' => false,
+            'actionLabel' => null,
+            'compact' => true,
+        ])->render();
     }
 
     private function progressSuggestionStatusLabel(array $item): string
@@ -1479,16 +1469,13 @@ class TrackedPersonDetail extends Component
             ->get(['candidate_username', 'candidate_display_name', 'relationship_type', 'last_seen_at', 'candidate_instagram_profile_id', 'source_public_username'])
             ->unique('candidate_username')
             ->values();
-        $relationshipProfileImages = $this->relationshipProfileImagesForSnapshot($trackedPerson->latestInstagramSnapshot);
-
         $view = view('livewire.user.tracked-person-detail', [
             'trackedPerson' => $trackedPerson,
             'profileImageHistory' => $profileImageHistory,
             'publicProfileCandidates' => $publicProfileCandidates,
-            'relationshipProfileImages' => $relationshipProfileImages,
             'reconstructedProfileCandidates' => $reconstructedProfileCandidates,
             'profilePickerRows' => $this->profilePickerRows($publicProfileCandidates, $reconstructedProfileCandidates),
-        ] + $this->instagramDetailViewData($trackedPerson, $relationshipProfileImages, $publicProfileCandidates));
+        ] + $this->instagramDetailViewData($trackedPerson, $publicProfileCandidates));
 
         if (request()->routeIs('tracked-people.show')) {
             return $view->layout('layouts.app');
@@ -1499,7 +1486,6 @@ class TrackedPersonDetail extends Component
 
     private function instagramDetailViewData(
         TrackedPerson $trackedPerson,
-        array $relationshipProfileImages,
         Collection $publicProfileCandidates,
     ): array {
         $latestSnapshot = $trackedPerson->latestInstagramSnapshot;
@@ -1508,63 +1494,29 @@ class TrackedPersonDetail extends Component
         $latestDebugLogPath = data_get($latestSnapshot?->raw_payload, 'debugLogPath');
         $latestCookieDiagnostics = data_get($latestSnapshot?->raw_payload, 'cookieDiagnostics', []);
         $latestLoginDiagnostics = data_get($latestSnapshot?->raw_payload, 'loginDiagnostics', []);
-        $latestFollowersList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followersList', []);
-        $latestFollowingList = data_get($latestSnapshot?->raw_payload, 'extractedProfile.followingList', []);
-
-        $latestFollowerAddedItems = $this->sortRelationshipItemsNewest($this->loadRelationshipItems($latestFollowersList, 'addedItems'));
-        $latestFollowingAddedItems = $this->sortRelationshipItemsNewest($this->loadRelationshipItems($latestFollowingList, 'addedItems'));
-        $latestFollowerItems = $this->sortRelationshipActiveItems($this->loadRelationshipItems($latestFollowersList), $latestFollowerAddedItems);
-        $latestFollowingItems = $this->sortRelationshipActiveItems($this->loadRelationshipItems($latestFollowingList), $latestFollowingAddedItems);
-        $latestFollowerLiveItems = $this->liveProfileListItems($trackedPerson, 'followers');
-        $latestFollowingLiveItems = $this->liveProfileListItems($trackedPerson, 'following');
-
-        if ($latestFollowerLiveItems->isNotEmpty()) {
-            $latestFollowerItems = $this->sortRelationshipActiveItems(
-                $latestFollowerItems
-                    ->merge($latestFollowerLiveItems)
-                    ->unique(fn ($item): string => (string) data_get($item, 'username', ''))
-                    ->values(),
-                $latestFollowerAddedItems,
-            );
-        }
-
-        if ($latestFollowingLiveItems->isNotEmpty()) {
-            $latestFollowingItems = $this->sortRelationshipActiveItems(
-                $latestFollowingItems
-                    ->merge($latestFollowingLiveItems)
-                    ->unique(fn ($item): string => (string) data_get($item, 'username', ''))
-                    ->values(),
-                $latestFollowingAddedItems,
-            );
-        }
-        $latestFollowerScanRemovedItems = $this->sortRelationshipItemsNewest($this->loadRelationshipItems($latestFollowersList, 'removedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $latestFollowingScanRemovedItems = $this->sortRelationshipItemsNewest($this->loadRelationshipItems($latestFollowingList, 'removedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $latestFollowerRemovedItems = $this->sortRelationshipItemsNewest($this->loadRelationshipItems($latestFollowersList, 'currentlyRemovedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $latestFollowingRemovedItems = $this->sortRelationshipItemsNewest($this->loadRelationshipItems($latestFollowingList, 'currentlyRemovedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $latestFollowerRemovedHistoryItems = $this->sortRelationshipItemsNewest($this->loadRelationshipItems($latestFollowersList, 'removedHistoryItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-        $latestFollowingRemovedHistoryItems = $this->sortRelationshipItemsNewest($this->loadRelationshipItems($latestFollowingList, 'removedHistoryItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
-
-        $latestFollowerStats = $this->relationshipStats($latestFollowersList, $latestFollowerItems);
-        $latestFollowingStats = $this->relationshipStats($latestFollowingList, $latestFollowingItems);
-        $latestFollowerStats['activeCount'] = max($latestFollowerStats['activeCount'], $latestFollowerItems->count());
-        $latestFollowerStats['observedCount'] = max($latestFollowerStats['observedCount'], $latestFollowerItems->count());
-        $latestFollowingStats['activeCount'] = max($latestFollowingStats['activeCount'], $latestFollowingItems->count());
-        $latestFollowingStats['observedCount'] = max($latestFollowingStats['observedCount'], $latestFollowingItems->count());
-        $latestFollowerListAvailable = $latestFollowerItems->isNotEmpty()
-            || $latestFollowerAddedItems->isNotEmpty()
-            || $latestFollowerScanRemovedItems->isNotEmpty()
-            || $latestFollowerRemovedItems->isNotEmpty()
-            || $latestFollowerRemovedHistoryItems->isNotEmpty();
-        $latestFollowingListAvailable = $latestFollowingItems->isNotEmpty()
-            || $latestFollowingAddedItems->isNotEmpty()
-            || $latestFollowingScanRemovedItems->isNotEmpty()
-            || $latestFollowingRemovedItems->isNotEmpty()
-            || $latestFollowingRemovedHistoryItems->isNotEmpty();
+        $relationshipListData = app(InstagramRelationshipListData::class);
+        $followersListData = $relationshipListData->forTrackedPerson($trackedPerson, 'followers');
+        $followingListData = $relationshipListData->forTrackedPerson($trackedPerson, 'following');
+        $latestFollowersList = $followersListData['relationshipList'];
+        $latestFollowingList = $followingListData['relationshipList'];
+        $latestFollowerAddedItems = $followersListData['addedItems'];
+        $latestFollowingAddedItems = $followingListData['addedItems'];
+        $latestFollowerItems = $followersListData['activeItems'];
+        $latestFollowingItems = $followingListData['activeItems'];
+        $latestFollowerScanRemovedItems = $followersListData['scanRemovedItems'];
+        $latestFollowingScanRemovedItems = $followingListData['scanRemovedItems'];
+        $latestFollowerRemovedItems = $followersListData['removedItems'];
+        $latestFollowingRemovedItems = $followingListData['removedItems'];
+        $latestFollowerRemovedHistoryItems = $followersListData['removedHistoryItems'];
+        $latestFollowingRemovedHistoryItems = $followingListData['removedHistoryItems'];
+        $latestFollowerStats = $followersListData['stats'];
+        $latestFollowingStats = $followingListData['stats'];
+        $latestFollowerListAvailable = $followersListData['available'];
+        $latestFollowingListAvailable = $followingListData['available'];
 
         $instagramStatusLevel = $trackedPerson->last_instagram_status_level ?: 'neutral';
         $latestProfileVisibility = data_get($latestSnapshot?->raw_payload, 'extractedProfile.profileVisibility');
         $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
-        $relationshipProfileImages = collect($relationshipProfileImages);
         $selectedPost = null;
 
         if ($this->showPostEngagementModal && $this->selectedPostId && $trackedPerson->current_instagram_profile_id) {
@@ -1597,9 +1549,6 @@ class TrackedPersonDetail extends Component
             'latestLoginDiagnostics' => $latestLoginDiagnostics,
             'latestFollowersList' => $latestFollowersList,
             'latestFollowingList' => $latestFollowingList,
-            'relationshipSearchText' => fn ($item): string => $this->relationshipSearchText($item),
-            'relationshipAvatar' => fn ($item, string $tone = 'slate'): HtmlString => $this->relationshipAvatarHtml($item, $relationshipProfileImages, $tone),
-            'relationshipVisibilityBadge' => fn ($item): HtmlString => $this->relationshipVisibilityBadgeHtml($item),
             'latestFollowerAddedItems' => $latestFollowerAddedItems,
             'latestFollowingAddedItems' => $latestFollowingAddedItems,
             'latestFollowerItems' => $latestFollowerItems,
@@ -1802,194 +1751,6 @@ class TrackedPersonDetail extends Component
             'private' => 'bg-slate-400',
             default => 'bg-amber-400',
         };
-    }
-
-    private function relationshipSearchText(mixed $item): string
-    {
-        return Str::lower(trim(data_get($item, 'username', '').' '.data_get($item, 'displayName', '')));
-    }
-
-    private function relationshipAvatarHtml(mixed $item, Collection $relationshipProfileImages, string $tone = 'slate'): HtmlString
-    {
-        $username = ltrim(trim((string) data_get($item, 'username', '')), '@');
-        $imageKey = Str::lower($username);
-        $imageUrl = $imageKey !== '' ? $relationshipProfileImages->get($imageKey) : null;
-        $initial = Str::upper(Str::substr($username !== '' ? $username : '?', 0, 1));
-        $toneClass = match ($tone) {
-            'emerald' => 'bg-emerald-50 text-emerald-700',
-            'rose' => 'bg-rose-50 text-rose-700',
-            default => 'bg-slate-100 text-slate-600',
-        };
-
-        if (filled($imageUrl)) {
-            return new HtmlString(
-                '<img src="'.e($imageUrl).'" alt="'.e($username !== '' ? '@'.$username : 'Instagram-Profilbild').'" loading="lazy" referrerpolicy="no-referrer" class="h-11 w-11 shrink-0 rounded-full border border-slate-200 object-cover '.$toneClass.'">',
-            );
-        }
-
-        return new HtmlString(
-            '<div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-slate-200 text-xs font-bold '.$toneClass.'">'.e($initial).'</div>',
-        );
-    }
-
-    private function relationshipVisibilityBadgeHtml(mixed $item): HtmlString
-    {
-        $visibility = $this->relationshipVisibility($item);
-        $label = $this->profileVisibilityLabel($visibility);
-        $class = $this->profileVisibilityBadgeClass($visibility);
-
-        return new HtmlString(
-            '<span class="mt-1 inline-flex rounded-lg px-2 py-0.5 text-[11px] font-semibold ring-1 '.$class.'">'.$label.'</span>',
-        );
-    }
-
-    private function relationshipVisibility(mixed $item): string
-    {
-        $visibility = Str::lower((string) data_get($item, 'profileVisibility', ''));
-
-        if (in_array($visibility, ['public', 'private'], true)) {
-            return $visibility;
-        }
-
-        if (data_get($item, 'isPrivate') === true) {
-            return 'private';
-        }
-
-        if (data_get($item, 'isPrivate') === false) {
-            return 'public';
-        }
-
-        return 'unknown';
-    }
-
-    private function relationshipTimestamp(mixed $item, array $keys = ['firstSeenAt', 'lastSeenAt', 'removedAt']): int
-    {
-        foreach ($keys as $key) {
-            $value = data_get($item, $key);
-
-            if (! filled($value)) {
-                continue;
-            }
-
-            try {
-                return Carbon::parse($value)->timestamp;
-            } catch (\Throwable) {
-                continue;
-            }
-        }
-
-        return 0;
-    }
-
-    private function sortRelationshipItemsNewest(Collection $items, array $keys = ['firstSeenAt', 'lastSeenAt', 'removedAt']): Collection
-    {
-        return $items
-            ->values()
-            ->sortByDesc(fn ($item, $index) => sprintf('%020d.%06d', $this->relationshipTimestamp($item, $keys), 999999 - $index))
-            ->values();
-    }
-
-    private function sortRelationshipActiveItems(Collection $items, Collection $addedItems): Collection
-    {
-        $addedUsernames = $addedItems
-            ->pluck('username')
-            ->filter()
-            ->map(fn ($username) => Str::lower((string) $username))
-            ->flip();
-
-        return $items
-            ->values()
-            ->sortByDesc(function ($item, $index) use ($addedUsernames) {
-                $username = Str::lower((string) data_get($item, 'username', ''));
-                $isAdded = $addedUsernames->has($username) ? 1 : 0;
-                $timestamp = $this->relationshipTimestamp($item, ['firstSeenAt', 'lastSeenAt', 'removedAt']);
-
-                return sprintf('%d.%020d.%06d', $isAdded, $timestamp, 999999 - $index);
-            })
-            ->values();
-    }
-
-    private function loadRelationshipItems(mixed $relationshipList, string $key = 'items'): Collection
-    {
-        if (! is_array($relationshipList)) {
-            return collect();
-        }
-
-        $items = collect(data_get($relationshipList, $key, []));
-        $itemsPath = data_get($relationshipList, 'itemsPath');
-
-        if ($items->isNotEmpty() || ! is_string($itemsPath) || $itemsPath === '') {
-            return $items;
-        }
-
-        try {
-            if (! Storage::disk('public')->exists($itemsPath)) {
-                return collect();
-            }
-
-            $decoded = json_decode(Storage::disk('public')->get($itemsPath), true);
-
-            return collect(data_get($decoded, $key, []));
-        } catch (\Throwable) {
-            return collect();
-        }
-    }
-
-    private function liveProfileListItems(TrackedPerson $trackedPerson, string $listType): Collection
-    {
-        if (! $trackedPerson->current_instagram_profile_id || ! in_array($listType, ['followers', 'following'], true)) {
-            return collect();
-        }
-
-        $scan = InstagramProfileListScan::query()
-            ->where('instagram_profile_id', $trackedPerson->current_instagram_profile_id)
-            ->where('list_type', $listType)
-            ->where('scan_mode', 'profile_list_live')
-            ->where(function ($query) use ($trackedPerson): void {
-                $query->where('tracked_person_id', $trackedPerson->id)
-                    ->orWhere('user_id', $trackedPerson->user_id);
-            })
-            ->latest('scanned_at')
-            ->with(['items.relatedInstagramProfile'])
-            ->first();
-
-        if (! $scan) {
-            return collect();
-        }
-
-        return $scan->items
-            ->whereIn('item_status', ['observed', 'added'])
-            ->map(function ($item): array {
-                $raw = is_array($item->raw_item) ? $item->raw_item : [];
-                $related = $item->relatedInstagramProfile;
-
-                return [
-                    ...$raw,
-                    'username' => $raw['username'] ?? $item->username_snapshot,
-                    'displayName' => $raw['displayName'] ?? $item->display_name_snapshot,
-                    'profileUrl' => $raw['profileUrl'] ?? $item->profile_url_snapshot,
-                    'profileImageUrl' => $raw['profileImageUrl'] ?? $related?->profile_image_url,
-                    'profileVisibility' => $raw['profileVisibility'] ?? $related?->profile_visibility,
-                    'isPrivate' => array_key_exists('isPrivate', $raw) ? $raw['isPrivate'] : $related?->is_private,
-                    'firstSeenAt' => $raw['firstSeenAt'] ?? $item->observed_at?->toIso8601String(),
-                    'lastSeenAt' => $raw['lastSeenAt'] ?? $item->observed_at?->toIso8601String(),
-                ];
-            })
-            ->filter(fn (array $item): bool => filled($item['username'] ?? null))
-            ->values();
-    }
-
-    private function relationshipStats(mixed $relationshipList, Collection $items): array
-    {
-        $relationshipList = is_array($relationshipList) ? $relationshipList : [];
-
-        return [
-            'activeCount' => (int) data_get($relationshipList, 'activeCount', data_get($relationshipList, 'count', $items->count())),
-            'observedCount' => (int) data_get($relationshipList, 'observedCount', $items->count()),
-            'allKnownCount' => (int) data_get($relationshipList, 'allKnownCount', data_get($relationshipList, 'knownCount', $items->count())),
-            'currentlyRemovedCount' => (int) data_get($relationshipList, 'currentlyRemovedCount', 0),
-            'removedHistoryCount' => (int) data_get($relationshipList, 'removedHistoryCount', 0),
-        ];
     }
 
     private function resolveCountSourceLabel(mixed $source): string
@@ -2480,93 +2241,6 @@ class TrackedPersonDetail extends Component
         $this->setDetailStatus('Manuelles Profil wurde gespeichert.', 'success');
         $this->dispatch('tracked-person-refresh');
         $this->dispatchBrowserEvent('toast', ['message' => 'Manuelles Profil wurde gespeichert.', 'type' => 'success']);
-    }
-
-    private function relationshipProfileImagesForSnapshot(?TrackedPersonInstagramSnapshot $snapshot): array
-    {
-        $rawPayload = is_array($snapshot?->raw_payload) ? $snapshot->raw_payload : [];
-        $usernames = collect(['followersList', 'followingList'])
-            ->flatMap(fn (string $payloadKey): Collection => $this->relationshipListUsernames(
-                data_get($rawPayload, 'extractedProfile.'.$payloadKey, []),
-            ))
-            ->filter()
-            ->unique()
-            ->values();
-
-        if ($usernames->isEmpty()) {
-            return [];
-        }
-
-        return $usernames
-            ->chunk(1000)
-            ->flatMap(fn (Collection $chunk): Collection => InstagramProfile::withTrashed()
-                ->whereIn('username', $chunk->all())
-                ->whereNotNull('profile_image_path')
-                ->get(['username', 'profile_image_url', 'profile_image_path']))
-            ->mapWithKeys(function (InstagramProfile $profile): array {
-                $username = Str::lower(ltrim((string) $profile->username, '@'));
-                $imageUrl = $this->profileImageUrlForInstagramProfile($profile);
-
-                return $username !== '' && $imageUrl ? [$username => $imageUrl] : [];
-            })
-            ->all();
-    }
-
-    private function relationshipListUsernames(mixed $relationshipList): Collection
-    {
-        if (! is_array($relationshipList) || $relationshipList === []) {
-            return collect();
-        }
-
-        $items = collect();
-
-        foreach ($this->relationshipListItemKeys() as $key) {
-            $items = $items->merge(collect(data_get($relationshipList, $key, [])));
-        }
-
-        $itemsPath = data_get($relationshipList, 'itemsPath');
-
-        if (is_string($itemsPath) && $itemsPath !== '' && Storage::disk('public')->exists($itemsPath)) {
-            try {
-                $decoded = json_decode(Storage::disk('public')->get($itemsPath), true);
-
-                if (is_array($decoded)) {
-                    foreach ($this->relationshipListItemKeys() as $key) {
-                        $items = $items->merge(collect(data_get($decoded, $key, [])));
-                    }
-                }
-            } catch (\Throwable) {
-                // Snapshot sidecar files are optional for image lookup.
-            }
-        }
-
-        return $items
-            ->filter(fn ($item): bool => is_array($item) && filled($item['username'] ?? null))
-            ->map(fn (array $item): string => Str::lower(ltrim(trim((string) $item['username']), '@')))
-            ->filter()
-            ->values();
-    }
-
-    private function relationshipListItemKeys(): array
-    {
-        return [
-            'items',
-            'activeItems',
-            'observedItems',
-            'observedPreview',
-            'itemsPreview',
-            'addedItems',
-            'removedItems',
-            'currentlyRemovedItems',
-            'removedHistoryItems',
-            'removedHistoryPreview',
-            'allKnownItems',
-        ];
-    }
-
-    private function profileImageUrlForInstagramProfile(InstagramProfile $profile): ?string
-    {
-        return PublicAssetUrl::fromStorageOrRemote($profile->profile_image_path, $profile->profile_image_url);
     }
 
     private function nullableTrim(?string $value): ?string

@@ -375,7 +375,7 @@ class InstagramScraper
         callable $callback,
     ): array {
         $maxAttempts = $this->scanPolicies->errorAttempts($operationMode);
-        $profileSwitchRetryLimit = max($maxAttempts, min(3, $maxAttempts + 2));
+        $profileSwitchRetryLimit = $maxAttempts + $this->scanPolicies->profileSwitchExtraAttempts();
         $retryDelayMilliseconds = $this->scanPolicies->retryDelayMilliseconds($operationMode);
         $attemptLog = [];
         $lastException = null;

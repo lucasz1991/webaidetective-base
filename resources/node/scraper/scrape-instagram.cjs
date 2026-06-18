@@ -123,6 +123,7 @@ const runtimeConfigDefaults = {
   relationshipSearchTargetMaxItems: 0,
   relationshipSearchTargetMaxScrollRounds: 60,
   relationshipSearchInputMaxAttempts: 3,
+  relationshipSearchWaitMs: 900,
   suggestionScanMaxItems: 140,
   suggestionCandidateMaxItems: 80,
   suggestionPublicListSearchMaxScrollRounds: 90,
@@ -150,6 +151,7 @@ const runtimeConfigDefaults = {
   publicConnectionCandidateMaxDurationMs: 1200000,
   publicConnectionDialogMissingMaxAttempts: 2,
   publicConnectionRateLimitAccountSwitchEnabled: true,
+  publicConnectionMaxScraperProfileSwitches: 3,
   gracefulStopFilePath: '',
   livePreviewPath: '',
   livePreviewEnabled: true,
@@ -8983,10 +8985,20 @@ async function collectBatchCandidateConnectionUntilDefinitive(
       connection.debugScreenshotPaths = candidateScreenshots.map((entry) => entry.screenshotPath);
     }
 
+    const maxScraperProfileSwitches = Math.max(
+      0,
+      Math.min(
+        10,
+        Math.floor(normalizeNumberAtLeast(runtimeState.runtimeConfig.publicConnectionMaxScraperProfileSwitches, 3, 0)),
+      ),
+    );
+    const usedScraperProfileSwitches = Math.max(0, runtimeState.usedAccountKeys.size - 1);
+
     if (
       isBatchCandidateRateLimited(connection)
       && runtimeState.runtimeConfig.publicConnectionRateLimitAccountSwitchEnabled !== false
       && hasUnusedRuntimeAccount(runtimeState.runtimeConfig, runtimeState.usedAccountKeys)
+      && usedScraperProfileSwitches < maxScraperProfileSwitches
       && attempt < maxAttempts
     ) {
       progressLog('candidate-rate-limit-account-switch', {
@@ -9001,6 +9013,8 @@ async function collectBatchCandidateConnectionUntilDefinitive(
         inferredFollowingPreview: progressContext.inferredFollowingPreview || [],
         accountPoolSize: getRuntimeAccountPool(runtimeState.runtimeConfig).length,
         usedAccountCount: runtimeState.usedAccountKeys.size,
+        usedScraperProfileSwitches,
+        maxScraperProfileSwitches,
         message: `Rate-Limit bei @${candidate.username}; Scraper-Account wird gewechselt.`,
       });
 

@@ -56,40 +56,22 @@
                 <div class="space-y-2">
                     @forelse($items as $item)
                         @php
-                            $related = $item->relatedInstagramProfile;
                             $searchText = strtolower(trim($item->username_snapshot.' '.$item->display_name_snapshot));
                             $active = in_array($item->item_status, ['observed', 'added'], true);
+                            $statusTone = match ($item->item_status) {
+                                'added' => 'emerald',
+                                'removed' => 'rose',
+                                default => 'slate',
+                            };
                         @endphp
-                        <div
+                        <x-instagram.profile-list-item
+                            :item="$item"
+                            :status-label="$item->item_status"
+                            :status-tone="$statusTone"
                             data-search="{{ e($searchText) }}"
                             data-status="{{ $active ? 'active' : $item->item_status }}"
                             x-show="(search === '' || $el.dataset.search.includes(search.toLowerCase())) && (filter === $el.dataset.status || (filter === 'added' && $el.dataset.status === 'active' && {{ $item->item_status === 'added' ? 'true' : 'false' }}))"
-                            class="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm"
-                        >
-                            <div class="min-w-0">
-                                <div class="truncate font-semibold text-slate-900">{{ '@'.$item->username_snapshot }}</div>
-                                @if($item->display_name_snapshot)
-                                    <div class="truncate text-xs text-slate-500">{{ $item->display_name_snapshot }}</div>
-                                @endif
-                            </div>
-                            <div class="flex shrink-0 items-center gap-2">
-                                <span @class([
-                                    'rounded-full px-2 py-1 text-[11px] font-semibold',
-                                    'bg-emerald-50 text-emerald-700' => $item->item_status === 'added',
-                                    'bg-rose-50 text-rose-700' => $item->item_status === 'removed',
-                                    'bg-slate-100 text-slate-600' => $item->item_status === 'observed',
-                                ])>{{ $item->item_status }}</span>
-                                @if($related)
-                                    <a href="{{ route('instagram-profiles.show', $related->id) }}" wire:navigate class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                                        Detail
-                                    </a>
-                                @elseif($item->profile_url_snapshot)
-                                    <a href="{{ $item->profile_url_snapshot }}" target="_blank" rel="noopener noreferrer" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                                        Oeffnen
-                                    </a>
-                                @endif
-                            </div>
-                        </div>
+                        />
                     @empty
                         <p class="rounded-lg border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">Der Scan enthaelt keine gespeicherten Eintraege.</p>
                     @endforelse

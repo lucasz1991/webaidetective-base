@@ -157,7 +157,6 @@ class TrackedPersonInstagramProfileListScanService
                 $runtimeOverrides = [
                     ...$runtimeOverrides,
                     'relationshipSearchOnly' => true,
-                    'relationshipListMaxScrollRounds' => 100000,
                 ];
             }
 
