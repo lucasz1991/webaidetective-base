@@ -7,15 +7,20 @@ use App\Models\CreditWallet;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileRelationship;
 use App\Models\InstagramProfileScan;
+use App\Models\Mail;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramProfileLink;
+use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Models\User;
 use App\Services\Billing\ScanCreditService;
+use App\Services\TrackedPeople\InstagramProfileChangeNotificationService;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Queue;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -156,6 +161,84 @@ class InstagramProfileScanBillingTest extends TestCase
             'instagram_profile_id' => $profile->id,
             'is_current' => true,
         ]);
+    }
+
+    public function test_profile_changes_notify_observers_across_users(): void
+    {
+        Queue::fake();
+
+        $scanningUser = User::factory()->create();
+        $observingUser = User::factory()->create();
+        $profile = InstagramProfile::create([
+            'username' => 'cross_user_notification_test',
+            'followers_count' => 500,
+            'following_count' => 75,
+            'posts_count' => 10,
+            'last_status_level' => 'success',
+            'last_status_message' => 'Scan completed.',
+            'last_scanned_at' => now('UTC'),
+        ]);
+        $scannedPerson = TrackedPerson::create([
+            'user_id' => $scanningUser->id,
+            'first_name' => 'Scanned',
+            'last_name' => 'Person',
+            'instagram_username' => $profile->username,
+            'current_instagram_profile_id' => $profile->id,
+            'notify_social_changes' => false,
+            'notify_instagram_changes' => false,
+        ]);
+        $observedPerson = TrackedPerson::create([
+            'user_id' => $observingUser->id,
+            'first_name' => 'Observed',
+            'last_name' => 'Person',
+            'instagram_username' => $profile->username,
+            'current_instagram_profile_id' => null,
+            'instagram_followers_count' => 450,
+            'instagram_following_count' => 70,
+            'notify_social_changes' => true,
+            'notify_instagram_changes' => true,
+            'notification_delivery_type' => 'message',
+        ]);
+        $snapshot = TrackedPersonInstagramSnapshot::create([
+            'tracked_person_id' => $scannedPerson->id,
+            'instagram_profile_id' => $profile->id,
+            'instagram_username' => $profile->username,
+            'followers_count' => 500,
+            'following_count' => 75,
+            'posts_count' => 10,
+            'status_level' => 'success',
+            'status_message' => 'Scan completed.',
+            'has_changes' => true,
+            'detected_changes' => [
+                [
+                    'field' => 'followers_count',
+                    'label' => 'Follower',
+                    'before' => 450,
+                    'after' => 500,
+                ],
+            ],
+            'analyzed_at' => now('UTC'),
+        ]);
+
+        app(InstagramProfileRelationshipStore::class)
+            ->propagateProfileDataToLinkedTrackedPeople($profile);
+        Cache::forget('instagram-change-notification:snapshot-'.$snapshot->id.':'.$observedPerson->id);
+
+        $notifiedIds = app(InstagramProfileChangeNotificationService::class)
+            ->notifySnapshotChanges($snapshot);
+
+        $observedPerson = $observedPerson->fresh();
+
+        $this->assertSame($profile->id, $observedPerson->current_instagram_profile_id);
+        $this->assertSame(500, $observedPerson->instagram_followers_count);
+        $this->assertSame(75, $observedPerson->instagram_following_count);
+        $this->assertContains($observedPerson->id, $notifiedIds);
+        $this->assertDatabaseHas('mails', [
+            'type' => 'message',
+            'from_user_id' => $observingUser->id,
+        ]);
+        $mail = Mail::query()->latest('id')->firstOrFail();
+        $this->assertSame($observingUser->id, (int) data_get($mail->recipients, '0.user_id'));
     }
 
     public function test_suggestion_scan_can_be_stored_without_tracked_person(): void

@@ -16,6 +16,7 @@ class InstagramProfileScanService
         private readonly InstagramScraper $scraper,
         private readonly InstagramProfileDataExtractor $extractor,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
+        private readonly InstagramProfileChangeNotificationService $profileChangeNotifications,
         private readonly TrackedPersonInstagramProfileListScanService $listScanService,
         private readonly TrackedPersonInstagramPostScanService $postScanService,
         private readonly ScanCreditService $scanCreditService,
@@ -40,6 +41,11 @@ class InstagramProfileScanService
         }
 
         try {
+            $previousMetrics = [
+                'followers_count' => $profile->followers_count,
+                'following_count' => $profile->following_count,
+                'posts_count' => $profile->posts_count,
+            ];
             $payload = $this->scraper->scrape(
                 $username,
                 $fullScan ? 'profile' : 'mini',
@@ -119,6 +125,17 @@ class InstagramProfileScanService
                 'raw_payload' => $payload,
                 'scanned_at' => now('UTC'),
             ]);
+            $freshProfile = $profile->fresh() ?: $profile;
+            $changes = $this->profileMetricChanges($previousMetrics, $freshProfile);
+
+            $this->profileRelationshipStore->propagateProfileDataToLinkedTrackedPeople($freshProfile);
+            $this->profileChangeNotifications->notifyProfileChanges(
+                $freshProfile,
+                $changes,
+                $statusMessage,
+                $profileScan->scanned_at,
+                'profile-scan-'.$profileScan->id,
+            );
 
             $this->scanCreditService->charge(
                 $userId,
@@ -128,7 +145,7 @@ class InstagramProfileScanService
             );
 
             return [
-                'profile' => $profile->fresh() ?: $profile,
+                'profile' => $freshProfile,
                 'scan' => $profileScan,
                 'payload' => $payload,
                 'listScans' => $listScans,
@@ -139,5 +156,33 @@ class InstagramProfileScanService
         } finally {
             $lock->release();
         }
+    }
+
+    private function profileMetricChanges(array $previousMetrics, InstagramProfile $profile): array
+    {
+        $labels = [
+            'followers_count' => 'Follower',
+            'following_count' => 'Gefolgt',
+            'posts_count' => 'Beitraege',
+        ];
+        $changes = [];
+
+        foreach ($labels as $field => $label) {
+            $before = $previousMetrics[$field] ?? null;
+            $after = $profile->{$field};
+
+            if ($before === null || $after === null || (int) $before === (int) $after) {
+                continue;
+            }
+
+            $changes[] = [
+                'field' => $field,
+                'label' => $label,
+                'before' => (int) $before,
+                'after' => (int) $after,
+            ];
+        }
+
+        return $changes;
     }
 }

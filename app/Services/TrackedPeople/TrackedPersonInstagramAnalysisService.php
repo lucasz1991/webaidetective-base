@@ -21,6 +21,7 @@ class TrackedPersonInstagramAnalysisService
         private readonly InstagramProfileDataExtractor $extractor,
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
+        private readonly InstagramProfileChangeNotificationService $profileChangeNotifications,
         private readonly ScanCreditService $scanCreditService,
         private readonly InstagramScanPolicyService $scanPolicies,
     ) {}
@@ -291,6 +292,8 @@ class TrackedPersonInstagramAnalysisService
         if ($storedProfile) {
             $this->profileRelationshipStore->propagateProfileDataToLinkedTrackedPeople($storedProfile);
         }
+
+        $this->profileChangeNotifications->notifySnapshotChanges($snapshot->fresh() ?: $snapshot);
 
         $this->reportProgress($progress, [
             'phase' => 'done',

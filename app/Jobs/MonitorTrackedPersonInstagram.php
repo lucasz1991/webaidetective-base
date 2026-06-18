@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\Mail;
 use App\Models\TrackedPerson;
+use App\Services\TrackedPeople\InstagramProfileChangeNotificationService;
 use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
@@ -154,7 +155,8 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
             return;
         }
 
-        $notifiedTrackedPersonIds = $this->notifyLinkedTrackedPeople($trackedPerson, $snapshot);
+        $notifiedTrackedPersonIds = app(InstagramProfileChangeNotificationService::class)
+            ->notifySnapshotChanges($snapshot);
 
         Log::info('Instagram-Aenderungsbenachrichtigung wurde erstellt.', [
             'tracked_person_id' => $trackedPerson->id,
