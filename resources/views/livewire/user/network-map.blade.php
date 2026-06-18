@@ -46,7 +46,10 @@
             this.mapFullscreen = true;
             document.documentElement.classList.add('overflow-hidden');
             this.notifyAssistantContext();
-            this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } })));
+            this.$nextTick(() => {
+                window.dispatchEvent(new CustomEvent('network-map-fullscreen-change', { detail: { mapId: '{{ $mapId }}', fullscreen: true } }));
+                window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } }));
+            });
         },
         closeMap() {
             if (!this.mapFullscreen) {
@@ -59,11 +62,27 @@
             this.closeNodeMenu();
             document.documentElement.classList.remove('overflow-hidden');
             this.notifyAssistantContext();
-            this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } })));
+            this.$nextTick(() => {
+                window.dispatchEvent(new CustomEvent('network-map-profile-list-refresh', { detail: { mapId: '{{ $mapId }}', open: false } }));
+                window.dispatchEvent(new CustomEvent('network-map-fullscreen-change', { detail: { mapId: '{{ $mapId }}', fullscreen: false } }));
+                window.dispatchEvent(new CustomEvent('network-map-layout-refresh', { detail: { mapId: '{{ $mapId }}' } }));
+            });
         },
         toggleProfileList() {
             this.profileListOpen = ! this.profileListOpen;
-            this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-profile-list-refresh', { detail: { mapId: '{{ $mapId }}' } })));
+            this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-profile-list-refresh', {
+                detail: { mapId: '{{ $mapId }}', open: this.profileListOpen },
+            })));
+        },
+        closeProfileList() {
+            if (!this.profileListOpen) {
+                return;
+            }
+
+            this.profileListOpen = false;
+            this.$nextTick(() => window.dispatchEvent(new CustomEvent('network-map-profile-list-refresh', {
+                detail: { mapId: '{{ $mapId }}', open: false },
+            })));
         },
         handleProfileListAction(event) {
             if (event.detail?.mapId && event.detail.mapId !== '{{ $mapId }}') {
@@ -319,17 +338,17 @@
                             @endforeach
                         </div>
                     </div>
-                    <button type="button" data-network-filter="direct" data-active-classes="border-slate-900 bg-slate-900 text-white" data-inactive-classes="border-white/40 bg-white/75 text-slate-500" class="inline-flex h-10 items-center gap-2 rounded-lg border px-2.5 text-xs font-bold shadow-lg backdrop-blur-xl transition duration-200 hover:bg-white" aria-pressed="false">
+                    <button type="button" data-network-filter="direct" data-active-classes="border-slate-900 bg-slate-900 text-white" data-inactive-classes="border-white/40 bg-white/75 text-slate-500" class="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-900 bg-slate-900 px-2.5 text-xs font-bold text-white shadow-lg backdrop-blur-xl transition duration-200 hover:bg-slate-800" aria-pressed="true">
                         <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
                         Direkt
                         <span class="h-5 w-9 rounded-full border border-current/20 bg-current/10 p-0.5">
-                            <span data-network-toggle-thumb class="block h-3.5 w-3.5 translate-x-0 rounded-full bg-current transition-transform duration-200 ease-out"></span>
+                            <span data-network-toggle-thumb class="block h-3.5 w-3.5 translate-x-4 rounded-full bg-current transition-transform duration-200 ease-out"></span>
                         </span>
                     </button>
                     <div class="relative" x-on:click.outside="if (filterMenu === 'visibility') filterMenu = null">
                         <button type="button" x-on:click="filterMenu = filterMenu === 'visibility' ? null : 'visibility'" x-bind:aria-expanded="filterMenu === 'visibility'" class="inline-flex h-10 items-center gap-2 rounded-lg border border-white/40 bg-white/75 px-3 text-xs font-bold text-slate-800 shadow-lg backdrop-blur-xl transition hover:bg-white" title="Sichtbarkeit begrenzen">
                             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 18h16M7 14h10M10 10h4M12 6v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-                            Min <span data-network-min-degree-current>0</span>
+                            Min <span data-network-min-degree-current>2</span>
                             <span class="text-slate-400">/</span>
                             Max <span data-network-max-profiles-current>2.000</span>
                         </button>
@@ -361,7 +380,7 @@
                             </label>
                             <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 leading-5">
                                 <div data-network-visible-profiles-count>0 sichtbar</div>
-                                <div>Effektives Minimum: <span data-network-effective-min-degree>0</span></div>
+                                <div>Effektives Minimum: <span data-network-effective-min-degree>2</span></div>
                             </div>
                         </div>
                     </div>
@@ -488,7 +507,7 @@
                         <div
                             x-show="profileListOpen"
                             x-transition.opacity
-                            x-on:click.outside="profileListOpen = false"
+                            x-on:click.outside="closeProfileList()"
                             class="mb-2 flex max-h-[min(72vh,44rem)] w-[min(36rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-white/45 bg-white/95 shadow-2xl backdrop-blur-xl"
                             data-network-profile-list-panel
                         >
@@ -497,7 +516,7 @@
                                     <div class="text-sm font-bold text-slate-950">Dargestellte Profile</div>
                                     <div class="mt-0.5 text-xs font-semibold text-slate-500" data-network-profile-list-count>0 sichtbar</div>
                                 </div>
-                                <button type="button" x-on:click="profileListOpen = false" class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50" title="Liste schliessen">
+                                <button type="button" x-on:click="closeProfileList()" class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50" title="Liste schliessen">
                                     <span class="sr-only">Liste schliessen</span>
                                     <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                                         <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>

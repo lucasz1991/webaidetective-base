@@ -79,8 +79,8 @@ function visibilityBadgeElement(data) {
     return badge;
 }
 
-function avatarElement(data, large = false) {
-    const imageUrl = String(data?.imageUrl || '').trim();
+function avatarElement(data, large = false, imagesEnabled = true) {
+    const imageUrl = imagesEnabled ? String(data?.imageUrl || '').trim() : '';
     const element = document.createElement(imageUrl ? 'img' : 'div');
     const sizeClass = large ? 'h-12 w-12' : 'h-9 w-9';
     const visibility = visibilityValue(data);
@@ -172,8 +172,14 @@ function publicBadgeLayer(root) {
 function updatePublicBadges(root, cy) {
     const layer = publicBadgeLayer(root);
     const container = cy?.container?.();
+    const state = instances.get(root);
 
     if (!layer || !container) {
+        return;
+    }
+
+    if (!state?.imagesEnabled) {
+        layer.replaceChildren();
         return;
     }
 
@@ -250,6 +256,53 @@ function schedulePublicBadgeUpdateFromCy(cy) {
     });
 }
 
+function syncProfileImageRendering(root, state) {
+    if (!state?.cy) {
+        return;
+    }
+
+    state.cy.batch(() => {
+        state.cy.nodes().forEach((node) => {
+            const imageUrl = String(node.data('imageUrl') || '').trim();
+            const shouldRender = state.imagesEnabled
+                && !node.hasClass('network-filtered')
+                && imageUrl !== '';
+            const renderImageUrl = shouldRender ? imageUrl : 'none';
+
+            if (node.data('renderImageUrl') !== renderImageUrl) {
+                node.data('renderImageUrl', renderImageUrl);
+            }
+        });
+    });
+
+    if (!state.imagesEnabled) {
+        publicBadgeLayer(root)?.replaceChildren();
+    } else {
+        schedulePublicBadgeUpdate(root, state.cy);
+    }
+}
+
+function setProfileImagesEnabled(root, enabled) {
+    const state = instances.get(root);
+
+    if (!state) {
+        return;
+    }
+
+    const nextEnabled = Boolean(enabled);
+
+    if (state.imagesEnabled === nextEnabled) {
+        return;
+    }
+
+    state.imagesEnabled = nextEnabled;
+    state.isFullscreen = nextEnabled;
+    syncProfileImageRendering(root, state);
+    renderProfileList(root, state.cy);
+    updateSelectionPanel(root, state.cy);
+    scheduleThreeRender(root);
+}
+
 function toElements(graph) {
     const nodes = (graph.nodes || []).map((node) => {
         const visibility = visibilityValue(node);
@@ -280,6 +333,7 @@ function toElements(graph) {
                 renderNodeSize: Number(node.nodeSize) || baseNodeSizeForData(node),
                 renderNodeFontSize: Number(node.nodeFontSize) || baseNodeFontSizeForData(node),
                 renderTextMaxWidth: 105,
+                renderImageUrl: 'none',
             },
         };
     });
@@ -1539,7 +1593,9 @@ function rebuildThreeGraph(root, state) {
         threeState.nodeGroups.set(node.id(), nodeGroup);
         threeState.pickables.push(mesh);
 
-        const avatar = createProfileAvatarMesh(THREE, threeState, node, renderRadius, targetPosition);
+        const avatar = state.imagesEnabled
+            ? createProfileAvatarMesh(THREE, threeState, node, renderRadius, targetPosition)
+            : null;
 
         if (avatar) {
             group.add(avatar);
@@ -3396,14 +3452,26 @@ function renderProfileList(root, cy) {
         return;
     }
 
-    const items = profileListItems(cy);
-    const profileCount = items.filter((item) => item.node.data('type') !== 'person').length;
+    const profileCount = cy.nodes()
+        .not('.network-filtered')
+        .filter((node) => node.data('type') !== 'person')
+        .length;
 
     if (count) {
         count.textContent = `${profileCount.toLocaleString('de-DE')} Profile sichtbar`;
     }
 
     list.replaceChildren();
+
+    if (!state?.profileListOpen) {
+        const deferred = document.createElement('p');
+        deferred.className = 'px-1 py-2 text-sm text-slate-500';
+        deferred.textContent = 'Liste wird beim Oeffnen aufgebaut.';
+        list.append(deferred);
+        return;
+    }
+
+    const items = profileListItems(cy);
 
     if (!items.length) {
         const empty = document.createElement('p');
@@ -3420,7 +3488,7 @@ function renderProfileList(root, cy) {
         const isPerson = node.data('type') === 'person';
         const row = document.createElement('div');
         const rank = document.createElement('div');
-        const avatar = avatarElement(node.data());
+        const avatar = avatarElement(node.data(), false, state.imagesEnabled);
         const content = document.createElement('div');
         const titleLine = document.createElement('div');
         const title = document.createElement('button');
@@ -4246,7 +4314,7 @@ function updateSelectionPanel(root, cy) {
     detail.classList.remove('hidden');
 
     const detailAvatar = root.querySelector('[data-network-detail-avatar]');
-    detailAvatar?.replaceChildren(avatarElement(node.data(), true));
+    detailAvatar?.replaceChildren(avatarElement(node.data(), true, state.imagesEnabled));
     root.querySelector('[data-network-detail-label]').textContent = node.data('fullLabel') || node.data('label');
     root.querySelector('[data-network-detail-handle]').textContent = [node.data('role'), node.data('handle') || node.data('type')]
         .filter(Boolean)
@@ -4316,7 +4384,7 @@ function updateSelectionPanel(root, cy) {
         }
 
         text.append(label, handle, badges, connection);
-        button.append(avatarElement(connectedNode.data()), text);
+        button.append(avatarElement(connectedNode.data(), false, state.imagesEnabled), text);
         list.append(button);
     });
 }
@@ -4353,14 +4421,13 @@ function applyFilters(root, cy, options = {}) {
         const directIds = directVisibleNodeIds(cy, state);
 
         cy.nodes().forEach((node) => {
-            if (directIds.has(node.id())) {
-                node.removeClass('network-filtered');
-            } else {
+            if (!directIds.has(node.id())) {
                 node.addClass('network-filtered');
             }
         });
     }
 
+    syncProfileImageRendering(root, state);
     applyVisualSettings(root, cy);
 
     root.querySelectorAll('[data-network-filter]').forEach((button) => {
@@ -4444,16 +4511,16 @@ function resetFiltersToVisibleDefaults(root, cy, state) {
     state.showPublic = true;
     state.showInferred = true;
     state.showTracked = true;
-    state.showDirectOnly = false;
+    state.showDirectOnly = true;
     state.showMutual = true;
     state.showFollowing = true;
     state.showKnownProfile = true;
     state.showKnownPersonLink = true;
     state.showReconstructed = true;
     state.showSuggestion = true;
-    state.minDegree = 0;
+    state.minDegree = 2;
     state.maxVisibleProfiles = networkMaxVisibleProfiles(root);
-    state.hasStoredMinDegree = false;
+    state.hasStoredMinDegree = true;
     state.autoMinDegreeApplied = false;
     cy.elements().removeClass('network-filtered network-faded network-neighbor network-selected');
     applyEdgeRenderState(cy, state);
@@ -4607,6 +4674,10 @@ function bindControls(root, cy) {
 
         if (detail.mapId && detail.mapId !== root.dataset.networkMapId) {
             return;
+        }
+
+        if (typeof detail.open === 'boolean') {
+            state.profileListOpen = detail.open;
         }
 
         renderProfileList(root, cy);
@@ -4948,7 +5019,7 @@ async function initNetworkMap(root) {
             {
                 selector: '.network-has-image',
                 style: {
-                    'background-image': 'data(imageUrl)',
+                    'background-image': 'data(renderImageUrl)',
                     'background-fit': 'cover',
                     'background-clip': 'node',
                     'background-color': '#f8fafc',
@@ -5048,9 +5119,6 @@ async function initNetworkMap(root) {
 
         const storedFilters = readStoredFilters(root);
         const storedLayoutSettings = readStoredLayoutSettings(root);
-        const storedMinDegree = Number.isFinite(Number(storedFilters.minDegree))
-            ? Math.max(0, Number(storedFilters.minDegree))
-            : null;
         const storedMaxVisibleProfiles = Number.isFinite(Number(storedFilters.maxVisibleProfiles))
             ? Math.max(0, Number(storedFilters.maxVisibleProfiles))
             : null;
@@ -5059,20 +5127,23 @@ async function initNetworkMap(root) {
             showPublic: storedFilters.showPublic ?? true,
             showInferred: storedFilters.showInferred ?? true,
             showTracked: storedFilters.showTracked ?? true,
-            showDirectOnly: storedFilters.showDirectOnly ?? false,
+            showDirectOnly: true,
             showMutual: storedFilters.showMutual ?? true,
             showFollowing: storedFilters.showFollowing ?? true,
             showKnownProfile: storedFilters.showKnownProfile ?? true,
             showKnownPersonLink: storedFilters.showKnownPersonLink ?? true,
             showReconstructed: storedFilters.showReconstructed ?? true,
             showSuggestion: storedFilters.showSuggestion ?? true,
-            minDegree: storedMinDegree ?? 0,
+            minDegree: 2,
             maxVisibleProfiles: storedMaxVisibleProfiles ?? selectedMaxVisibleProfiles(root),
             layoutSpacingScale: normalizedScale(storedFilters.layoutSpacingScale ?? storedLayoutSettings.layoutSpacingScale, 1, 0.5, 5),
             nodeSizeScale: normalizedScale(storedFilters.nodeSizeScale ?? storedLayoutSettings.nodeSizeScale, 1, 0.5, 5),
             nodeSizeVariance: normalizedScale(storedFilters.nodeSizeVariance ?? storedLayoutSettings.nodeSizeVariance, 1, 0, 4),
-            hasStoredMinDegree: storedMinDegree !== null,
+            hasStoredMinDegree: true,
             autoMinDegreeApplied: false,
+            imagesEnabled: false,
+            isFullscreen: false,
+            profileListOpen: false,
             selectedId: null,
             resizeHandler,
             loadGeneration: 0,
@@ -5578,6 +5649,19 @@ window.addEventListener('network-map-layout-refresh', (event) => {
         window.requestAnimationFrame(refreshAndFit);
         window.setTimeout(refreshAndFit, 180);
     });
+});
+
+window.addEventListener('network-map-fullscreen-change', (event) => {
+    const detail = eventDetail(event);
+    const root = detail.mapId
+        ? document.querySelector(`[data-network-map-root][data-network-map-id="${detail.mapId}"]`)
+        : document.querySelector('[data-network-map-root]');
+
+    if (!root) {
+        return;
+    }
+
+    setProfileImagesEnabled(root, detail.fullscreen === true);
 });
 
 document.addEventListener('DOMContentLoaded', () => initNetworkMaps());
