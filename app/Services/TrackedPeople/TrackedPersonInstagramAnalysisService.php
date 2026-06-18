@@ -286,6 +286,12 @@ class TrackedPersonInstagramAnalysisService
             return $snapshot;
         });
 
+        $storedProfile = $snapshot->fresh()?->instagramProfile;
+
+        if ($storedProfile) {
+            $this->profileRelationshipStore->propagateProfileDataToLinkedTrackedPeople($storedProfile);
+        }
+
         $this->reportProgress($progress, [
             'phase' => 'done',
             'percent' => 100,

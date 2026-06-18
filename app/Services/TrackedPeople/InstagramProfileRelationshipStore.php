@@ -572,6 +572,27 @@ class InstagramProfileRelationshipStore
             return;
         }
 
+        $profile = $profile->fresh() ?: $profile;
+        $normalizedUsername = $this->normalizeUsername($profile->username);
+
+        if ($normalizedUsername === null) {
+            return;
+        }
+
+        $usernameMatchedPeople = TrackedPerson::query()
+            ->whereNotNull('instagram_username')
+            ->whereRaw(
+                "LOWER(TRIM(REPLACE(instagram_username, '@', ''))) = ?",
+                [$normalizedUsername],
+            )
+            ->get();
+
+        foreach ($usernameMatchedPeople as $usernameMatchedPerson) {
+            if ((int) $usernameMatchedPerson->current_instagram_profile_id !== (int) $profile->id) {
+                $this->linkTrackedPersonToProfile($usernameMatchedPerson, $profile);
+            }
+        }
+
         $updates = array_filter([
             'instagram_username' => $profile->username,
             'instagram_profile_image_path' => $profile->profile_image_path,
@@ -598,12 +619,17 @@ class InstagramProfileRelationshipStore
             ->all();
 
         TrackedPerson::query()
-            ->where(function ($query) use ($profile, $linkedTrackedPersonIds): void {
+            ->where(function ($query) use ($profile, $linkedTrackedPersonIds, $normalizedUsername): void {
                 $query->where('current_instagram_profile_id', $profile->id);
 
                 if ($linkedTrackedPersonIds !== []) {
                     $query->orWhereIn('id', $linkedTrackedPersonIds);
                 }
+
+                $query->orWhereRaw(
+                    "LOWER(TRIM(REPLACE(instagram_username, '@', ''))) = ?",
+                    [$normalizedUsername],
+                );
             })
             ->when($scannedTrackedPerson, fn ($query) => $query->whereKeyNot($scannedTrackedPerson->id))
             ->update($updates);

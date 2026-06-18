@@ -119,6 +119,45 @@ class InstagramProfileScanBillingTest extends TestCase
         }
     }
 
+    public function test_profile_data_repairs_missing_links_for_matching_observed_people(): void
+    {
+        $user = User::factory()->create();
+        $profile = InstagramProfile::create([
+            'username' => 'username_fallback_test',
+            'followers_count' => 9876,
+            'following_count' => 654,
+            'posts_count' => 32,
+            'last_status_level' => 'success',
+            'last_status_message' => 'Fresh profile metrics.',
+            'last_scanned_at' => now('UTC'),
+        ]);
+        $person = TrackedPerson::create([
+            'user_id' => $user->id,
+            'first_name' => 'Legacy',
+            'last_name' => 'Person',
+            'instagram_username' => 'username_fallback_test',
+            'current_instagram_profile_id' => null,
+            'instagram_followers_count' => 1,
+            'instagram_following_count' => 2,
+            'instagram_posts_count' => 3,
+        ]);
+
+        app(InstagramProfileRelationshipStore::class)
+            ->propagateProfileDataToLinkedTrackedPeople($profile);
+
+        $person = $person->fresh();
+
+        $this->assertSame($profile->id, $person->current_instagram_profile_id);
+        $this->assertSame(9876, $person->instagram_followers_count);
+        $this->assertSame(654, $person->instagram_following_count);
+        $this->assertSame(32, $person->instagram_posts_count);
+        $this->assertDatabaseHas('tracked_person_instagram_profile_links', [
+            'tracked_person_id' => $person->id,
+            'instagram_profile_id' => $profile->id,
+            'is_current' => true,
+        ]);
+    }
+
     public function test_suggestion_scan_can_be_stored_without_tracked_person(): void
     {
         $user = User::factory()->create();
