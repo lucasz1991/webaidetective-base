@@ -25,21 +25,16 @@
         networkNode: { id: null, type: null, isKnownProfile: false },
         nodeMenu: { open: false, id: null, type: null, isKnownProfile: false, detailUrl: null, name: '', handle: '', x: 0, y: 0 },
         mapWire() {
-            const component = window.Livewire?.find?.(this.livewireComponentId);
-            return component?.$wire || component || null;
+            return window.Livewire?.find?.(this.livewireComponentId) || null;
         },
         callMapMethod(method, ...args) {
             const wire = this.mapWire();
 
-            if (!wire) {
+            if (!wire || typeof wire.$call !== 'function') {
                 return null;
             }
 
-            if (typeof wire.call === 'function') {
-                return wire.call(method, ...args);
-            }
-
-            return typeof wire[method] === 'function' ? wire[method](...args) : null;
+            return wire.$call(method, ...args);
         },
         loadMapWhenVisible() {
             this.$root.dataset.networkIntersected = 'true';
