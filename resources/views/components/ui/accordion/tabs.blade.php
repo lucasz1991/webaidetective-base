@@ -3,6 +3,7 @@
     'tabs' => [],
     'default' => null,
     'persistKey' => null,
+    'persist' => true,
     // optional: 'sm' | 'md' | 'lg' | 'xl' | '2xl'
     'collapseAt' => null,
 ])
@@ -22,7 +23,7 @@
 
 <div
     x-data="{
-        openTab: $persist('{{ $initial }}').as('{{ $key }}'),
+        openTab: @if($persist) $persist(@js($initial)).as(@js($key)) @else @js($initial) @endif,
         collapsed: false,
         forceCollapsed: false,
         items: (function() {
@@ -60,8 +61,6 @@
     x-init="setupMQ(@js($collapseAt)); onResize(); $watch('openTab', () => onResize())"
     class="w-full"
     role="tablist"
-    wire:key="tutor-course-tabs"
-    wire:ignore
 >
     <div class="flex -mb-[1px]" x-ref="row" x-resize.debounce.150ms="onResize()">
         <!-- Normalmodus: alle Tabs (Layout unverändert) -->

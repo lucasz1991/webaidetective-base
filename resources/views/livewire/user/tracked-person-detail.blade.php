@@ -1028,32 +1028,20 @@
         </div>
     </x-modal>
 
-    <section id="profilinfos" x-data="{ activeProfileTab: 'verbindungen' }" class="scroll-mt-4 rounded-lg border border-slate-200 bg-white shadow-sm">
-        <div class="border-b border-slate-200 px-4 py-3">
-            <div class="flex gap-2 overflow-x-auto text-sm" role="tablist" aria-label="Profilinformationen">
-                <button
-                    type="button"
-                    x-on:click="activeProfileTab = 'verbindungen'"
-                    x-bind:class="activeProfileTab === 'verbindungen' ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
-                    class="shrink-0 rounded-lg px-3 py-1.5 font-semibold"
-                >
-                    Verbindungen
-                </button>
-                <button
-                    type="button"
-                    x-on:click="activeProfileTab = 'analyse'"
-                    x-bind:class="activeProfileTab === 'analyse' ? 'bg-slate-950 text-white' : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-50'"
-                    class="shrink-0 rounded-lg px-3 py-1.5 font-semibold"
-                >
-                    Analyse
-                </button>
-            </div>
-        </div>
-
-        <div class="p-4">
-           
-
-            <div id="verbindungen" x-show="activeProfileTab === 'verbindungen'" class="scroll-mt-4">
+    <section id="profilinfos" class="scroll-mt-4">
+        <x-ui.accordion.tabs
+            :tabs="[
+                'analyse' => 'Analysen',
+                'verbindungen' => 'Verbindungen',
+            ]"
+            default="analyse"
+            :persist="false"
+            collapse-at="sm"
+        >
+            <x-ui.accordion.tab-panel
+                for="verbindungen"
+                panel-class="scroll-mt-4 space-y-4 rounded-b-lg rounded-se-lg border border-blue-300 bg-white p-4"
+            >
                 <div class="flex flex-wrap items-start justify-between gap-3">
                     <div>
                         <h3 class="text-lg font-bold text-slate-900">Bekannte Instagram-Profile</h3>
@@ -1099,6 +1087,7 @@
 
                 <div class="mt-4 rounded-xl border border-slate-200 bg-white p-3">
                     <livewire:user.network-map
+                        lazy
                         :tracked-person-id="$trackedPerson->id"
                         :embedded="true"
                         :key="'tracked-person-network-map-'.$trackedPerson->id"
@@ -1677,9 +1666,12 @@
                         </div>
                     </div>
                 </div>
-            </div>
+            </x-ui.accordion.tab-panel>
 
-            <div id="analyse" x-show="activeProfileTab === 'analyse'" class="scroll-mt-4 space-y-4">
+            <x-ui.accordion.tab-panel
+                for="analyse"
+                panel-class="scroll-mt-4 space-y-4 rounded-b-lg rounded-se-lg border border-blue-300 bg-white p-4"
+            >
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Letzte Instagram-Analyse</h3>
 
@@ -1900,8 +1892,8 @@
                     @endforelse
                 </div>
             </div>
-            </div>
-        </div>
+            </x-ui.accordion.tab-panel>
+        </x-ui.accordion.tabs>
     </section>
 
     <x-instagram-post-engagement-modal
