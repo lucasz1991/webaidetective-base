@@ -308,21 +308,21 @@
             <span class="rounded-2xl bg-white/80 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">
                 Letzter Scan: {{ $lastScanStatus['scannedAt']?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
             </span>
+            @if($detailStatus)
+                <div @class([
+                    'mt-4 rounded-3xl border px-4 py-3 text-sm',
+                    'border-emerald-200 bg-emerald-50 text-emerald-900' => $detailStatusLevel === 'success',
+                    'border-amber-200 bg-amber-50 text-amber-950' => $detailStatusLevel === 'partial',
+                    'border-rose-200 bg-rose-50 text-rose-900' => $detailStatusLevel === 'error',
+                    'border-slate-200 bg-slate-50 text-slate-800' => ! in_array($detailStatusLevel, ['success', 'partial', 'error'], true),
+                ])>
+                    {{ $detailStatus }}
+                </div>
+            @endif
         </x-slot:badges>
 
 
 
-        @if($detailStatus)
-            <div @class([
-                'mt-4 rounded-3xl border px-4 py-3 text-sm',
-                'border-emerald-200 bg-emerald-50 text-emerald-900' => $detailStatusLevel === 'success',
-                'border-amber-200 bg-amber-50 text-amber-950' => $detailStatusLevel === 'partial',
-                'border-rose-200 bg-rose-50 text-rose-900' => $detailStatusLevel === 'error',
-                'border-slate-200 bg-slate-50 text-slate-800' => ! in_array($detailStatusLevel, ['success', 'partial', 'error'], true),
-            ])>
-                {{ $detailStatus }}
-            </div>
-        @endif
     </x-profile.detail-hero>
 
     <x-instagram-posts-gallery
