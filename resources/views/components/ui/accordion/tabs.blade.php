@@ -66,35 +66,37 @@
     class="w-full"
     role="tablist"
 >
-    <div class="flex -mb-[1px]" x-ref="row" x-resize.debounce.150ms="onResize()">
+    <div class="border-b border-slate-200" x-ref="row" x-resize.debounce.150ms="onResize()">
         <!-- Normalmodus: alle Tabs (Layout unverändert) -->
         <template x-if="!collapsed">
-            <template x-for="t in items" :key="t.id">
-                <button
-                    type="button"
-                    @click.prevent="selectTab(t.id)"
-                    :class="openTab === t.id
-                        ? 'text-blue-600 font-bold border-blue-300 bg-white border-b-0'
-                        : 'text-gray-500 font-medium bg-white border-gray-300 border-b-blue-300'"
-                    class="mr-2 px-4 py-2 text-sm transition-all border border-blue-300 border-b-blue-300 rounded-t-lg inline-flex items-center gap-2"
-                    role="tab"
-                    :aria-selected="openTab === t.id"
-                    :tabindex="openTab === t.id ? 0 : -1"
-                >
-                    <template x-if="t.icon">
-                        <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
-                    </template>
-                    <span class="whitespace-nowrap" x-text="t.label"></span>
-                </button>
-            </template>
+            <div class="flex justify-center overflow-x-auto">
+                <template x-for="t in items" :key="t.id">
+                    <button
+                        type="button"
+                        @click.prevent="selectTab(t.id)"
+                        :class="openTab === t.id
+                            ? '-mb-px border-t-slate-950 text-slate-950'
+                            : 'border-t-transparent text-slate-500 hover:text-slate-900'"
+                        class="inline-flex shrink-0 items-center gap-2 border-t px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300 sm:px-6"
+                        role="tab"
+                        :aria-selected="openTab === t.id"
+                        :tabindex="openTab === t.id ? 0 : -1"
+                    >
+                        <template x-if="t.icon">
+                            <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
+                        </template>
+                        <span class="whitespace-nowrap" x-text="t.label"></span>
+                    </button>
+                </template>
+            </div>
         </template>
 
         <!-- Collapsed: aktiver Tab + Menü (Buttons behalten deine Klassen) -->
         <template x-if="collapsed">
-            <div class="contents">
+            <div class="flex w-full justify-center">
                 <button
                     type="button"
-                    class="mr-2 px-4 py-2 text-sm transition-all border border-blue-300 border-b-blue-300 rounded-t-lg inline-flex items-center gap-2 text-blue-600 font-bold bg-white border-b-0"
+                    class="-mb-px inline-flex shrink-0 items-center gap-2 border-t border-t-slate-950 px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
                     role="tab" aria-selected="true" tabindex="0"
                 >
                     <template x-if="active?.icon">
@@ -108,7 +110,7 @@
                         type="button"
                         @click="open=!open"
                         @keydown.escape.window="open=false"
-                        class="px-4 py-2 text-sm transition-all border border-blue-300 border-b-blue-300 rounded-t-lg inline-flex items-center gap-2 text-gray-500 font-medium bg-white border-b-blue-300"
+                        class="inline-flex shrink-0 items-center gap-2 border-t border-t-transparent px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-500 transition-colors hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
                         :aria-expanded="open" aria-haspopup="menu" title="Weitere Tabs"
                     >
                         <i class="fad fa-bars fa-lg" aria-hidden="true"></i>
@@ -119,7 +121,7 @@
                         x-cloak
                         x-show="open"
                         @click.outside="open=false"
-                        class="absolute z-20 mt-1 w-56 rounded-md border border-gray-200 bg-white shadow"
+                        class="absolute right-0 z-20 mt-1 w-56 rounded-xl border border-slate-200 bg-white shadow"
                         role="menu"
                     >
                         <ul class="py-1 max-h-[60vh] overflow-auto">
@@ -127,7 +129,7 @@
                                 <li>
                                     <button
                                         type="button"
-                                        class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 inline-flex items-center gap-2"
+                                        class="inline-flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
                                         role="menuitem"
                                         @click="open=false; selectTab(t.id)"
                                     >

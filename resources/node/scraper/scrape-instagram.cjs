@@ -2313,24 +2313,56 @@ async function openInstagramPostLikesDialogReliable(page) {
     const surface = dialogs[dialogs.length - 1] || document.querySelector('article') || document.body;
     const beforeDialogCount = dialogs.length;
     const germanLikeWord = 'gef(?:a|\\u00e4|\\u00c3\\u00a4)llt';
-    const numericLikePattern = new RegExp(`(?:^|\\s)[\\d.,\\s]+(?:k|m|mio|tsd)?\\s*(?:${germanLikeWord}|likes?)(?:\\s|$)`, 'i');
-    const socialLikePattern = new RegExp(`(?:anderen\\s+${germanLikeWord}|${germanLikeWord}\\s+.+|liked by|and others|likes?)`, 'i');
+    const numericLikePattern = new RegExp(`(?:^|\\s)(?:[\\d.,\\s]+(?:k|m|mio|tsd)?\\s*(?:${germanLikeWord}|likes?)|(?:${germanLikeWord}|likes?)\\s+[\\d.,\\s]+(?:k|m|mio|tsd)?)(?:\\s|$)`, 'i');
     const rejectPattern = /antworten|reply|kommentar|comment|translation/i;
-    const candidates = Array.from(surface.querySelectorAll('a, button, [role="button"], span, div'))
+    const heartControlPattern = /^(gef[aä]llt mir|like|unlike|gef[aä]llt dir|remove like)$/i;
+    const containsHeartControl = (element) => {
+      const controlText = normalizeElementText([
+        element.getAttribute?.('aria-label') || '',
+        ...Array.from(element.querySelectorAll?.('svg, [aria-label]') || [])
+          .map((child) => child.getAttribute?.('aria-label') || ''),
+      ].join(' '));
+
+      return heartControlPattern.test(controlText)
+        || /heart|like icon|gef[aä]llt mir/i.test(controlText);
+    };
+    const clickableFor = (element) => {
+      const link = element.closest('a[href]');
+
+      if (link && isVisible(link)) {
+        return link;
+      }
+
+      if (element.tagName?.toLowerCase() === 'button' || element.closest('button')) {
+        return null;
+      }
+
+      const roleButton = element.closest('[role="button"]');
+
+      if (roleButton && !containsHeartControl(roleButton) && normalizeElementText(roleButton.innerText || roleButton.textContent || '').length <= 160) {
+        return roleButton;
+      }
+
+      return element;
+    };
+    const candidates = Array.from(surface.querySelectorAll('a[href], span, div, section'))
       .filter((element) => {
         if (!isVisible(element)) {
           return false;
         }
 
         const text = normalizeElementText(element.innerText || element.textContent || '');
+        const clickable = clickableFor(element);
 
         return text.length > 0
           && text.length <= 220
           && !rejectPattern.test(text)
-          && (numericLikePattern.test(text) || socialLikePattern.test(text));
+          && numericLikePattern.test(text)
+          && clickable
+          && !containsHeartControl(clickable);
       })
       .map((element) => {
-        const clickable = element.closest('a, button, [role="button"]') || element;
+        const clickable = clickableFor(element);
         const text = normalizeElementText(element.innerText || element.textContent || '');
         const rect = clickable.getBoundingClientRect();
         let score = 0;
@@ -2339,11 +2371,7 @@ async function openInstagramPostLikesDialogReliable(page) {
           score += 120;
         }
 
-        if (/liked by|anderen/i.test(text)) {
-          score += 70;
-        }
-
-        if (clickable.tagName.toLowerCase() === 'a' || clickable.tagName.toLowerCase() === 'button' || clickable.getAttribute('role') === 'button') {
+        if (clickable.tagName.toLowerCase() === 'a' || clickable.getAttribute('role') === 'button') {
           score += 35;
         }
 
@@ -2375,6 +2403,7 @@ async function openInstagramPostLikesDialogReliable(page) {
     return {
       clicked: true,
       beforeDialogCount,
+      targetText: normalizeElementText(target.innerText || target.textContent || ''),
     };
   }).catch(() => false);
 
@@ -2421,6 +2450,104 @@ async function openInstagramPostLikesDialogReliable(page) {
       return dialogs.length > initialDialogCount;
     }, beforeDialogCount).catch(() => false);
   }
+}
+
+async function openInstagramPostDetailPage(sourcePage, post = {}, runtimeConfig = {}) {
+  if (!post?.postUrl) {
+    return {
+      page: null,
+      navigation: {
+        ok: false,
+        error: 'post-url-missing',
+      },
+    };
+  }
+
+  let detailPage = null;
+
+  try {
+    const browserContext = typeof sourcePage.browserContext === 'function'
+      ? sourcePage.browserContext()
+      : null;
+
+    detailPage = browserContext && typeof browserContext.newPage === 'function'
+      ? await browserContext.newPage()
+      : await sourcePage.browser().newPage();
+
+    const viewport = typeof sourcePage.viewport === 'function' ? sourcePage.viewport() : null;
+
+    if (viewport) {
+      await detailPage.setViewport(viewport).catch(() => {});
+    }
+
+    const userAgent = await sourcePage.evaluate(() => navigator.userAgent).catch(() => null);
+
+    if (userAgent && typeof detailPage.setUserAgent === 'function') {
+      await detailPage.setUserAgent(userAgent).catch(() => {});
+    }
+
+    await detailPage.bringToFront().catch(() => {});
+
+    const navigation = await navigateWithSoftTimeout(detailPage, post.postUrl, runtimeConfig, {
+      waitUntil: 'domcontentloaded',
+    });
+
+    if (!navigation.ok) {
+      await detailPage.close().catch(() => {});
+
+      return {
+        page: null,
+        navigation,
+      };
+    }
+
+    await sleep(1000);
+
+    return {
+      page: detailPage,
+      navigation,
+    };
+  } catch (error) {
+    if (detailPage) {
+      await detailPage.close().catch(() => {});
+    }
+
+    return {
+      page: null,
+      navigation: {
+        ok: false,
+        error: normalizeText(error.message || String(error)),
+      },
+    };
+  }
+}
+
+async function collectInstagramPostPageDetails(page, profileUsername) {
+  return page.evaluate((expectedProfileUsername) => ({
+    bodyText: document.body?.innerText || '',
+    description: document.querySelector('meta[property="og:description"]')?.getAttribute('content') || null,
+    thumbnailUrl: document.querySelector('meta[property="og:image"]')?.getAttribute('content') || null,
+    publishedAt: document.querySelector('time[datetime]')?.getAttribute('datetime') || null,
+    rateLimited: /rate limit|bitte warte einige minuten|please wait a few minutes|t[aÃ¤]gliches zeitlimit erreicht|daily time limit reached|reached your daily time limit/i.test(document.body?.innerText || ''),
+    ownerSeen: Array.from(document.querySelectorAll('a[href]')).some((anchor) => {
+      try {
+        const pathParts = new URL(anchor.getAttribute('href'), window.location.origin).pathname
+          .split('/')
+          .filter(Boolean);
+
+        return pathParts.length === 1 && pathParts[0].toLowerCase() === String(expectedProfileUsername || '').toLowerCase();
+      } catch (error) {
+        return false;
+      }
+    }),
+  }), profileUsername).catch(() => ({
+    bodyText: '',
+    description: null,
+    thumbnailUrl: null,
+    publishedAt: null,
+    rateLimited: false,
+    ownerSeen: false,
+  }));
 }
 
 async function collectInstagramPostEngagementFromUi(page, post = {}, runtimeConfig = {}) {
@@ -2496,7 +2623,7 @@ async function collectInstagramPostLikesFromUi(page, post = {}, runtimeConfig = 
   return result;
 }
 
-async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {}) {
+async function collectInstagramPostEngagementOnPage(page, post = {}, runtimeConfig = {}) {
   const maxLikes = Math.max(1, Number(runtimeConfig.postScanMaxLikesPerPost || 250));
   const maxComments = Math.max(1, Number(runtimeConfig.postScanMaxCommentsPerPost || 250));
   const mediaPk = await resolveInstagramPostMediaPk(page, post);
@@ -2733,6 +2860,29 @@ async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {
     rateLimited,
     errors,
   };
+}
+
+async function collectInstagramPostEngagement(page, post = {}, runtimeConfig = {}) {
+  const opened = await openInstagramPostDetailPage(page, post, runtimeConfig);
+
+  if (!opened.page) {
+    return {
+      mediaPk: normalizeText(String(post.mediaPk || '')) || null,
+      likes: [],
+      comments: [],
+      likesComplete: false,
+      commentsComplete: false,
+      rateLimited: false,
+      errors: [`ui-navigation: ${opened.navigation?.error || 'unbekannter Fehler'}`],
+    };
+  }
+
+  try {
+    return await collectInstagramPostEngagementOnPage(opened.page, post, runtimeConfig);
+  } finally {
+    await opened.page.close().catch(() => {});
+    await page.bringToFront().catch(() => {});
+  }
 }
 
 async function fetchInstagramTimelinePage(page, username, cursor = null, count = 12) {
@@ -3137,9 +3287,9 @@ async function collectInstagramPosts(
       continue;
     }
 
-    const navigation = await navigateWithSoftTimeout(page, link.postUrl, runtimeConfig);
+    const openedPostPage = await openInstagramPostDetailPage(page, link, runtimeConfig);
 
-    if (!navigation.ok) {
+    if (!openedPostPage.page) {
       if (link.source === 'timeline-api') {
         posts.push({
           ...link,
@@ -3149,35 +3299,50 @@ async function collectInstagramPosts(
 
       failedItems.push({
         ...link,
-        error: navigation.error,
+        error: openedPostPage.navigation?.error || 'post-detail-page-unavailable',
       });
       continue;
     }
 
-    await sleep(1100);
+    let shouldSkipCurrentPost = false;
+    let details = null;
+    let likesCount = null;
+    let commentsCount = null;
+    let engagement = null;
 
-    if (runtimeState) {
-      const recovery = await recoverFromInstagramDailyTimeLimit(
-        page,
-        runtimeState,
-        notes,
-        'posts',
-        link.postUrl,
-      );
+    try {
+      if (runtimeState) {
+        const recovery = await recoverFromInstagramDailyTimeLimit(
+          openedPostPage.page,
+          runtimeState,
+          notes,
+          'posts',
+          link.postUrl,
+        );
 
-      runtimeConfig = runtimeState.runtimeConfig;
+        runtimeConfig = runtimeState.runtimeConfig;
 
-      if (!recovery.recovered) {
-        rateLimited = true;
-        failedItems.push({
-          ...link,
-          error: 'instagram-daily-time-limit',
-        });
-        break;
+        if (!recovery.recovered) {
+          rateLimited = true;
+          failedItems.push({
+            ...link,
+            error: 'instagram-daily-time-limit',
+          });
+          shouldSkipCurrentPost = true;
+        }
+      }
+    } finally {
+      if (shouldSkipCurrentPost) {
+        await openedPostPage.page.close().catch(() => {});
+        await page.bringToFront().catch(() => {});
       }
     }
 
-    const details = await page.evaluate((profileUsername) => ({
+    if (rateLimited && shouldSkipCurrentPost) {
+      break;
+    }
+
+    details = await openedPostPage.page.evaluate((profileUsername) => ({
       bodyText: document.body?.innerText || '',
       description: document.querySelector('meta[property="og:description"]')?.getAttribute('content') || null,
       thumbnailUrl: document.querySelector('meta[property="og:image"]')?.getAttribute('content') || null,
@@ -3207,6 +3372,8 @@ async function collectInstagramPosts(
       && normalizeInstagramUsername(link.ownerUsername) === normalizeInstagramUsername(username);
 
     if (!details.ownerSeen && !ownerConfirmedByTimeline) {
+      await openedPostPage.page.close().catch(() => {});
+      await page.bringToFront().catch(() => {});
       failedItems.push({
         ...link,
         error: 'post-owner-mismatch',
@@ -3214,8 +3381,8 @@ async function collectInstagramPosts(
       continue;
     }
 
-    const html = await page.content().catch(() => '');
-    const likesCount = extractPostMetricFromHtml(html, [
+    const html = await openedPostPage.page.content().catch(() => '');
+    likesCount = extractPostMetricFromHtml(html, [
       'like_count',
       'edge_media_preview_like',
       'edge_liked_by',
@@ -3223,7 +3390,7 @@ async function collectInstagramPosts(
       /([\d.,\s]+(?:k|m|mio|tsd)?)\s+(?:likes?|gef[aä]llt-mir-angaben)/iu,
       /gef[aä]llt\s+([\d.,\s]+(?:k|m|mio|tsd)?)\s+mal/iu,
     ]);
-    const commentsCount = extractPostMetricFromHtml(html, [
+    commentsCount = extractPostMetricFromHtml(html, [
       'comment_count',
       'edge_media_to_parent_comment',
       'edge_media_to_comment',
@@ -3232,11 +3399,28 @@ async function collectInstagramPosts(
       /view\s+all\s+([\d.,\s]+(?:k|m|mio|tsd)?)\s+comments?/iu,
       /([\d.,\s]+(?:k|m|mio|tsd)?)\s+comments?/iu,
     ]);
-    const engagement = await collectInstagramPostEngagement(page, {
-      ...link,
-      likesCount: hasTimelineLikes ? Number(link.likesCount) : likesCount,
-      commentsCount: hasTimelineComments ? Number(link.commentsCount) : commentsCount,
-    }, runtimeConfig);
+    let engagementError = null;
+
+    try {
+      engagement = await collectInstagramPostEngagementOnPage(openedPostPage.page, {
+        ...link,
+        likesCount: hasTimelineLikes ? Number(link.likesCount) : likesCount,
+        commentsCount: hasTimelineComments ? Number(link.commentsCount) : commentsCount,
+      }, runtimeConfig);
+    } catch (error) {
+      engagementError = normalizeText(error.message || String(error));
+    }
+
+    await openedPostPage.page.close().catch(() => {});
+    await page.bringToFront().catch(() => {});
+
+    if (engagementError || !engagement) {
+      failedItems.push({
+        ...link,
+        error: engagementError || 'post-engagement-scan-incomplete',
+      });
+      continue;
+    }
 
     posts.push({
       ...link,

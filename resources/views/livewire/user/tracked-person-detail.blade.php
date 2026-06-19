@@ -1,4 +1,6 @@
 <div class="container mx-auto space-y-4" x-data="{ toasts: [] }" x-init="window.addEventListener('toast', e => { toasts.push(e.detail); setTimeout(() => toasts.shift(), 3000); })" x-cloak>
+    @php($isAdmin = auth()->user()?->role === 'admin')
+
     <div class="fixed top-4 right-4 z-50 space-y-2">
         <template x-for="(t, i) in toasts" :key="i">
             <div x-text="t.message" :class="t.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'" class="rounded-lg px-4 py-2 shadow"></div>
@@ -14,17 +16,23 @@
                 <div class="h-10 w-10 animate-spin rounded-full border-4 border-white/70 border-t-slate-950 bg-white"></div>
             </div>
             <div class="mt-4 text-xs font-semibold uppercase tracking-wide text-pink-700" wire:stream="instagram-progress-phase">Start</div>
-            <div class="mt-2 inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
-                <span class="shrink-0 uppercase tracking-wide text-slate-400">Scraper-Profil</span>
-                <span class="min-w-0 truncate text-slate-900" wire:stream="instagram-progress-scraper-profile">wird ermittelt</span>
-            </div>
+            @if($isAdmin)
+                <div class="mt-2 inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                    <span class="shrink-0 uppercase tracking-wide text-slate-400">Scraper-Profil</span>
+                    <span class="min-w-0 truncate text-slate-900" wire:stream="instagram-progress-scraper-profile">wird ermittelt</span>
+                </div>
+            @endif
             <h3 class="mt-1 text-lg font-bold text-slate-950">Instagram-Scan laeuft</h3>
             <p class="mt-2 text-sm leading-6 text-slate-600" wire:stream="instagram-progress-message">
                 Profil, Kennzahlen oder einzelne Listen werden abgearbeitet.
             </p>
-            <div wire:stream="instagram-progress-live-preview"></div>
+            @if($isAdmin)
+                <div wire:stream="instagram-progress-live-preview"></div>
+            @endif
             <div class="mt-2 text-xs font-semibold text-slate-500" wire:stream="instagram-progress-live-counts"></div>
-            <div wire:stream="instagram-progress-connection-results"></div>
+            @if($isAdmin)
+                <div wire:stream="instagram-progress-connection-results"></div>
+            @endif
             <div class="mt-5">
                 <div class="flex items-center justify-between text-xs font-semibold text-slate-500">
                     <span>Fortschritt</span>
@@ -299,18 +307,9 @@
                 </div>
             </div>
 
-            @if($detailStatus)
-                <div class="mt-4 rounded-3xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm {{ $detailStatusClass }}">
-                    {{ $detailStatus }}
-                </div>
-            @endif
+            <x-instagram.detail-status-alert :message="$detailStatus" :level="$detailStatusLevel" />
 
     </x-profile.detail-hero>
-
-    <livewire:user.instagram-scan-activity-panel
-        :tracked-person-id="$trackedPerson->id"
-        lazy
-    />
 
     <livewire:user.tracked-person-relationship-lists
         :tracked-person-id="$trackedPerson->id"
@@ -541,6 +540,17 @@
         </div>
     </x-modal>
 
+    @php
+        $detailTabs = [
+            'posts' => 'Posts',
+            'verbindungen' => 'Verbindungen',
+        ];
+
+        if ($isAdmin) {
+            $detailTabs['analyse'] = 'Analysen';
+        }
+    @endphp
+
     <section
         id="profilinfos"
         class="scroll-mt-4"
@@ -553,17 +563,26 @@
         "
     >
         <x-ui.accordion.tabs
-            :tabs="[
-                'analyse' => 'Analysen',
-                'verbindungen' => 'Verbindungen',
-            ]"
-            default="analyse"
+            :tabs="$detailTabs"
+            default="posts"
             :persist="false"
             collapse-at="sm"
         >
             <x-ui.accordion.tab-panel
+                for="posts"
+                panel-class="pt-4"
+            >
+                <x-instagram-posts-gallery
+                    :posts="$trackedPerson->currentInstagramProfile?->posts ?? collect()"
+                    title="Instagram-Beitraege"
+                    :last-scan-at="$trackedPerson->currentInstagramProfile?->postScans?->first()?->scanned_at"
+                    empty-text="Noch keine Instagram-Beitraege gespeichert."
+                />
+            </x-ui.accordion.tab-panel>
+
+            <x-ui.accordion.tab-panel
                 for="verbindungen"
-                panel-class="scroll-mt-4 space-y-4 rounded-b-lg rounded-se-lg border border-blue-300 bg-white p-4"
+                panel-class="scroll-mt-4 space-y-4 pt-4"
             >
                 <div class="flex flex-wrap items-start justify-between gap-3">
                     <div>
@@ -664,37 +683,39 @@
                                                     <span class="rounded-full bg-white/80 px-2 py-1 font-semibold">Keine Treffer in Kandidatenlisten</span>
                                                 @endif
                                             </div>
-                                            <div class="mt-2 text-[11px]">
-                                                Kandidaten: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesChecked', 0) }}
-                                                / private oder gesperrte Profile: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesSkippedPrivate', 0) }}
-                                                / Rate-Limit: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesRateLimited', 0) }}
-                                                / Fehler: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesFailed', 0) }}
-                                                @if($publicProfileRow->latestConnectionSummary->screenshotUrl)
-                                                    / <a href="{{ $publicProfileRow->latestConnectionSummary->screenshotUrl }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Screenshot</a>
+                                            @if($isAdmin)
+                                                <div class="mt-2 text-[11px]">
+                                                    Kandidaten: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesChecked', 0) }}
+                                                    / private oder gesperrte Profile: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesSkippedPrivate', 0) }}
+                                                    / Rate-Limit: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesRateLimited', 0) }}
+                                                    / Fehler: {{ data_get($publicProfileRow->latestConnectionScan->raw_payload, 'candidatesFailed', 0) }}
+                                                    @if($publicProfileRow->latestConnectionSummary->screenshotUrl)
+                                                        / <a href="{{ $publicProfileRow->latestConnectionSummary->screenshotUrl }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Screenshot</a>
+                                                    @endif
+                                                    @if($publicProfileRow->latestConnectionSummary->candidateErrorScreenshotUrl)
+                                                        / <a href="{{ $publicProfileRow->latestConnectionSummary->candidateErrorScreenshotUrl }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Kandidatenfehler {{ $publicProfileRow->latestConnectionSummary->candidateErrorScreenshots->count() }}</a>
+                                                    @endif
+                                                </div>
+                                                @if($publicProfileRow->latestConnectionSummary->screenshots->isNotEmpty())
+                                                    <details class="mt-3 rounded-xl border border-white/70 bg-white/70 p-2">
+                                                        <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-700">
+                                                            Screenshots anzeigen ({{ $publicProfileRow->latestConnectionSummary->screenshots->count() }})
+                                                        </summary>
+                                                        <div class="mt-2 grid gap-2 sm:grid-cols-2">
+                                                            @foreach($publicProfileRow->latestConnectionSummary->screenshots->take(8) as $screenshot)
+                                                                <a href="{{ $screenshot['url'] }}" target="_blank" class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                                                                    <img src="{{ $screenshot['url'] }}" alt="{{ $screenshot['label'] }}" class="h-32 w-full object-cover">
+                                                                    <div class="border-t border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
+                                                                        <span class="font-semibold text-slate-800">{{ $screenshot['label'] }}</span>
+                                                                        @if($screenshot['meta'])
+                                                                            <span class="ml-1">{{ $screenshot['meta'] }}</span>
+                                                                        @endif
+                                                                    </div>
+                                                                </a>
+                                                            @endforeach
+                                                        </div>
+                                                    </details>
                                                 @endif
-                                                @if($publicProfileRow->latestConnectionSummary->candidateErrorScreenshotUrl)
-                                                    / <a href="{{ $publicProfileRow->latestConnectionSummary->candidateErrorScreenshotUrl }}" target="_blank" class="font-semibold underline decoration-current/40 underline-offset-2">Kandidatenfehler {{ $publicProfileRow->latestConnectionSummary->candidateErrorScreenshots->count() }}</a>
-                                                @endif
-                                            </div>
-                                            @if($publicProfileRow->latestConnectionSummary->screenshots->isNotEmpty())
-                                                <details class="mt-3 rounded-xl border border-white/70 bg-white/70 p-2">
-                                                    <summary class="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-slate-700">
-                                                        Screenshots anzeigen ({{ $publicProfileRow->latestConnectionSummary->screenshots->count() }})
-                                                    </summary>
-                                                    <div class="mt-2 grid gap-2 sm:grid-cols-2">
-                                                        @foreach($publicProfileRow->latestConnectionSummary->screenshots->take(8) as $screenshot)
-                                                            <a href="{{ $screenshot['url'] }}" target="_blank" class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                                                                <img src="{{ $screenshot['url'] }}" alt="{{ $screenshot['label'] }}" class="h-32 w-full object-cover">
-                                                                <div class="border-t border-slate-200 px-2 py-1.5 text-[11px] text-slate-600">
-                                                                    <span class="font-semibold text-slate-800">{{ $screenshot['label'] }}</span>
-                                                                    @if($screenshot['meta'])
-                                                                        <span class="ml-1">{{ $screenshot['meta'] }}</span>
-                                                                    @endif
-                                                                </div>
-                                                            </a>
-                                                        @endforeach
-                                                    </div>
-                                                </details>
                                             @endif
                                         </div>
                                     @endif
@@ -840,6 +861,7 @@
                     </div>
                 </div>
 
+                @if($isAdmin)
                 <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <div class="flex flex-wrap items-center justify-between gap-2">
                         <h4 class="text-sm font-bold text-slate-900">Analysierte Listenverbindungen</h4>
@@ -1120,6 +1142,7 @@
                         @endforelse
                     </div>
                 </div>
+                @endif
 
                 <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
                     <div class="flex flex-wrap items-center justify-between gap-2">
@@ -1196,10 +1219,16 @@
                 </div>
             </x-ui.accordion.tab-panel>
 
+            @if($isAdmin)
             <x-ui.accordion.tab-panel
                 for="analyse"
-                panel-class="scroll-mt-4 space-y-4 rounded-b-lg rounded-se-lg border border-blue-300 bg-white p-4"
+                panel-class="scroll-mt-4 space-y-4 pt-4"
             >
+            <livewire:user.instagram-scan-activity-panel
+                :tracked-person-id="$trackedPerson->id"
+                lazy
+            />
+
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Letzte Instagram-Analyse</h3>
 
@@ -1335,13 +1364,6 @@
                 @endif
             </div>
 
-            <x-instagram-posts-gallery
-                :posts="$trackedPerson->currentInstagramProfile?->posts ?? collect()"
-                title="Instagram-Beitraege"
-                :last-scan-at="$trackedPerson->currentInstagramProfile?->postScans?->first()?->scanned_at"
-                empty-text="Noch keine Instagram-Beitraege gespeichert."
-            />
-
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Profilbild-Historie</h3>
                 <p class="mt-1 text-sm text-slate-600">
@@ -1421,6 +1443,7 @@
                 </div>
             </div>
             </x-ui.accordion.tab-panel>
+            @endif
         </x-ui.accordion.tabs>
     </section>
 

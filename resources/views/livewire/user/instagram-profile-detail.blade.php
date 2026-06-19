@@ -1,5 +1,6 @@
 <div class="container mx-auto space-y-4">
     @php
+        $isAdmin = auth()->user()?->role === 'admin';
         $visibility = $profile->profile_visibility ?: 'unknown';
         $visibilityLabel = match ($visibility) {
             'public' => 'Oeffentlich',
@@ -308,29 +309,124 @@
             <span class="rounded-2xl bg-white/80 px-3 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">
                 Letzter Scan: {{ $lastScanStatus['scannedAt']?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
             </span>
-            @if($detailStatus)
-                <div @class([
-                    'mt-4 rounded-3xl border px-4 py-3 text-sm',
-                    'border-emerald-200 bg-emerald-50 text-emerald-900' => $detailStatusLevel === 'success',
-                    'border-amber-200 bg-amber-50 text-amber-950' => $detailStatusLevel === 'partial',
-                    'border-rose-200 bg-rose-50 text-rose-900' => $detailStatusLevel === 'error',
-                    'border-slate-200 bg-slate-50 text-slate-800' => ! in_array($detailStatusLevel, ['success', 'partial', 'error'], true),
-                ])>
-                    {{ $detailStatus }}
-                </div>
-            @endif
         </x-slot:badges>
 
-
-
+        <x-instagram.detail-status-alert :message="$detailStatus" :level="$detailStatusLevel" />
     </x-profile.detail-hero>
 
-    <x-instagram-posts-gallery
-        :posts="$profile->posts"
-        title="Gespeicherte Beitraege"
-        :last-scan-at="$profile->postScans->first()?->scanned_at"
-        empty-text="Noch keine Beitraege gespeichert."
-    />
+    @php
+        $detailTabs = [
+            'posts' => 'Posts',
+            'connections' => 'Verbindungen',
+        ];
+
+        if ($isAdmin) {
+            $detailTabs['analyses'] = 'Analysen';
+        }
+    @endphp
+
+    <section id="profilinfos" class="scroll-mt-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <x-ui.accordion.tabs
+            :tabs="$detailTabs"
+            default="posts"
+            :persist="false"
+            collapse-at="sm"
+        >
+            <x-ui.accordion.tab-panel for="posts" panel-class="pt-4">
+                <x-instagram-posts-gallery
+                    :posts="$profile->posts"
+                    title="Gespeicherte Beitraege"
+                    :last-scan-at="$profile->postScans->first()?->scanned_at"
+                    empty-text="Noch keine Beitraege gespeichert."
+                />
+            </x-ui.accordion.tab-panel>
+
+            <x-ui.accordion.tab-panel for="connections" panel-class="pt-4">
+                <div class="grid gap-3 md:grid-cols-2">
+                    @foreach([
+                        'followers' => ['Followerliste', $latestFollowersScan, 'pink'],
+                        'following' => ['Gefolgt-Liste', $latestFollowingScan, 'sky'],
+                    ] as $listType => [$listTitle, $scan, $tone])
+                        <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <h3 class="text-sm font-bold text-slate-950">{{ $listTitle }}</h3>
+                                    <p class="mt-1 text-xs leading-5 text-slate-500">
+                                        @if($scan)
+                                            {{ number_format((int) $scan->active_count, 0, ',', '.') }} aktiv
+                                            &middot; {{ number_format((int) $scan->observed_count, 0, ',', '.') }} beobachtet
+                                            &middot; {{ $scan->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+                                        @else
+                                            Noch keine Liste gespeichert.
+                                        @endif
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    wire:click="openListModal('{{ $listType }}')"
+                                    class="shrink-0 rounded-xl border px-3 py-2 text-xs font-bold {{ $tone === 'pink' ? 'border-pink-200 bg-pink-50 text-pink-700 hover:bg-pink-100' : 'border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100' }}"
+                                >
+                                    Oeffnen
+                                </button>
+                            </div>
+                        </div>
+                    @endforeach
+                </div>
+            </x-ui.accordion.tab-panel>
+
+            @if($isAdmin)
+                <x-ui.accordion.tab-panel for="analyses" panel-class="space-y-4 pt-4">
+                    <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Letzter Scan</div>
+                        <div class="mt-2 text-sm font-bold {{ $scanTextClass }}">{{ $lastScanStatus['type'] ?? 'Instagram-Scan' }} · {{ $scanStatusLabel }}</div>
+                        @if($lastScanStatus['message'])
+                            <p class="mt-1 text-sm leading-6 text-slate-600">{{ $lastScanStatus['message'] }}</p>
+                        @endif
+                        <div class="mt-2 text-xs font-semibold text-slate-500">
+                            {{ $lastScanStatus['scannedAt']?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+                        </div>
+                    </div>
+
+                    <div class="grid gap-3 lg:grid-cols-2">
+                        <div class="rounded-2xl border border-slate-200 bg-white p-4">
+                            <h3 class="text-sm font-bold text-slate-950">Profil-Scans</h3>
+                            <div class="mt-3 space-y-2">
+                                @forelse($profile->profileScans->take(6) as $scan)
+                                    <div class="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                        <div class="font-semibold text-slate-900">{{ $scan->status_message ?: $scan->status_level }}</div>
+                                        <div class="mt-0.5">{{ $scan->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</div>
+                                    </div>
+                                @empty
+                                    <p class="text-sm text-slate-500">Noch keine Profil-Scans gespeichert.</p>
+                                @endforelse
+                            </div>
+                        </div>
+
+                        <div class="rounded-2xl border border-slate-200 bg-white p-4">
+                            <h3 class="text-sm font-bold text-slate-950">Weitere Scans</h3>
+                            <div class="mt-3 space-y-2">
+                                @foreach($profile->listScans->take(6) as $scan)
+                                    <div class="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                                        <div class="font-semibold text-slate-900">{{ $scan->list_type === 'followers' ? 'Followerliste' : 'Gefolgt-Liste' }}</div>
+                                        <div class="mt-0.5">{{ $scan->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }} · {{ $scan->status_message ?: $scan->status_level }}</div>
+                                    </div>
+                                @endforeach
+                                @foreach($profile->postScans->take(4) as $scan)
+                                    <div class="rounded-xl bg-violet-50 px-3 py-2 text-xs text-violet-800">
+                                        <div class="font-semibold">Beitragsscan</div>
+                                        <div class="mt-0.5">{{ $scan->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }} · {{ $scan->status_message ?: $scan->status_level }}</div>
+                                    </div>
+                                @endforeach
+                                @if($profile->listScans->isEmpty() && $profile->postScans->isEmpty())
+                                    <p class="text-sm text-slate-500">Noch keine Listen- oder Beitragsscans gespeichert.</p>
+                                @endif
+                            </div>
+                        </div>
+                    </div>
+                </x-ui.accordion.tab-panel>
+            @endif
+        </x-ui.accordion.tabs>
+    </section>
 
     <livewire:user.instagram-scan-costs-modal
         :instagram-profile-id="$profile->id"
