@@ -245,8 +245,21 @@
                 </x-slot>
             </x-ui.dropdown.anchor-dropdown>
         </div>
-        </x-slot:toolbar>
+    </x-slot:toolbar>
+    
+    <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+        @if($profile->biography)
+            <p class="whitespace-pre-line text-sm leading-6 text-slate-600">{{ $profile->biography }}</p>
+        @else
+            <p class="text-sm leading-6 text-slate-500">Keine Biografie gespeichert.</p>
+        @endif
 
+        <div class="mt-4 flex flex-wrap gap-2 text-xs">
+            <span class="rounded-2xl bg-slate-100 px-3 py-1 font-semibold text-slate-700">
+                Letzter Scan: {{ $lastScanStatus['scannedAt']?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+            </span>
+        </div>
+    </div>
         <x-slot:identity>
             <x-profile.detail-identity
                 :src="$profile->profile_image_storage_url"
@@ -291,42 +304,9 @@
             </x-profile.detail-metric>
         </x-slot:metrics>
 
-        <x-slot:badges>
-            <span class="rounded-2xl px-3 py-1 text-xs font-semibold ring-1 {{ $visibilityClass }}">{{ $visibilityLabel }}</span>
-            <span class="rounded-2xl px-3 py-1 text-xs font-semibold {{ $trackedPerson ? 'bg-sky-100 text-sky-800' : 'bg-slate-100 text-slate-600' }}">
-                {{ $trackedPerson ? 'Beobachtetes Profil' : 'Nicht beobachtet' }}
-            </span>
-            <span class="rounded-2xl bg-white/80 px-3 py-1 text-xs font-semibold {{ $scanStatusClass }} ring-1 ring-white">
-                Scan: {{ $scanStatusLabel }}
-            </span>
-        </x-slot:badges>
+
 
         <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-            <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                @if($profile->biography)
-                    <p class="whitespace-pre-line text-sm leading-6 text-slate-600">{{ $profile->biography }}</p>
-                @else
-                    <p class="text-sm leading-6 text-slate-500">Keine Biografie gespeichert.</p>
-                @endif
-
-                @if($lastScanStatus['message'])
-                    <p class="mt-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-600">
-                        <span class="font-semibold {{ $scanStatusClass }}">{{ $lastScanStatus['type'] }}:</span>
-                        {{ $lastScanStatus['message'] }}
-                    </p>
-                @endif
-
-                <div class="mt-4 flex flex-wrap gap-2 text-xs">
-                    <span class="rounded-2xl bg-slate-100 px-3 py-1 font-semibold text-slate-700">
-                        Letzter Scan: {{ $lastScanStatus['scannedAt']?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
-                    </span>
-                    @if(! $trackedPerson)
-                        <span class="rounded-2xl bg-amber-50 px-3 py-1 font-semibold text-amber-800 ring-1 ring-amber-200">
-                            Tracking wird nur bewusst aktiviert
-                        </span>
-                    @endif
-                </div>
-            </div>
 
             <div class="grid gap-2">
                 <button
