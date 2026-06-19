@@ -76,26 +76,6 @@ class InstagramProfileDetail extends Component
                 ->latest('published_at')
                 ->latest('last_seen_at')
                 ->limit(24),
-            'sourceRelationships' => fn ($query) => $query
-                ->where('status', 'active')
-                ->whereNull('removed_at')
-                ->whereHas('scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
-                ->with([
-                    'relatedInstagramProfile.trackedPersonLinks' => fn ($links) => $links
-                        ->where('user_id', $userId)
-                        ->whereNull('unlinked_at'),
-                ])
-                ->latest('last_seen_at'),
-            'relatedRelationships' => fn ($query) => $query
-                ->where('status', 'active')
-                ->whereNull('removed_at')
-                ->whereHas('scanItems.listScan', fn ($scans) => $scans->where('user_id', $userId))
-                ->with([
-                    'sourceInstagramProfile.trackedPersonLinks' => fn ($links) => $links
-                        ->where('user_id', $userId)
-                        ->whereNull('unlinked_at'),
-                ])
-                ->latest('last_seen_at'),
         ]);
         $latestFollowersScan = $profile->listScans()
             ->where('user_id', $userId)
@@ -261,11 +241,6 @@ class InstagramProfileDetail extends Component
     public function scanInstagramSuggestions(): void
     {
         $this->runSuggestionScan(false);
-    }
-
-    public function scanInstagramSuggestionConnections(): void
-    {
-        $this->scanInstagramSuggestionDeepSearch();
     }
 
     public function scanInstagramSuggestionDeepSearch(): void
