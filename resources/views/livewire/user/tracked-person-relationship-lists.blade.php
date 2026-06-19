@@ -93,6 +93,7 @@
                                     'tracked' => ['Beobachtet', $profileCounts['tracked']],
                                     'untracked' => ['Nicht beobachtet', $profileCounts['untracked']],
                                     'reconstructed' => ['Rekonstruiert', $profileCounts['reconstructed']],
+                                    'passive' => ['Passiv', $profileCounts['passive']],
                                 ] as $filter => [$label, $count])
                                     <button
                                         type="button"

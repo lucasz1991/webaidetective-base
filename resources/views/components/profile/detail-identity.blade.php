@@ -5,6 +5,7 @@
     'eyebrow' => 'Instagram-Profil',
     'title',
     'subtitle' => null,
+    'biography' => null,
     'frameClass' => 'border-slate-200',
     'statusDotClass' => null,
     'statusLabel' => null,
@@ -52,6 +53,9 @@
         </h1>
         @if($subtitle)
             <p class="mt-1 break-words text-sm font-semibold text-slate-500">{{ $subtitle }}</p>
+        @endif
+        @if($biography)
+            <p class="mt-3 max-w-2xl whitespace-pre-line break-words text-sm leading-6 text-slate-700">{{ $biography }}</p>
         @endif
     </div>
 </div>

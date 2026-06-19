@@ -82,6 +82,7 @@
         'emerald' => 'bg-emerald-50 text-emerald-700 ring-emerald-200',
         'rose' => 'bg-rose-50 text-rose-700 ring-rose-200',
         'amber' => 'bg-amber-50 text-amber-800 ring-amber-200',
+        'sky' => 'bg-sky-50 text-sky-700 ring-sky-200',
         default => 'bg-slate-100 text-slate-700 ring-slate-200',
     };
     $postsCount = data_get($raw, 'postsCount')
@@ -264,6 +265,10 @@
                 @elseif(str_contains(strtolower($statusLabel), 'rekonstruiert'))
                     <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                         <path d="M6 7a3 3 0 1 0 0 .1M18 17a3 3 0 1 0 0 .1M9 7h3a4 4 0 0 1 4 4v3M9 7l3-3M9 7l3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                @elseif(str_contains(strtolower($statusLabel), 'passiv'))
+                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M5 12h11M13 8l4 4-4 4M6 6h3a9 9 0 0 1 9 9v3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                 @else
                     <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">

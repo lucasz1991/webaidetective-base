@@ -249,6 +249,7 @@
                 :initial="$profile->username ?: '?'"
                 :title="$profile->display_handle"
                 :subtitle="$profile->display_name ?: $profile->full_name"
+                :biography="$profile->biography"
                 :frame-class="$profileImageFrameClass"
                 :status-dot-class="$profileStatusDotClass"
                 :status-label="$visibilityLabel"
@@ -300,36 +301,7 @@
             </span>
         </x-slot:badges>
 
-        <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
-            <div class="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                <div class="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">Biografie</div>
-                @if($profile->biography)
-                    <p class="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">{{ $profile->biography }}</p>
-                @else
-                    <p class="mt-2 text-sm leading-6 text-slate-500">Keine Biografie gespeichert.</p>
-                @endif
-            </div>
 
-            <div class="rounded-3xl border border-slate-200 bg-white p-4">
-                <div class="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-500">Status</div>
-                <dl class="mt-3 space-y-3 text-sm">
-                    <div>
-                        <dt class="text-xs font-semibold text-slate-500">Letzte Aktion</dt>
-                        <dd class="mt-1 font-semibold text-slate-900">{{ $lastScanStatus['type'] }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-xs font-semibold text-slate-500">Ergebnis</dt>
-                        <dd class="mt-1 font-semibold {{ $scanTextClass }}">{{ $scanStatusLabel }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-xs font-semibold text-slate-500">Tracking</dt>
-                        <dd class="mt-1 font-semibold {{ $trackedPerson ? 'text-emerald-700' : 'text-slate-600' }}">
-                            {{ $trackedPerson ? 'Aktiv' : 'Nicht aktiv' }}
-                        </dd>
-                    </div>
-                </dl>
-            </div>
-        </div>
 
         @if($detailStatus)
             <div @class([

@@ -1,0 +1,1141 @@
+Instagram-Scan-Abläufe in WebAIDetective / SocialScope
+Stand: 19.06.2026
+
+Diese Datei beschreibt die vorhandenen Instagram-Scans, ihre Einstiegspunkte, den technischen Ablauf,
+die beteiligten PHP-Services, Node-Skripte, Datenbank-Speicherungen, Fortschrittsmeldungen,
+Abbruch-/Retry-Mechanismen, Profilwechsel und Credit-Abrechnung.
+
+Wichtige Hauptdateien
+=====================
+
+Node / Browser-Automation:
+- resources/node/scraper/scrape-instagram.cjs
+  Zentraler Node-Einstieg fuer mehrere Modi. Initialisiert Browser, Session, Runtime-Config,
+  Watchdog, Progress-Logs, Accountwechsel, Artefakte und ruft je nach Modus die Flow-Module auf.
+- resources/node/scraper/scrape-instagram-full.cjs
+  Flow fuer Profil-/Vollscan inklusive optionaler Follower-/Following-Listen.
+- resources/node/scraper/scrape-instagram-list.cjs
+  Flow fuer einzelne Listen-Scans, Such-/Resume-Modi und Public-Connections-Batch.
+- resources/node/scraper/scrape-instagram-posts.cjs
+  Flow fuer Beitragsscan.
+- resources/node/scraper/scrape-instagram-suggestions-basic.cjs
+  Dedizierter Einstieg fuer einfachen Vorschlaege-Scan.
+- resources/node/scraper/scrape-instagram-suggestions-deepsearch.cjs
+  Dedizierter Einstieg fuer Vorschlaege DeepSearch.
+- resources/node/scraper/scrape-instagram-public-profile-connections.cjs
+  Dedizierter Einstieg fuer Public-Profile-Verbindungsscan.
+- resources/node/scraper/lib/instagram-runtime-config.cjs
+  Normalisiert Laufzeitwerte wie Timeouts, Limits, Post-Likes/Kommentare, Dialog-Scrollrunden usw.
+- resources/node/scraper/lib/runtime-environment.cjs
+  Richtet Temp-Verzeichnisse und Laufzeitumgebung ein.
+
+PHP / Services:
+- app/Services/Social/InstagramScraper.php
+  PHP-Bruecke zu Node. Baut Runtime-Config, schreibt temporäre JSON-Konfig,
+  startet Node-Prozess, verarbeitet STDERR-Progress, liest STDOUT-JSON, macht Retries.
+- app/Services/TrackedPeople/InstagramScanPolicyService.php
+  Laedt Scan-Richtlinien aus Settings/config und uebersetzt sie in Runtime-Overrides.
+- app/Services/TrackedPeople/TrackedPersonInstagramAnalysisService.php
+  Basisscan fuer beobachtete Personen. Speichert Snapshots, Medien, Profilbildhistorie,
+  Vergleichsdaten, Beziehungsliste-Artefakte und Benachrichtigungen.
+- app/Services/TrackedPeople/TrackedPersonInstagramWorkflowService.php
+  Orchestriert Basisscan plus automatische Folge-Scans nach Regeln.
+- app/Services/TrackedPeople/InstagramProfileScanService.php
+  Scan fuer globale InstagramProfile, ohne zwingend eine beobachtete Person zu haben.
+- app/Services/TrackedPeople/TrackedPersonInstagramProfileListScanService.php
+  Direkte Follower-/Following-Listen-Scans fuer InstagramProfile.
+- app/Services/TrackedPeople/TrackedPersonInstagramPostScanService.php
+  Beitragsscan inklusive Medien, Likes, Kommentare und Engagement-Profilen.
+- app/Services/TrackedPeople/TrackedPersonInstagramSuggestionScanService.php
+  Vorschlaege-Scan und DeepSearch.
+- app/Services/TrackedPeople/TrackedPersonInstagramPublicProfileScanService.php
+  Verbindungsscan ueber bekannte öffentliche Profile.
+- app/Services/TrackedPeople/InstagramProfileRelationshipStore.php
+  Globale InstagramProfile, Beziehungen, Listen-Scans, Live-Preview-Deltas und
+  Synchronisierung zu beobachteten Personen.
+- app/Services/Billing/ScanCreditService.php
+  Credit-Abrechnung fuer abgeschlossene Scan-Modelle.
+- app/Services/TrackedPeople/TrackedPersonInstagramScanCoordinator.php
+  Verhindert veraltete parallele Scans, erlaubt Graceful Stop und Generation-Kontrolle.
+
+
+Grundprinzip: PHP startet Node und Node liefert JSON
+====================================================
+
+1. Ein User klickt im UI auf einen Scan-Button, oder ein Job/Workflow startet einen Scan.
+2. Livewire oder Job ruft einen PHP-Service auf.
+3. Der PHP-Service normalisiert Username und Kontext.
+4. Der PHP-Service setzt Locks, damit nicht zwei gleiche Scans gleichzeitig laufen.
+5. InstagramScraper::scrape() wird aufgerufen.
+6. InstagramScraper holt Runtime-Overrides aus InstagramScanPolicyService.
+7. InstagramScraper baut Runtime-Config:
+   - aktives Scraper-Profil
+   - Cookie-Datei
+   - Login-Daten
+   - Timeout-Werte
+   - Listen-/Post-/Suggestion-Limits
+   - Account-Pool fuer Profilwechsel
+   - Credit-Kosten
+   - Scan-Control-Daten fuer Stop/Generation
+8. Runtime-Config wird in storage/app/tmp/instagram-scraper-config-<uuid>.json geschrieben.
+9. Node wird gestartet:
+   node <nodeScript> <username> <runtimeConfigPath> <operationMode>
+10. Node schreibt Fortschritt als JSON-Zeilen nach STDERR.
+11. PHP liest STDERR, mappt Progress auf Livewire-/Job-Fortschritt und haelt DB-Verbindung wach.
+12. Node schreibt das finale Ergebnis als JSON nach STDOUT.
+13. PHP decodiert STDOUT, fuegt Prozessinformationen hinzu und wertet Rate-Limits aus.
+14. PHP-Service extrahiert Daten, speichert Datenbankmodelle und berechnet Credits.
+15. Status, Snapshot/Profile/Scan-Modelle und ggf. Benachrichtigungen werden aktualisiert.
+
+
+Node-Operation-Modes
+====================
+
+Operation-Modes aus scrape-instagram.cjs:
+
+- analyze / profile / basic / grunddaten
+  Voller Profilflow in scrape-instagram-full.cjs.
+
+- mini / mini-scan / public / public-profile
+  Mini-Profilscan. Ziel: Profilseite stabil laden und Grunddaten lesen.
+
+- followers
+  Followerliste lesen.
+
+- following
+  Gefolgt-Liste lesen.
+
+- followers-search / search-followers
+  Followerliste im Such-/Resume-Modus lesen.
+
+- following-search / search-following
+  Gefolgt-Liste im Such-/Resume-Modus lesen.
+
+- suggestions / profile-suggestions
+  Vorschlaege-Scan.
+
+- suggestion-connections
+  Vorschlaege DeepSearch / Verbindungspruefung ueber Vorschlaege.
+
+- posts / post-scan
+  Beitragsscan.
+
+- public-connections-batch
+  Batch-Verbindungsscan ueber bekannte Kandidatenlisten.
+
+- public-profile-connections
+  Dediziertes Node-Skript fuer ein oeffentliches Profil gegen ein Zielprofil.
+
+
+Scan-Richtlinien / Admin-Einstellungen
+======================================
+
+InstagramScanPolicyService ordnet Operation-Modes Scan-Typen zu:
+
+- mini, mini-scan, public, public-profile => mini
+- posts, post-scan => posts
+- suggestions, profile-suggestions => suggestions
+- suggestion-connections => suggestion_deep_search
+- followers/following/search/public-connections-batch => lists
+- public-profile-connections => public_connections
+- alles andere => profile
+
+Globale Runtime-Werte:
+- scriptWatchdogEnabled
+- scriptStallTimeoutMs / node_watchdog_timeout_seconds
+- browserDisconnectAbort
+- navigationTimeoutMs
+- postLoginWaitMs
+- typingDelayMs
+- livePreviewEnabled
+- skipDebugArtifacts
+- blockHeavyResources
+
+Listen-spezifisch:
+- followerListMaxItems
+- followingListMaxItems
+- relationshipListMaxScrollRounds
+- relationshipPartitionLargeLists
+- relationshipPartitionThreshold
+- relationshipSearchQueriesPerDialog
+- relationshipSearchPartitionMaxItems
+- relationshipProgressCheckpointSize
+- relationshipSearchTargetMaxItems
+- relationshipSearchTargetMaxScrollRounds
+- relationshipSearchInputMaxAttempts
+- relationshipSearchWaitMs
+
+Posts-spezifisch:
+- postScanMaxItems
+- postScanMaxScrollRounds
+- postScanMaxLikesPerPost
+- postScanMaxCommentsPerPost
+- postScanOpenLikesDialogEnabled
+- postScanLikeDialogMaxScrollRounds
+- postScanCommentDialogMaxScrollRounds
+
+Suggestions-spezifisch:
+- suggestionScanMaxItems
+- suggestionInlineMaxRounds
+- suggestionDialogMaxRounds
+
+DeepSearch-spezifisch:
+- suggestionCandidateMaxItems
+- suggestionCandidateMaxAttempts
+- suggestionCandidateRetryDelayMs
+- suggestionCandidateInlineMaxRounds
+- suggestionCandidateDialogMaxRounds
+- suggestionPublicListSearchMaxScrollRounds
+- suggestionSkipPreviouslyChecked
+- suggestionNoMatchSkipAfter
+- suggestionMaxScraperProfileSwitches
+- profileHoverCardsEnabled
+- profileHoverCardWaitMs
+
+Public-Connections-spezifisch:
+- relationshipSearchTargetMaxItems
+- relationshipSearchTargetMaxScrollRounds
+- relationshipSearchInputMaxAttempts
+- relationshipSearchWaitMs
+- publicConnectionCandidateMaxAttempts
+- publicConnectionRetryDelayMs
+- publicConnectionRetryMaxDelayMs
+- publicConnectionCandidateMaxDurationMs
+- publicConnectionDialogMissingMaxAttempts
+- publicConnectionRateLimitAccountSwitchEnabled
+- publicConnectionMaxScraperProfileSwitches
+
+
+Scraper-Profil, Cookies, Login und Accountwechsel
+=================================================
+
+InstagramScraper baut die Runtime-Konfiguration aus den Scraper-Profil-Einstellungen:
+
+- profileId
+- profileLabel
+- browserProfilePath
+- cookieFilePath
+- headlessEnabled
+- autoLoginEnabled
+- loginUsername
+- loginPassword
+- navigationTimeoutMs
+- postLoginWaitMs
+- typingDelayMs
+- follower/following/list Limits
+- accountPool
+
+Wichtig:
+- Reguläre Analysen laufen headless.
+- Persistent Browser Profile sind standardmäßig deaktiviert, um parallele DevTools/Puppeteer-Konflikte zu vermeiden.
+- Cookies werden vor dem Lauf aus DB/Storage hydratisiert.
+- Nach dem Lauf werden Cookie-Dateien wieder in die Datenbank synchronisiert.
+- Wenn ein Scraper-Profil durch Rate-Limit blockiert wird, kann es temporär als gesperrt markiert werden.
+- Bei bestimmten Block-/Rate-Limit-Events kann ein anderes aktives Scraper-Profil aus dem Account-Pool verwendet werden.
+
+Node-Seite:
+- laedt Cookies in die Seite
+- prueft Session
+- kann Login versuchen, wenn autoLoginEnabled aktiv ist
+- speichert Cookies nach erfolgreichem Lauf
+- fuehrt Accountwechsel aus, wenn Zeitlimit/Rate-Limit erkannt wird und weitere Accounts vorhanden sind
+
+
+Watchdog, Heartbeat und Abbruch
+===============================
+
+Node:
+- configureScriptWatchdog() ueberwacht Stillstand.
+- startTechnicalHeartbeat() schreibt technische Heartbeats.
+- progressLog() schreibt strukturierte JSON-Events nach STDERR.
+- markGracefulStopIfRequested() prueft Stop-Dateien/Scan-Control.
+- requestScriptAbort() beendet bei harten Problemen.
+- browserDisconnectAbort kann den Lauf abbrechen, wenn Browser/DevTools getrennt wird.
+
+PHP:
+- runNodeProcess() ueberwacht Prozessausgabe.
+- process_stall_timeout_seconds begrenzt Prozessstillstand.
+- DatabaseKeepAlive::ping() haelt DB-Verbindung waehrend langer Scans offen.
+- TrackedPersonInstagramScanCoordinator verhindert, dass alte Scan-Generationen weiter speichern.
+- Graceful Stop speichert bereits gefundene Teilresultate.
+
+
+Retry-Logik
+===========
+
+InstagramScraper::runWithRetries():
+
+- Anzahl Versuche kommt aus Scan-Policy error_attempts.
+- Retry-Delay kommt aus retry_delay_seconds.
+- Bei Session-/Prozess-/Statusfehlern wird erneut versucht.
+- Bei gracefulStopped oder stoppedForRateLimit wird normalerweise nicht blind erneut gestartet.
+- Wenn ein Payload auf ein blockiertes Scraper-Profil hindeutet, kann zusaetzlich ein Versuch mit Profilwechsel erfolgen.
+- Payload enthaelt am Ende:
+  - _scan_attempt
+  - _scan_max_attempts
+  - _scan_attempts
+  - _process_successful
+  - _stderr
+
+
+1) Beobachtete Person: Mini-Scan
+================================
+
+UI / Einstieg:
+- Livewire User\TrackedPersonDetail::analyzeInstagramMini()
+- ruft runInstagramAnalysis(false)
+- nutzt TrackedPersonInstagramWorkflowService::runAnalysis($trackedPerson, false)
+- Basis ist TrackedPersonInstagramAnalysisService::analyze($trackedPerson, $progress, false)
+
+Node-Modus:
+- mini / mini-scan / public / public-profile
+
+Ablauf:
+1. Username der beobachteten Person wird normalisiert.
+2. Vergleichssnapshot wird gesucht.
+3. Scrape wird gestartet, meist als Mini-Scan.
+4. Node oeffnet Instagram-Profilseite.
+5. Cookies/Session/Login werden vorbereitet.
+6. Profilseite wird geladen.
+7. collectProfileInfo() liest:
+   - Username gesehen?
+   - Full Name
+   - Bio
+   - Posts Count
+   - Followers Count
+   - Following Count
+   - Profilbild-URL
+   - Sichtbarkeit: public/private/unknown
+   - requiresLogin
+   - image URLs
+8. Wenn Mini-Scan keine sichtbaren Zahlen findet, kann PHP weitere Mini-Versuche oder sichtbare Counts erzwingen.
+9. Payload wird an PHP zurueckgegeben.
+10. PHP extrahiert Daten mit InstagramProfileDataExtractor.
+11. Snapshot wird erstellt:
+    - tracked_person_instagram_snapshots
+    - instagram_username
+    - instagram_profile_id spaeter via RelationshipStore
+    - full_name, biography
+    - posts/followers/following
+    - profile_image_url/path/hash
+    - screenshot_path/html_path
+    - status_level/status_message
+    - detected_changes
+    - raw_payload
+12. Profilbild und ggf. weitere Bilder werden lokal gespeichert:
+    - tracked_person_instagram_media
+    - is_profile_image = true fuer das erste Bild
+    - content_hash fuer Historie/Vergleich
+13. Aenderungen werden gegen letzten Vergleichssnapshot erkannt:
+    - Name/Bio
+    - Count-Werte
+    - Profilbild-Hash
+    - Sichtbarkeit
+14. tracked_people wird aktualisiert:
+    - last_instagram_status_level
+    - last_instagram_status_message
+    - last_instagram_analyzed_at
+    - instagram_followers_count
+    - instagram_following_count
+    - instagram_posts_count
+    - instagram_profile_image_path/hash
+15. InstagramProfileRelationshipStore synchronisiert globales instagram_profiles-Profil.
+16. Profil-Daten werden auf andere verlinkte TrackedPeople propagiert.
+17. Benachrichtigungen werden erzeugt, falls Aenderungen relevant sind.
+18. ScanCreditService berechnet Credits.
+
+Automatische Folge-Scans beim Mini-Scan:
+- Der Workflow prueft die Einstellungen der beobachteten Person:
+  - auto_scan_followers
+  - auto_scan_following
+  - auto_scan_posts
+  - auto_scan_suggestions
+  - auto_scan_on_changes
+  - auto_scan_on_interval
+  - auto_scan_min_interval_minutes
+  - auto_scan_count_change_threshold
+- Bei public Profil und geaenderten Counts koennen Follower-/Following-/Post-Scans gestartet werden.
+- Bei private Profil und passenden Regeln kann ein Vorschlaege-Scan gestartet werden.
+
+
+2) Beobachtete Person: Vollanalyse
+==================================
+
+UI / Einstieg:
+- Livewire User\TrackedPersonDetail::analyzeInstagram()
+- runInstagramAnalysis(true)
+- TrackedPersonInstagramWorkflowService::runAnalysis($trackedPerson, true)
+
+Node-Modus:
+- analyze / profile / basic / grunddaten
+
+Ablauf:
+1. Basisscan wie oben.
+2. Node nutzt scrape-instagram-full.cjs.
+3. Profilseite wird geladen und Grunddaten werden gelesen.
+4. Wenn Follow-Listen im Flow aktiv sind, liest Node:
+   - followers
+   - following
+5. Bei Listen:
+   - Dialog oeffnen
+   - scrollen
+   - Profile extrahieren
+   - bei Rate-Limit/temporär leerem Dialog abbrechen oder Account wechseln
+   - bei Graceful Stop Teilresultate behalten
+6. Payload enthaelt Profil plus followersList/followingList.
+7. PHP speichert Snapshot wie beim Mini-Scan.
+8. storeRelationshipListArtifacts() schreibt Listen-Artefakte in Storage:
+   tracked-people/<id>/instagram/<timestamp>-<snapshotId>/relationships/
+9. RelationshipStore schreibt globale Beziehungen:
+   - instagram_profiles
+   - instagram_profile_relationships
+   - instagram_profile_list_scans
+   - instagram_profile_list_scan_items
+10. Bei fullScan und public Profil kann Workflow zusaetzlich PostScan starten.
+11. Resultatstatus wird zusammengesetzt:
+   - Basisscan success/partial/error
+   - Folge-Scan-Meldungen
+   - Folge-Scan-Fehler, ohne Basisscan zu verwerfen
+
+
+3) Direkter Followerlisten-Scan
+===============================
+
+UI / Einstieg:
+- TrackedPersonDetail::scanInstagramFollowersList()
+- TrackedPersonDetail::scanInstagramRelationshipList('followers')
+- InstagramProfileDetail::scanInstagramFollowersList()
+- TrackedPersonInstagramProfileListScanService::scan()
+  oder TrackedPersonInstagramAnalysisService::scanRelationshipList()
+
+Node-Modus:
+- followers
+- falls Resume/Suche: followers-search / search-followers
+
+Ablauf:
+1. Profil wird global als InstagramProfile synchronisiert.
+2. Lock: instagram-profile-list-scan:<profile_id>
+3. Bei beobachteter Person wird ScanCoordinator gestartet.
+4. Vorher aktive Beziehungen werden geladen.
+5. Erwartete Anzahl kommt aus followers_count.
+6. Wenn grosse Liste und letzter Lauf unvollstaendig/rate-limited/graceful war:
+   - Service schaltet auf followers-search
+   - relationshipSearchOnly = true
+7. Node oeffnet Profilseite.
+8. Node oeffnet Follower-Dialog.
+9. Node sammelt Items:
+   - username
+   - displayName/fullName
+   - profileUrl
+   - profileImageUrl
+   - isPrivate/profileVisibility
+   - followers/following/posts soweit sichtbar
+   - ggf. hoverCard-Daten
+10. Node scrollt bis Limit, Ende, Rate-Limit, Stop oder Fehler.
+11. PHP extrahiert followers_list.
+12. reconcileRelationshipList() kombiniert:
+   - neu beobachtete Items
+   - vorher aktive Items
+   - verifiedMissingUsernames
+   - removedItems
+   - preservedItems
+13. RelationshipStore speichert:
+   - InstagramProfileListScan
+   - InstagramProfileListScanItem
+   - InstagramProfileRelationship
+   - neue/aktualisierte InstagramProfile fuer Listeneintraege
+14. Complete/available/rateLimited/gracefullyStopped werden gespeichert.
+15. Credits werden gebucht.
+
+Live-Preview:
+- Waehrend des Scans koennen relationshipItemsDelta und relationshipItems gespeichert werden.
+- syncObservedRelationshipPreview() schreibt schon waehrend des Laufes Beziehungen.
+- syncLiveRelationshipListScan() schreibt Live-Scan-Zwischenstand.
+
+
+4) Direkter Gefolgt-Listen-Scan
+===============================
+
+Identisch zum Followerlisten-Scan, aber:
+
+Node-Modus:
+- following
+- bei Resume/Suche: following-search / search-following
+
+Payload-/DB-Feld:
+- following_list
+- followingList
+- list_type = following
+
+Unterschied:
+- Erwartete Anzahl kommt aus following_count.
+- Label ist Gefolgt-Liste.
+
+
+5) Beitragsscan / Post-Scan
+===========================
+
+UI / Einstieg:
+- TrackedPersonDetail::scanInstagramPosts()
+- InstagramProfileDetail::scanInstagramPosts()
+- TrackedPersonInstagramWorkflowService::runPostScan()
+- TrackedPersonInstagramPostScanService::scan() fuer beobachtete Person
+- TrackedPersonInstagramPostScanService::scanProfile() fuer globales InstagramProfile
+
+Node-Modus:
+- posts / post-scan
+
+Node-Ablauf:
+1. Profilseite oeffnen.
+2. Grunddaten lesen.
+3. collectInstagramPosts() startet.
+4. Timeline/Post-Gitter wird gelesen.
+5. Pro Post werden normalisiert:
+   - shortcode
+   - mediaPk
+   - mediaType: post/reel/tv
+   - postUrl
+   - thumbnailUrl
+   - caption
+   - likesCount
+   - commentsCount
+   - publishedAt
+   - media collection
+6. Node kann Post-Detailseiten oeffnen.
+7. Kommentare:
+   - collectInstagramPostCommentsFromModal()
+   - Modal wird gescrollt
+   - sichtbare Kommentare werden extrahiert
+   - Replies koennen expandiert werden
+   - Duplikate/Nicht-Kommentar-Texte werden gefiltert
+8. Likes:
+   - Wenn postScanOpenLikesDialogEnabled aktiv ist:
+     - openInstagramPostLikesDialogReliable()
+     - collectInstagramPostLikesFromDialog()
+     - Dialog wird gescrollt
+     - Liker-Profile werden extrahiert
+   - Likes werden begrenzt durch postScanMaxLikesPerPost.
+9. Wenn API-Endpunkte verfuegbar sind, kann collectInstagramPostEngagement() Likes/Kommentare ueber interne JSON-Endpunkte lesen.
+10. Finales postsScan-Objekt enthaelt:
+    - attempted
+    - available
+    - complete
+    - rateLimited
+    - gracefullyStopped
+    - observedCount
+    - items
+
+PHP-Speicherung:
+1. Payload postsScan.items wird normalisiert.
+2. InstagramPostScan wird erstellt:
+   - instagram_profile_id
+   - tracked_person_id optional
+   - snapshot_id optional
+   - user_id
+   - status_level/status_message
+   - attempted/available/complete/rate_limited/gracefully_stopped
+   - observed_count/new_count/updated_count/unchanged_count
+   - raw_payload ohne grosse likes/comments-Details
+3. Pro Post:
+   - InstagramPost anhand shortcode suchen oder erstellen
+   - restore bei SoftDelete
+   - counts, caption, media_type, media_pk, published_at aktualisieren
+   - first_seen_scan_id/last_seen_scan_id setzen
+4. InstagramPostMetric wird pro Scan gespeichert.
+5. Engagement-Actor-Profile:
+   - Aus Likes und Kommentaren werden InstagramProfile erzeugt/aktualisiert.
+   - username, full_name, profile_image_url, profile_url, raw_profile
+6. Likes:
+   - InstagramPostLike::updateOrCreate
+   - liker_key = id:<instagram_user_id> oder username:<username>
+   - instagram_profile_id wird auf globales Actor-Profil gesetzt
+   - first_seen/last_seen/is_active
+   - Bei complete werden nicht mehr beobachtete Likes deaktiviert.
+7. Kommentare:
+   - InstagramPostComment::updateOrCreate
+   - instagram_comment_id
+   - parent_instagram_comment_id
+   - parent_comment_id wird spaeter verlinkt
+   - comment_text, likes_count, author profile
+   - Bei complete werden entfernte Kommentare deaktiviert.
+8. Medien:
+   - InstagramPostMediaStorage speichert Post-Medien lokal.
+   - Bilder/Videos/Thumbnails werden dem Post zugeordnet.
+9. TrackedPerson und InstagramProfile erhalten letzten Status.
+10. Credits werden gebucht.
+
+
+6) Vorschlaege-Scan
+===================
+
+UI / Einstieg:
+- TrackedPersonDetail::scanInstagramSuggestions()
+- InstagramProfileDetail::scanInstagramSuggestions()
+- TrackedPersonInstagramSuggestionScanService::scan()
+- fuer globales Profil: scanProfile()
+
+Node-Modus:
+- suggestions / profile-suggestions
+- PHP nutzt dediziert scrape-instagram-suggestions-basic.cjs
+
+Ablauf:
+1. Zielprofil wird geladen.
+2. Node versucht Vorschlaege zu finden:
+   - inline Vorschlaege
+   - Dialog-/Sekundärbereiche
+   - ggf. Hover Cards
+3. Maximalwerte:
+   - suggestionScanMaxItems
+   - suggestionInlineMaxRounds
+   - suggestionDialogMaxRounds
+4. Gefundene Kandidaten werden normalisiert:
+   - username
+   - displayName
+   - profileUrl
+   - profileImageUrl
+   - Sichtbarkeit
+   - Count-Werte soweit sichtbar
+5. PHP speichert TrackedPersonInstagramSuggestionScan:
+   - tracked_person_id oder instagram_profile_id
+   - user_id
+   - scan_mode
+   - status_level/status_message
+   - suggestions_observed_count
+   - suggestions_checked_count
+   - suggestion_matches_count
+   - raw_payload
+6. storeObservedSuggestionProfiles():
+   - legt globale InstagramProfiles fuer Vorschlaege an/aktualisiert sie.
+7. storeSuggestionRelationshipsFromPayload():
+   - speichert Beziehungen mit list_type profile_suggestions.
+8. Wenn Verbindungen erkennbar sind:
+   - storeInferredSuggestionConnections()
+   - schreibt TrackedPersonInstagramInferredConnection.
+9. Credits werden gebucht.
+
+Einsatz:
+- Besonders fuer private Profile, wenn Followerlisten nicht direkt lesbar sind.
+- Auch als normaler Scan fuer bekannte globale InstagramProfile.
+
+
+7) Vorschlaege DeepSearch / suggestion-connections
+==================================================
+
+UI / Einstieg:
+- TrackedPersonDetail::scanInstagramSuggestionDeepSearch()
+- InstagramProfileDetail::scanInstagramSuggestionDeepSearch()
+- TrackedPersonInstagramSuggestionScanService::scanDeepSearch()
+- fuer globales Profil: scanProfileDeepSearch()
+
+Node-Modus:
+- suggestion-connections
+- PHP nutzt dediziert scrape-instagram-suggestions-deepsearch.cjs
+
+Ablauf:
+1. Zuerst werden Vorschlagskandidaten gesammelt.
+2. Kandidaten werden mit Historie abgeglichen:
+   - suggestionSkipPreviouslyChecked
+   - suggestionNoMatchSkipAfter
+   - bereits bekannte Vorschlaege/No-Matches koennen uebersprungen werden.
+3. Pro Kandidat werden zusaetzliche Informationen geholt:
+   - Profilseite
+   - Hover Cards
+   - Vorschlagsbeziehungen
+   - ggf. öffentliche Listen-Suche
+4. Kandidatenlimits:
+   - suggestionCandidateMaxItems
+   - suggestionCandidateMaxAttempts
+   - suggestionCandidateRetryDelayMs
+   - suggestionCandidateInlineMaxRounds
+   - suggestionCandidateDialogMaxRounds
+5. Public-List-Suche im DeepSearch:
+   - Kandidaten-Follower/Gefolgt-Liste koennen nach Zielprofil durchsucht werden.
+   - suggestionPublicListSearchMaxScrollRounds begrenzt Suche.
+6. Accountwechsel:
+   - suggestionMaxScraperProfileSwitches begrenzt Profilwechsel.
+7. Match-Typen:
+   - follows_target: Kandidat folgt Ziel
+   - followed_by_target: Ziel folgt Kandidat
+   - suggestion_connection / profile_suggestions
+8. PHP speichert:
+   - SuggestionScan
+   - observed suggestion profiles
+   - suggestion relationships
+   - inferred connections
+   - public list relationships, wenn aus Listen abgeleitet
+9. Credits werden gebucht.
+
+
+8) Public-Profile-Verbindungsscan
+=================================
+
+UI / Einstieg:
+- TrackedPersonDetail::scanPublicProfileConnections()
+- Job RunTrackedPersonInstagramToolScan public_connections
+- TrackedPersonInstagramPublicProfileScanService::scan()
+
+Node-Modus:
+- public-profile-connections
+- dediziertes Skript scrape-instagram-public-profile-connections.cjs
+
+Ziel:
+- Fuer ein bekanntes oeffentliches Profil pruefen, ob eine Verbindung zum Zielprofil besteht.
+- Beispiel:
+  - Public Profile A folgt Zielprofil?
+  - Zielprofil folgt Public Profile A?
+
+Ablauf:
+1. Service ermittelt zu pruefende öffentliche Profile:
+   - manuell gepflegte publicProfiles
+   - rekonstruierte Kandidaten aus bekannten Listen/Snapshots
+   - ggf. nur ein bestimmtes publicProfileId
+2. Pro Kandidat:
+   - vorhandene unvollstaendige Scans koennen fortgesetzt werden.
+   - Kandidatenliste fuer Runtime wird gebaut.
+3. Node scanPublicProfileConnection(publicUsername, targetUsername):
+   - oeffnet Public-Profil
+   - durchsucht Followerliste nach Ziel
+   - durchsucht Following-Liste nach Ziel
+   - nutzt Suchfelder/Scrollen
+   - kann bei Rate-Limit warten, retryen oder Scraper-Profil wechseln
+4. Progress:
+   - phase public-connections
+   - candidateUsername
+   - targetFoundInFollowers
+   - targetFoundInFollowing
+   - inferredFollowers/Follower-Treffer
+   - inferredFollowing/Gefolgt-Treffer
+5. Speicherung:
+   - TrackedPersonInstagramPublicProfileScan
+   - followers_checked/available/complete/observed/expected/match
+   - following_checked/available/complete/observed/expected/match
+   - status_level/status_message
+   - raw_payload
+6. Logs:
+   - TrackedPersonInstagramPublicProfileScanLog
+7. Inferred Connections:
+   - storeInferredConnections()
+   - Verbindungen werden in tracked_person_instagram_inferred_connections gespeichert.
+8. Credits werden pro gespeichertem PublicProfileScan gebucht.
+
+
+9) InstagramProfile-Scan ohne beobachtete Person
+================================================
+
+Einstieg:
+- InstagramProfileDetail.php
+- NetworkMap/Listen/Profil-Detail können globale InstagramProfile scannen.
+- InstagramProfileScanService::scan($profile, $userId, $fullScan)
+
+Ablauf:
+1. Profil wird ueber accessibleProfileQuery fuer den User freigegeben.
+2. Lock: instagram-profile-scan:<profile_id>
+3. Scraper-Modus:
+   - mini fuer Mini-Scan
+   - profile fuer Vollanalyse
+4. Payload wird extrahiert.
+5. InstagramProfile wird aktualisiert:
+   - display_name/full_name/bio
+   - profile_image_url
+   - visibility
+   - followers/following/posts
+   - last_status_*
+   - raw_profile
+6. Daten werden auf verlinkte TrackedPeople propagiert.
+7. Bei fullScan und public:
+   - Listen-Scan followers/following via TrackedPersonInstagramProfileListScanService
+   - PostScan via TrackedPersonInstagramPostScanService
+8. InstagramProfileScan wird erstellt.
+9. Profilmetric-Aenderungen koennen Benachrichtigungen ausloesen.
+10. Credits werden gebucht.
+
+
+10) Scan aus Listen heraus
+==========================
+
+Einstieg:
+- Component instagram/profile-list-item.blade.php dispatcht:
+  scan-instagram-profile-from-list
+- TrackedPersonDetail::scanInstagramProfileFromList()
+- InstagramProfileDetail::scanInstagramProfileFromList()
+
+Scan-Typen:
+- mini
+- full
+- followers
+- following
+- posts
+- suggestions
+- suggestion_deepsearch
+
+Ablauf:
+1. Event enthaelt profileId und/oder username und scanType.
+2. Livewire loest Profil ueber accessibleProfileQuery bzw. resolveAccessibleInstagramProfile.
+3. Je nach scanType:
+   - mini => InstagramProfileScanService::scan(false)
+   - full => InstagramProfileScanService::scan(true)
+   - followers/following => ProfileListScanService
+   - posts => PostScanService
+   - suggestions/deepsearch => SuggestionScanService
+4. Ergebnis wird als Statusmeldung im UI angezeigt.
+
+
+11) Monitoring-Scan
+===================
+
+Einstieg:
+- app/Jobs/MonitorTrackedPersonInstagram.php
+
+Ablauf:
+1. Queue-Job laeuft fuer eine beobachtete Person.
+2. Fuehrt Instagram-Analyse aus.
+3. Speichert Snapshot und Updates wie normaler Basisscan.
+4. notifyLinkedTrackedPeople() kann andere Nutzer/Personen informieren, wenn dasselbe globale InstagramProfile betroffen ist.
+5. Benachrichtigung erfolgt je nach Einstellung als Mail/Message/beides.
+6. Der Job ist unique/queue-basiert, damit Monitoring nicht unkontrolliert parallel laeuft.
+
+
+12) Tool-/Background-Scan
+=========================
+
+Einstieg:
+- app/Jobs/RunTrackedPersonInstagramToolScan.php
+
+Typen:
+- public_connections
+- andere Tool-Scans je nach Mapping
+
+Ablauf:
+1. Job bekommt trackedPersonId und scanType.
+2. Job ruft passenden Service auf.
+3. Progress und Status werden gespeichert.
+4. Ergebnisse landen in denselben Tabellen wie GUI-Scans.
+
+
+Datenmodelle / Tabellen je Scan
+===============================
+
+Basisscan / Mini / Vollanalyse:
+- tracked_person_instagram_snapshots
+- tracked_person_instagram_media
+- tracked_people
+- instagram_profiles
+- tracked_person_instagram_profile_links
+- ggf. instagram_profile_list_scans
+- ggf. instagram_profile_relationships
+- ggf. instagram_profile_list_scan_items
+
+Globale Profil-Scans:
+- instagram_profile_scans
+- instagram_profiles
+- ggf. tracked_people via Propagation
+
+Listen:
+- instagram_profile_list_scans
+- instagram_profile_list_scan_items
+- instagram_profile_relationships
+- instagram_profiles
+
+Posts:
+- instagram_post_scans
+- instagram_posts
+- instagram_post_metrics
+- instagram_post_media
+- instagram_post_likes
+- instagram_post_comments
+- instagram_profiles fuer Like-/Comment-Akteure
+
+Suggestions:
+- tracked_person_instagram_suggestion_scans
+- instagram_profiles
+- instagram_profile_relationships
+- instagram_profile_list_scans / items je nach gespeicherten Beziehungen
+- tracked_person_instagram_inferred_connections
+
+Public Connections:
+- tracked_person_instagram_public_profile_scans
+- tracked_person_instagram_public_profile_scan_logs
+- tracked_person_instagram_inferred_connections
+- instagram_profiles
+
+Billing:
+- credit_transactions
+
+
+Statuswerte
+===========
+
+Typische status_level:
+- success
+- partial
+- error
+- cancelled
+- unknown
+
+Bedeutung:
+- success: Scan oder Teilscan erfolgreich abgeschlossen.
+- partial: Basisscan gespeichert, aber Folgephase unvollstaendig, rate-limited oder teilweise fehlgeschlagen.
+- error: Harte Fehler, kein verwertbares Ergebnis oder Node/PHP-Exception.
+- cancelled: Scan wurde kontrolliert beendet.
+- unknown: Kein eindeutiger Status aus Payload.
+
+Wichtige Flags in Payload/DB:
+- attempted
+- available
+- complete
+- rateLimited
+- gracefullyStopped
+- stoppedForRateLimit
+- requiresLogin
+- isPrivate
+- profileVisibility
+- visibleCountsComplete
+
+
+Progress-Phasen
+===============
+
+Haeufige Phasen:
+- profile
+- profile-opening
+- profile-page-loaded
+- profile-collected
+- followers
+- following
+- posts
+- suggestions
+- public-connections
+- done
+- error
+
+Progress-Daten koennen enthalten:
+- percent
+- message
+- loaded
+- expected
+- relationshipItems
+- relationshipItemsDelta
+- foundFollowers
+- foundFollowing
+- foundSuggestions
+- suggestionConnections
+- candidateUsername
+- liveScreenshotUrl
+- scraperProfileLabel
+- scraperProfileId
+
+
+Artefakte / Dateien
+===================
+
+Node kann erzeugen:
+- Screenshot
+- HTML
+- Live Preview Screenshot
+- Debug Log JSON
+
+PHP speichert im Public Storage:
+- Profilbilder
+- Snapshot-Medien
+- Beziehungsliste-Artefakte
+- Post-Medien
+
+Typische Pfade:
+- storage/app/public/tracked-people/<tracked_person_id>/instagram/<timestamp>-<snapshot_id>/
+- storage/app/public/tracked-people/<tracked_person_id>/instagram/<timestamp>-<snapshot_id>/relationships/
+- storage/logs/instagram-scraper/<timestamp>-<mode>-<username>.json
+
+
+Profilbild-Historie
+===================
+
+Profilbilder werden beim Basisscan/Snapshot gespeichert:
+- Snapshot: profile_image_path / profile_image_hash
+- Media: tracked_person_instagram_media mit is_profile_image = true
+
+Zweck:
+- Vergleich per Hash
+- Anzeige in Profilbild-Historie
+- Propagation auf globale InstagramProfile und verlinkte TrackedPeople
+
+Wichtig:
+- Wenn nur eine Remote-URL vorhanden ist und kein lokaler profile_image_path gespeichert wurde,
+  erscheint das Bild nicht als lokale Historie.
+- Mini-/Profilscan muss ein Profilbild wirklich lokal speichern, damit es historisiert wird.
+
+
+Credit-Abrechnung
+=================
+
+ScanCreditService::charge() wird nach erfolgreichem Speichern aufgerufen.
+
+Kostenbasis kommt aus Setting billing.credit_costs:
+- scan_base_credit
+- profile_scan
+- post_scan
+- scan_minimum_credits
+- scan_credit_per_minute
+- scan_max_billable_minutes
+- media_download_per_file
+
+Beschreibungen:
+- Instagram-Mini-Scan @username
+- Instagram-Vollanalyse @username
+- Instagram-Followerliste @username
+- Instagram-Gefolgt-Liste @username
+- Instagram-Beitragsscan @username
+- Instagram-Vorschlaege-Scan @username
+- Public-Profile-Verbindungsscan je Kandidat/Ziel
+
+
+Fehler- und Sonderfälle
+=======================
+
+Private Profile:
+- Basisscan kann Profilwerte und Sichtbarkeit speichern.
+- Listen sind meist nicht direkt verfuegbar.
+- Workflow kann stattdessen Vorschlaege-Scan starten.
+
+Login erforderlich:
+- Payload markiert requiresLogin.
+- Je nach Session/Login-Konfig kann Auto-Login versucht werden.
+- Wenn nicht lösbar, Status error/partial.
+
+Rate-Limit:
+- Node erkennt Rate-Limit-Texte/Dialoge/Zeitlimit.
+- Profil kann temporär blockiert werden.
+- Accountwechsel kann versucht werden.
+- Teilresultate werden bei Listen/Posts/Suggestions moeglichst gespeichert.
+
+Temporär leere Liste:
+- Wird als listTemporarilyUnavailable markiert.
+- Scan kann partial bleiben.
+- Vorher bekannte Items werden nicht blind gelöscht.
+
+Graceful Stop:
+- User/System kann Stop anfordern.
+- Bereits gefundene Daten werden gespeichert.
+- Status partial/cancelled je nach Kontext.
+
+Unvollstaendige grosse Listen:
+- Bei erwarteten Listen >= 250 und unvollstaendigem letzten Lauf kann Resume via Suchmodus aktiviert werden.
+- Vorher aktive Eintraege werden priorisiert.
+
+
+Kurzuebersicht nach Scan-Typ
+============================
+
+Mini-Scan:
+- Schnellster Profilscan.
+- Liest Grunddaten, Sichtbarkeit, Counts, Profilbild.
+- Speichert Snapshot.
+- Kann bei Count-Aenderungen automatische Folge-Scans starten.
+
+Vollanalyse:
+- Umfangreicher Profilscan.
+- Kann Listen direkt mit erfassen.
+- Bei public Profil zusaetzlich PostScan je nach Workflow/Settings.
+
+Followerliste:
+- Liest und speichert globale Followerbeziehungen.
+- Mit Resume/Suche fuer grosse Listen.
+
+Gefolgt-Liste:
+- Liest und speichert globale Followingbeziehungen.
+- Gleiche Mechanik wie Followerliste.
+
+Posts:
+- Liest Posts/Reels/TV, Medien, Metriken.
+- Oeffnet Kommentare und Likes.
+- Speichert Liker- und Kommentatorprofile global.
+
+Vorschlaege:
+- Liest Instagram-Vorschlagsprofile.
+- Speichert Vorschlagsbeziehungen und ggf. inferred connections.
+
+Vorschlaege DeepSearch:
+- Prueft Vorschlagskandidaten tiefer.
+- Nutzt Kandidatenprofile, Hover Cards, Listen-Suche.
+- Erzeugt belastbarere inferred connections.
+
+Public Connections:
+- Prueft bekannte oeffentliche Profile gegen Zielperson.
+- Findet, ob Kandidat Ziel folgt oder vom Ziel gefolgt wird.
+
+Globaler InstagramProfile-Scan:
+- Scannt ein InstagramProfile ohne direkte beobachtete Person.
+- Kann trotzdem Daten auf verlinkte TrackedPeople propagieren.
+
+Monitoring:
+- Queue-basierter Hintergrundscan fuer beobachtete Personen.
+- Nutzt denselben Basisscan-/Benachrichtigungsmechanismus.
+
+
+Wichtige Abhaengigkeiten zwischen Scans
+======================================
+
+- Mini/Vollanalyse erzeugen Snapshots.
+- Snapshots aktualisieren globale InstagramProfiles.
+- Globale InstagramProfiles verbinden mehrere User/TrackedPeople.
+- Listen-Scans fuellen globale Relationship-Graphen.
+- Suggestions/DeepSearch nutzen bekannte Graphdaten und erzeugen inferred connections.
+- Public Connections nutzt bekannte PublicProfiles und bekannte Listen-/Snapshot-Historie.
+- Post-Scans erzeugen Engagement-Profile, die spaeter ebenfalls im Graphen nutzbar sind.
+- Workflow entscheidet anhand Scan-Praeferenzen, ob nach Basisscan Folge-Scans laufen.
+
+
+Praktische Debug-Hinweise
+=========================
+
+Wenn ein Scan nicht tut, was erwartet wird:
+
+1. In den Admin-Scan-Einstellungen pruefen:
+   - max_items
+   - max_scroll_rounds
+   - error_attempts
+   - retry_delay_seconds
+   - post likes/comments Limits
+   - suggestion/deepsearch Limits
+   - profile switch Limits
+
+2. Scraper-Profil pruefen:
+   - aktives Profil
+   - Cookie-Datei
+   - Login-Daten
+   - scrape_blocked_until
+
+3. Logs pruefen:
+   - storage/logs/instagram-scraper/*.json
+   - Laravel logs
+   - raw_payload im jeweiligen Scan-Modell
+
+4. Datenbank pruefen:
+   - status_level/status_message
+   - rate_limited
+   - gracefully_stopped
+   - complete/available/attempted
+   - raw_payload.operationMode
+   - raw_payload._scan_attempts
+
+5. Bei Listen:
+   - instagram_profile_list_scans
+   - instagram_profile_list_scan_items
+   - instagram_profile_relationships
+
+6. Bei Posts:
+   - instagram_post_scans
+   - instagram_posts
+   - instagram_post_likes
+   - instagram_post_comments
+
+7. Bei Vorschlaegen:
+   - tracked_person_instagram_suggestion_scans
+   - tracked_person_instagram_inferred_connections
+
+8. Bei Public Connections:
+   - tracked_person_instagram_public_profile_scans
+   - tracked_person_instagram_public_profile_scan_logs
+
+
+Ende der Übersicht
+==================

@@ -4,6 +4,7 @@ namespace App\Support;
 
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScan;
+use App\Models\InstagramProfileRelationship;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use Illuminate\Support\Carbon;
@@ -23,6 +24,7 @@ class InstagramRelationshipListData
         $activeItems = $this->sortActive($this->loadItems($relationshipList), $addedItems);
         $liveItems = $this->liveProfileListItems($trackedPerson, $listType);
         $reconstructedItems = $this->reconstructedSuggestionItems($trackedPerson, $listType);
+        $passiveItems = $this->passiveRelationshipItems($trackedPerson, $listType);
 
         if ($liveItems->isNotEmpty()) {
             $activeItems = $this->sortActive(
@@ -44,6 +46,16 @@ class InstagramRelationshipListData
             );
         }
 
+        if ($passiveItems->isNotEmpty()) {
+            $activeItems = $this->sortActive(
+                $activeItems
+                    ->merge($passiveItems)
+                    ->unique(fn ($item): string => Str::lower((string) data_get($item, 'username', '')))
+                    ->values(),
+                $addedItems,
+            );
+        }
+
         $scanRemovedItems = $this->sortNewest($this->loadItems($relationshipList, 'removedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
         $removedItems = $this->sortNewest($this->loadItems($relationshipList, 'currentlyRemovedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
         $removedHistoryItems = $this->sortNewest($this->loadItems($relationshipList, 'removedHistoryItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
@@ -51,6 +63,7 @@ class InstagramRelationshipListData
             collect()
                 ->merge($addedItems)
                 ->merge($activeItems)
+                ->merge($passiveItems)
                 ->merge($scanRemovedItems)
                 ->merge($removedItems)
                 ->merge($removedHistoryItems),
@@ -59,6 +72,8 @@ class InstagramRelationshipListData
 
         $addedItems = $this->enrichItems($addedItems, $profileIndex);
         $activeItems = $this->enrichItems($activeItems, $profileIndex);
+        $reconstructedItems = $this->enrichItems($reconstructedItems, $profileIndex);
+        $passiveItems = $this->enrichItems($passiveItems, $profileIndex);
         $scanRemovedItems = $this->enrichItems($scanRemovedItems, $profileIndex);
         $removedItems = $this->enrichItems($removedItems, $profileIndex);
         $removedHistoryItems = $this->enrichItems($removedHistoryItems, $profileIndex);
@@ -79,6 +94,7 @@ class InstagramRelationshipListData
             'removedItems' => $removedItems,
             'removedHistoryItems' => $removedHistoryItems,
             'reconstructedItems' => $reconstructedItems,
+            'passiveItems' => $passiveItems,
             'stats' => $stats,
             'available' => $activeItems->isNotEmpty()
                 || $addedItems->isNotEmpty()
@@ -159,6 +175,69 @@ class InstagramRelationshipListData
                 ];
             })
             ->filter(fn (array $item): bool => filled($item['username'] ?? null))
+            ->values();
+    }
+
+    private function passiveRelationshipItems(TrackedPerson $trackedPerson, string $listType): Collection
+    {
+        $targetProfileId = (int) $trackedPerson->current_instagram_profile_id;
+
+        if (! $targetProfileId || ! in_array($listType, ['followers', 'following'], true)) {
+            return collect();
+        }
+
+        $sourceListType = $listType === 'followers' ? 'following' : 'followers';
+        $targetUsername = ltrim((string) $trackedPerson->instagram_username, '@');
+        $targetHandle = $targetUsername !== '' ? '@'.$targetUsername : 'Zielprofil';
+
+        return InstagramProfileRelationship::query()
+            ->where('related_instagram_profile_id', $targetProfileId)
+            ->where('source_instagram_profile_id', '!=', $targetProfileId)
+            ->where('list_type', $sourceListType)
+            ->where('status', 'active')
+            ->whereNull('removed_at')
+            ->whereHas('lastSeenScan', function ($query) use ($trackedPerson): void {
+                $query->where('user_id', $trackedPerson->user_id);
+            })
+            ->with('sourceInstagramProfile')
+            ->latest('last_seen_at')
+            ->get()
+            ->map(function (InstagramProfileRelationship $relationship) use ($listType, $sourceListType, $targetHandle): ?array {
+                $profile = $relationship->sourceInstagramProfile;
+                $username = ltrim((string) $profile?->username, '@');
+
+                if ($username === '') {
+                    return null;
+                }
+
+                $candidateHandle = '@'.$username;
+                $meta = $listType === 'followers'
+                    ? 'Passiv erkannt: '.$candidateHandle.' folgt '.$targetHandle
+                    : 'Passiv erkannt: '.$targetHandle.' folgt '.$candidateHandle;
+
+                return [
+                    'username' => $username,
+                    'displayName' => $profile?->display_name ?: $profile?->full_name,
+                    'profileUrl' => $profile?->profile_url,
+                    'instagramProfileId' => $profile?->id,
+                    'profileImagePath' => $profile?->profile_image_path,
+                    'profileVisibility' => $profile?->profile_visibility,
+                    'isPrivate' => $profile?->is_private,
+                    'postsCount' => $profile?->posts_count,
+                    'followersCount' => $profile?->followers_count,
+                    'followingCount' => $profile?->following_count,
+                    'firstSeenAt' => $relationship->first_seen_at?->toIso8601String(),
+                    'lastSeenAt' => $relationship->last_seen_at?->toIso8601String(),
+                    'meta' => $meta,
+                    'statusLabel' => $listType === 'followers' ? 'Passiver Follower' : 'Passiv gefolgt',
+                    'statusTone' => 'sky',
+                    'passive' => true,
+                    'passiveSourceListType' => $sourceListType,
+                    'passiveRelationshipId' => $relationship->id,
+                ];
+            })
+            ->filter()
+            ->unique(fn (array $item): string => Str::lower((string) $item['username']))
             ->values();
     }
 

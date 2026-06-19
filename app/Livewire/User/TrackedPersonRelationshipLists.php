@@ -87,7 +87,7 @@ class TrackedPersonRelationshipLists extends Component
             return;
         }
 
-        $this->relationshipProfileFilters[$listType] = in_array($filter, ['all', 'tracked', 'untracked', 'reconstructed'], true)
+        $this->relationshipProfileFilters[$listType] = in_array($filter, ['all', 'tracked', 'untracked', 'reconstructed', 'passive'], true)
             ? $filter
             : 'all';
 
@@ -203,6 +203,7 @@ class TrackedPersonRelationshipLists extends Component
                     'tracked' => (bool) data_get($item, 'isTracked'),
                     'untracked' => ! (bool) data_get($item, 'isTracked'),
                     'reconstructed' => (bool) data_get($item, 'reconstructed'),
+                    'passive' => (bool) data_get($item, 'passive'),
                     default => true,
                 };
             })
@@ -240,6 +241,7 @@ class TrackedPersonRelationshipLists extends Component
             'tracked' => $items->filter(fn ($item): bool => (bool) data_get($item, 'isTracked'))->count(),
             'untracked' => $items->filter(fn ($item): bool => ! (bool) data_get($item, 'isTracked'))->count(),
             'reconstructed' => $items->filter(fn ($item): bool => (bool) data_get($item, 'reconstructed'))->count(),
+            'passive' => $items->filter(fn ($item): bool => (bool) data_get($item, 'passive'))->count(),
         ];
     }
 
