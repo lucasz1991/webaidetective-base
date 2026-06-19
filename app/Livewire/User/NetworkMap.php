@@ -2738,6 +2738,7 @@ class NetworkMap extends Component
             'display_name' => $profile->display_name ?: $profile->full_name ?: $profile->display_handle,
             'profile_url' => $profile->profile_url ?: 'https://www.instagram.com/'.$normalizedUsername.'/',
             'image_url' => $this->profileImageUrlForInstagramProfile($profile),
+            'profile_image_path' => $profile->profile_image_path,
             'visibility' => $this->profileStatusForInstagramProfile($profile),
             'followers_count' => $profile->followers_count,
             'following_count' => $profile->following_count,

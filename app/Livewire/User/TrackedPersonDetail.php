@@ -1471,17 +1471,31 @@ class TrackedPersonDetail extends Component
                     ->latest('analyzed_at')
                     ->limit(6),
             ]);
+        $instagramProfileId = $trackedPerson->current_instagram_profile_id
+            ?: $trackedPerson->latestInstagramSnapshot?->instagram_profile_id;
+        $instagramProfileId ??= filled($trackedPerson->instagram_username)
+            ? InstagramProfile::query()
+                ->where('username', Str::lower(ltrim((string) $trackedPerson->instagram_username, '@')))
+                ->value('id')
+            : null;
         $profileImageHistory = TrackedPersonInstagramMedia::query()
             ->with([
                 'snapshot' => fn ($query) => $query->select('id', 'tracked_person_id', 'analyzed_at'),
             ])
-            ->where('tracked_person_id', $trackedPerson->id)
+            ->when(
+                $instagramProfileId,
+                fn ($query) => $query->whereHas(
+                    'snapshot',
+                    fn ($snapshotQuery) => $snapshotQuery->where('instagram_profile_id', $instagramProfileId),
+                ),
+                fn ($query) => $query->where('tracked_person_id', $trackedPerson->id),
+            )
             ->where('is_profile_image', true)
             ->whereNotNull('storage_path')
             ->latest('id')
             ->limit(50)
             ->get()
-            ->unique('content_hash')
+            ->unique(fn (TrackedPersonInstagramMedia $media): string => $media->content_hash ?: $media->storage_path)
             ->take(12)
             ->values();
         $publicProfileCandidates = Auth::user()

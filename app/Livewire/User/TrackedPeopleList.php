@@ -166,6 +166,7 @@ class TrackedPeopleList extends Component
         if ($this->selectedTrackedPersonId) {
             $selectedTrackedPerson = $user?->trackedPeople()
                 ->with([
+                    'currentInstagramProfile',
                     'latestInstagramSnapshot',
                     'latestChangedInstagramSnapshot',
                     'instagramSnapshots' => fn ($query) => $query

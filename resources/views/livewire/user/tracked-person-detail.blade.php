@@ -1332,7 +1332,7 @@
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Profilbild-Historie</h3>
                 <p class="mt-1 text-sm text-slate-600">
-                    Gespeichert werden nur eindeutig dem analysierten Profil zuordenbare Profilbilder, keine Vorschlagsbilder oder Bilder des eingeloggten Such-Profils.
+                    Zeigt gespeicherte Profilbilder dieses Instagram-Profils aus allen Scans, auch wenn ein anderer User das Bild zuerst gespeichert hat. Vorschlagsbilder und Bilder des eingeloggten Such-Profils werden nicht angezeigt.
                 </p>
 
                 @if($profileImageHistory->isNotEmpty())
