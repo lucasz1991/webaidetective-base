@@ -33,8 +33,10 @@
                     $isArray   = is_array($tab);
                     $label     = $isArray ? ($tab['label'] ?? Str::title($k)) : $tab;
                     $iconClass = $isArray ? ($tab['icon']  ?? null) : null;
+                    $count     = $isArray && array_key_exists('count', $tab) ? $tab['count'] : null;
+                    $countLabel = $count !== null ? number_format((int) $count, 0, ',', '.') : null;
                 @endphp
-                out.push({ id: '{{ $k }}', label: @js($label), icon: @js($iconClass) });
+                out.push({ id: '{{ $k }}', label: @js($label), icon: @js($iconClass), countLabel: @js($countLabel) });
             @endforeach
             return out;
         })(),
@@ -82,10 +84,20 @@
                         :aria-selected="openTab === t.id"
                         :tabindex="openTab === t.id ? 0 : -1"
                     >
-                        <template x-if="t.icon">
+                        <template x-if="t.icon === 'instagram-grid'">
+                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                            </svg>
+                        </template>
+                        <template x-if="t.icon && t.icon !== 'instagram-grid'">
                             <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
                         </template>
-                        <span class="whitespace-nowrap" x-text="t.label"></span>
+                        <span class="whitespace-nowrap">
+                            <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
+                        </span>
                     </button>
                 </template>
             </div>
@@ -99,10 +111,20 @@
                     class="-mb-px inline-flex shrink-0 items-center gap-2 border-t border-t-slate-950 px-5 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-300"
                     role="tab" aria-selected="true" tabindex="0"
                 >
-                    <template x-if="active?.icon">
+                    <template x-if="active?.icon === 'instagram-grid'">
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                            <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                            <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                            <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                            <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                        </svg>
+                    </template>
+                    <template x-if="active?.icon && active.icon !== 'instagram-grid'">
                         <i :class="active.icon + ' fa-lg'" aria-hidden="true"></i>
                     </template>
-                    <span class="whitespace-nowrap" x-text="active?.label ?? ''"></span>
+                    <span class="whitespace-nowrap">
+                        <span x-text="active?.label ?? ''"></span><template x-if="active?.countLabel"><span>&nbsp;<span x-text="active.countLabel"></span></span></template>
+                    </span>
                 </button>
 
                 <div class="relative" x-data="{ open:false }">
@@ -133,10 +155,20 @@
                                         role="menuitem"
                                         @click="open=false; selectTab(t.id)"
                                     >
-                                        <template x-if="t.icon">
+                                        <template x-if="t.icon === 'instagram-grid'">
+                                            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                                <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                                <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                                <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"></rect>
+                                            </svg>
+                                        </template>
+                                        <template x-if="t.icon && t.icon !== 'instagram-grid'">
                                             <i :class="t.icon + ' fa-lg'" aria-hidden="true"></i>
                                         </template>
-                                        <span x-text="t.label"></span>
+                                        <span>
+                                            <span x-text="t.label"></span><template x-if="t.countLabel"><span>&nbsp;<span x-text="t.countLabel"></span></span></template>
+                                        </span>
                                     </button>
                                 </li>
                             </template>

@@ -315,31 +315,46 @@
     </x-profile.detail-hero>
 
     @php
-        $detailTabs = [
-            'posts' => 'Posts',
-            'connections' => 'Verbindungen',
-        ];
+        $postCount = $profile->posts instanceof \Illuminate\Support\Collection
+            ? $profile->posts->count()
+            : collect($profile->posts)->count();
+        $detailTabs = [];
+
+        if ($postCount > 0) {
+            $detailTabs['posts'] = [
+                'label' => 'Posts',
+                'icon' => 'instagram-grid',
+                'count' => $postCount,
+            ];
+        }
+
+        $detailTabs['connections'] = 'Verbindungen';
 
         if ($isAdmin) {
             $detailTabs['analyses'] = 'Analysen';
         }
+
+        $detailDefaultTab = array_key_first($detailTabs) ?: 'connections';
     @endphp
 
     <section id="profilinfos" class="scroll-mt-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <x-ui.accordion.tabs
             :tabs="$detailTabs"
-            default="posts"
+            :default="$detailDefaultTab"
             :persist="false"
             collapse-at="sm"
         >
-            <x-ui.accordion.tab-panel for="posts" panel-class="pt-4">
-                <x-instagram-posts-gallery
-                    :posts="$profile->posts"
-                    title="Gespeicherte Beitraege"
-                    :last-scan-at="$profile->postScans->first()?->scanned_at"
-                    empty-text="Noch keine Beitraege gespeichert."
-                />
-            </x-ui.accordion.tab-panel>
+            @if($postCount > 0)
+                <x-ui.accordion.tab-panel for="posts" panel-class="pt-4">
+                    <x-instagram-posts-gallery
+                        :posts="$profile->posts"
+                        title="Gespeicherte Beitraege"
+                        :last-scan-at="$profile->postScans->first()?->scanned_at"
+                        empty-text="Noch keine Beitraege gespeichert."
+                        :show-header="false"
+                    />
+                </x-ui.accordion.tab-panel>
+            @endif
 
             <x-ui.accordion.tab-panel for="connections" panel-class="pt-4">
                 <div class="grid gap-3 md:grid-cols-2">

@@ -135,6 +135,7 @@ const runtimeConfigDefaults = {
   suggestionCandidateRetryDelayMs: 3000,
   suggestionSkipPreviouslyChecked: true,
   suggestionNoMatchSkipAfter: 2,
+  suggestionCandidateRecheckHours: 48,
   suggestionMaxScraperProfileSwitches: 3,
   postScanMaxItems: 100,
   postScanMaxScrollRounds: 40,

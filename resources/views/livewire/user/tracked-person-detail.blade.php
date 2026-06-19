@@ -1,14 +1,27 @@
 <div class="container mx-auto space-y-4" x-data="{ toasts: [] }" x-init="window.addEventListener('toast', e => { toasts.push(e.detail); setTimeout(() => toasts.shift(), 3000); })" x-cloak>
     @php
         $isAdmin = auth()->user()?->role === 'admin';
-        $detailTabs = [
-            'posts' => 'Posts',
-            'verbindungen' => 'Verbindungen',
-        ];
+        $instagramPosts = $trackedPerson->currentInstagramProfile?->posts ?? collect();
+        $postCount = $instagramPosts instanceof \Illuminate\Support\Collection
+            ? $instagramPosts->count()
+            : collect($instagramPosts)->count();
+        $detailTabs = [];
+
+        if ($postCount > 0) {
+            $detailTabs['posts'] = [
+                'label' => 'Posts',
+                'icon' => 'instagram-grid',
+                'count' => $postCount,
+            ];
+        }
+
+        $detailTabs['verbindungen'] = 'Verbindungen';
 
         if ($isAdmin) {
             $detailTabs['analyse'] = 'Analysen';
         }
+
+        $detailDefaultTab = array_key_first($detailTabs) ?: 'verbindungen';
     @endphp
 
     <div class="fixed top-4 right-4 z-50 space-y-2">
@@ -554,6 +567,12 @@
         id="profilinfos"
         class="scroll-mt-4"
         x-data="{ networkMapRequested: @js($showNetworkMap) }"
+        x-init="
+            if (@js($detailDefaultTab) === 'verbindungen' && !networkMapRequested) {
+                networkMapRequested = true;
+                $wire.loadNetworkMap();
+            }
+        "
         x-on:ui-tab-selected="
             if ($event.detail.tab === 'verbindungen' && !networkMapRequested) {
                 networkMapRequested = true;
@@ -563,21 +582,24 @@
     >
         <x-ui.accordion.tabs
             :tabs="$detailTabs"
-            default="posts"
+            :default="$detailDefaultTab"
             :persist="false"
             collapse-at="sm"
         >
-            <x-ui.accordion.tab-panel
-                for="posts"
-                panel-class="pt-4"
-            >
-                <x-instagram-posts-gallery
-                    :posts="$trackedPerson->currentInstagramProfile?->posts ?? collect()"
-                    title="Instagram-Beitraege"
-                    :last-scan-at="$trackedPerson->currentInstagramProfile?->postScans?->first()?->scanned_at"
-                    empty-text="Noch keine Instagram-Beitraege gespeichert."
-                />
-            </x-ui.accordion.tab-panel>
+            @if($postCount > 0)
+                <x-ui.accordion.tab-panel
+                    for="posts"
+                    panel-class="pt-4"
+                >
+                    <x-instagram-posts-gallery
+                        :posts="$instagramPosts"
+                        title="Instagram-Beitraege"
+                        :last-scan-at="$trackedPerson->currentInstagramProfile?->postScans?->first()?->scanned_at"
+                        empty-text="Noch keine Instagram-Beitraege gespeichert."
+                        :show-header="false"
+                    />
+                </x-ui.accordion.tab-panel>
+            @endif
 
             <x-ui.accordion.tab-panel
                 for="verbindungen"

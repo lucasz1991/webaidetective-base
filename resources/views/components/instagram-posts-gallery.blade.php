@@ -3,6 +3,7 @@
     'title' => 'Instagram-Beitraege',
     'lastScanAt' => null,
     'emptyText' => 'Noch keine Instagram-Beitraege gespeichert.',
+    'showHeader' => true,
 ])
 
 @php
@@ -13,18 +14,19 @@
 
 <section class="bg-white">
 
-
-    <div class="flex justify-center border-b border-slate-200">
-        <div class="-mb-px inline-flex items-center gap-2 border-t border-slate-950 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-950">
-            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"/>
-                <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"/>
-                <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"/>
-                <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"/>
-            </svg>
-            Posts&nbsp;{{ number_format($postCount, 0, ',', '.') }}
+    @if($showHeader)
+        <div class="flex justify-center border-b border-slate-200">
+            <div class="-mb-px inline-flex items-center gap-2 border-t border-slate-950 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-950">
+                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <rect x="4" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"/>
+                    <rect x="14" y="4" width="6" height="6" stroke="currentColor" stroke-width="2"/>
+                    <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"/>
+                    <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"/>
+                </svg>
+                Posts&nbsp;{{ number_format($postCount, 0, ',', '.') }}
+            </div>
         </div>
-    </div>
+    @endif
 
     @if($postCount > 0)
         <div class="mt-1 grid grid-cols-3 gap-0.5 sm:gap-1">

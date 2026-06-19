@@ -76,6 +76,65 @@ function resolveCandidateProfileVisibility(candidate = {}, candidateProfile = {}
   return null;
 }
 
+function normalizeSuggestionHistoryState(history = {}) {
+  const state = history && typeof history === 'object' && !Array.isArray(history) ? history : {};
+
+  return {
+    hasMatch: Boolean(state.hasMatch),
+    knownSuggestion: Boolean(state.knownSuggestion),
+    knownProfile: Boolean(state.knownProfile),
+    noMatchChecks: Math.max(0, Math.floor(Number(state.noMatchChecks || 0))),
+    permanentlyDismissed: Boolean(state.permanentlyDismissed),
+    recentlyChecked: Boolean(state.recentlyChecked),
+    lastCheckedAt: state.lastCheckedAt || null,
+    recheckAfter: state.recheckAfter || null,
+    recentlySuggestionProfileScanned: Boolean(state.recentlySuggestionProfileScanned),
+    lastSuggestionProfileScanAt: state.lastSuggestionProfileScanAt || null,
+    suggestionProfileRecheckAfter: state.suggestionProfileRecheckAfter || null,
+  };
+}
+
+function isRecentSuggestionFinalMiss(history, noMatchSkipAfter) {
+  return Boolean(history.recentlyChecked)
+    && (
+      Boolean(history.permanentlyDismissed)
+      || Number(history.noMatchChecks || 0) >= noMatchSkipAfter
+    );
+}
+
+function shouldSkipSuggestionCandidateFromHistory(history, noMatchSkipAfter) {
+  return Boolean(history.hasMatch)
+    || Boolean(history.recentlyChecked)
+    || isRecentSuggestionFinalMiss(history, noMatchSkipAfter);
+}
+
+function suggestionHistorySkipReason(history, noMatchSkipAfter) {
+  if (Boolean(history.hasMatch)) {
+    return 'already-saved-match';
+  }
+
+  if (isRecentSuggestionFinalMiss(history, noMatchSkipAfter)) {
+    return 'already-dismissed-no-match';
+  }
+
+  if (Boolean(history.recentlyChecked)) {
+    return 'recently-checked-suggestion';
+  }
+
+  return 'already-known-suggestion';
+}
+
+function suggestionHistoryProgressMeta(history = {}) {
+  return {
+    alreadyKnown: Boolean(history.hasMatch),
+    recentlyChecked: Boolean(history.recentlyChecked),
+    lastCheckedAt: history.lastCheckedAt || null,
+    recheckAfter: history.recheckAfter || null,
+    previousNoMatchChecks: Number(history.noMatchChecks || 0),
+    previousTargetFoundAsSuggestion: Boolean(history.hasMatch),
+  };
+}
+
 async function runProfileSuggestionConnectionScan(
   deps,
   page,
@@ -131,11 +190,11 @@ async function runProfileSuggestionConnectionScan(
     ? normalizeSuggestionCandidateHistory(runtimeConfig.suggestionCandidateHistory || {})
     : {};
   const alreadyScannedSuggestionUsernames = new Set(Object.entries(candidateHistory)
-    .filter(([, history]) => (
-      Boolean(history?.hasMatch)
-      || Boolean(history?.permanentlyDismissed)
-      || Number(history?.noMatchChecks || 0) >= noMatchSkipAfter
-    ))
+    .filter(([, rawHistory]) => {
+      const history = normalizeSuggestionHistoryState(rawHistory);
+
+      return shouldSkipSuggestionCandidateFromHistory(history, noMatchSkipAfter);
+    })
     .map(([username]) => normalizeInstagramUsername(username))
     .filter(Boolean));
   let gracefullyStopped = false;
@@ -430,40 +489,30 @@ async function runProfileSuggestionConnectionScan(
       continue;
     }
 
-    const history = candidateHistory[candidateUsername] || {
-      hasMatch: false,
-      noMatchChecks: 0,
-      permanentlyDismissed: false,
-    };
+    const history = normalizeSuggestionHistoryState(candidateHistory[candidateUsername]);
+    const historyMeta = suggestionHistoryProgressMeta(history);
+    const skipReason = suggestionHistorySkipReason(history, noMatchSkipAfter);
 
     dismissedCount += 1;
     dismissedUsernames.add(candidateUsername);
     rememberObservedSuggestion(dismissedKnown, {
       checked: false,
       skipped: true,
-      skippedReason: Boolean(history.hasMatch)
-        ? 'already-saved-match'
-        : (Boolean(history.permanentlyDismissed) ? 'already-dismissed-no-match' : 'already-scanned-suggestion'),
-      alreadyKnown: Boolean(history.hasMatch),
+      skippedReason: skipReason,
+      ...historyMeta,
       dismissedFromSuggestions: true,
-      previousNoMatchChecks: Number(history.noMatchChecks || 0),
-      previousTargetFoundAsSuggestion: Boolean(history.hasMatch),
     });
     dismissedCandidates.push({
       ...dismissedKnown,
-      previousNoMatchChecks: Number(history.noMatchChecks || 0),
-      previousTargetFoundAsSuggestion: Boolean(history.hasMatch),
+      ...historyMeta,
     });
     skippedCandidates.push({
       ...dismissedKnown,
       checked: false,
       skipped: true,
-      skippedReason: Boolean(history.hasMatch)
-        ? 'already-saved-match'
-        : (Boolean(history.permanentlyDismissed) ? 'already-dismissed-no-match' : 'already-scanned-suggestion'),
+      skippedReason: skipReason,
+      ...historyMeta,
       dismissedFromSuggestions: true,
-      previousNoMatchChecks: Number(history.noMatchChecks || 0),
-      previousTargetFoundAsSuggestion: Boolean(history.hasMatch),
     });
   }
 
@@ -484,26 +533,19 @@ async function runProfileSuggestionConnectionScan(
   } else {
     for (const candidate of candidates) {
       const candidateUsername = normalizeInstagramUsername(candidate.username);
-      const history = candidateHistory[candidateUsername] || {
-        hasMatch: false,
-        noMatchChecks: 0,
-        permanentlyDismissed: false,
-      };
+      const history = normalizeSuggestionHistoryState(candidateHistory[candidateUsername]);
+      const historyMeta = suggestionHistoryProgressMeta(history);
       const shouldDismissAsKnownMatch = Boolean(history.hasMatch);
-      const shouldDismissAsFinalMiss = Boolean(history.permanentlyDismissed)
-        || Number(history.noMatchChecks || 0) >= noMatchSkipAfter;
-      const shouldSkipAsKnownSuggestion = Boolean(history.knownSuggestion || history.knownProfile);
-      const shouldSkipWithoutCheck = shouldDismissAsKnownMatch || shouldDismissAsFinalMiss || shouldSkipAsKnownSuggestion;
-      const skipReason = shouldDismissAsKnownMatch
-        ? 'already-saved-match'
-        : (shouldDismissAsFinalMiss ? 'already-dismissed-no-match' : 'already-known-suggestion');
+      const shouldDismissAsFinalMiss = isRecentSuggestionFinalMiss(history, noMatchSkipAfter);
+      const shouldSkipAsRecentlyChecked = Boolean(history.recentlyChecked);
+      const shouldSkipWithoutCheck = shouldSkipSuggestionCandidateFromHistory(history, noMatchSkipAfter);
+      const skipReason = suggestionHistorySkipReason(history, noMatchSkipAfter);
 
       rememberObservedSuggestion(candidate, {
         checked: false,
         skipped: false,
-        alreadyKnown: shouldDismissAsKnownMatch || shouldSkipAsKnownSuggestion,
-        previousNoMatchChecks: Number(history.noMatchChecks || 0),
-        previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
+        ...historyMeta,
+        alreadyKnown: Boolean(history.hasMatch || history.knownSuggestion || history.knownProfile),
       });
 
       if (shouldDismissAsKnownMatch || shouldDismissAsFinalMiss) {
@@ -517,8 +559,7 @@ async function runProfileSuggestionConnectionScan(
             dismissed: true,
             dismissedBeforeCheck: true,
             dismissReason: skipReason,
-            previousNoMatchChecks: Number(history.noMatchChecks || 0),
-            previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
+            ...historyMeta,
           });
           await sleep(350);
         }
@@ -529,20 +570,18 @@ async function runProfileSuggestionConnectionScan(
           checked: false,
           skipped: true,
           skippedReason: skipReason,
-          alreadyKnown: shouldDismissAsKnownMatch || shouldSkipAsKnownSuggestion,
+          ...historyMeta,
+          alreadyKnown: Boolean(history.hasMatch || history.knownSuggestion || history.knownProfile),
           dismissedFromSuggestions: dismissedUsernames.has(candidateUsername),
-          previousNoMatchChecks: Number(history.noMatchChecks || 0),
-          previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
         });
         skippedCandidates.push({
           ...candidate,
           checked: false,
           skipped: true,
           skippedReason: skipReason,
-          alreadyKnown: shouldDismissAsKnownMatch || shouldSkipAsKnownSuggestion,
+          ...historyMeta,
+          alreadyKnown: Boolean(history.hasMatch || history.knownSuggestion || history.knownProfile),
           dismissedFromSuggestions: dismissedUsernames.has(candidateUsername),
-          previousNoMatchChecks: Number(history.noMatchChecks || 0),
-          previousTargetFoundAsSuggestion: shouldDismissAsKnownMatch,
         });
 
         continue;
@@ -551,6 +590,9 @@ async function runProfileSuggestionConnectionScan(
       candidatesToCheck.push({
         ...candidate,
         previousNoMatchChecks: Number(history.noMatchChecks || 0),
+        recentlyChecked: shouldSkipAsRecentlyChecked,
+        lastCheckedAt: history.lastCheckedAt || null,
+        recheckAfter: history.recheckAfter || null,
         dismissedBeforeCheck: false,
       });
     }
@@ -895,14 +937,17 @@ async function runProfileSuggestionConnectionScan(
               hoverCard: candidateHoverCard,
               sourceSuggestionUsername: candidate.username,
               sourcePublicUsername: candidate.username,
+              sourceSeedUsername: candidate.sourceSeedUsername || null,
+              deepSearchBranch: Boolean(candidate.deepSearchBranch),
               targetFoundAsSuggestion,
               targetFoundInPublicLists,
               targetFoundInFollowers: Boolean(publicListSearch.targetFoundInFollowers),
               targetFoundInFollowing: Boolean(publicListSearch.targetFoundInFollowing),
-              sourceLists: [
+              sourceLists: Array.from(new Set([
+                ...(Array.isArray(candidate.sourceLists) ? candidate.sourceLists : []),
                 ...(publicListSearch.targetFoundInFollowers ? ['public_profile_followers'] : []),
                 ...(publicListSearch.targetFoundInFollowing ? ['public_profile_following'] : []),
-              ],
+              ])),
               publicListSearch,
               suggestionPreview: [],
             });
@@ -1023,8 +1068,13 @@ async function runProfileSuggestionConnectionScan(
               hoverCard: candidateHoverCard,
               sourceSuggestionUsername: candidate.username,
               sourcePublicUsername: candidate.username,
+              sourceSeedUsername: candidate.sourceSeedUsername || null,
+              deepSearchBranch: Boolean(candidate.deepSearchBranch),
               targetFoundAsSuggestion: true,
-              sourceLists: ['profile_suggestions'],
+              sourceLists: Array.from(new Set([
+                ...(Array.isArray(candidate.sourceLists) ? candidate.sourceLists : []),
+                'profile_suggestions',
+              ])),
               suggestionPreview: candidateSuggestions.items.slice(0, maxCandidateSuggestions),
             });
           }
@@ -1190,6 +1240,7 @@ async function runProfileSuggestionConnectionScan(
       'already-dismissed-no-match',
       'already-scanned-suggestion',
       'already-known-suggestion',
+      'recently-checked-suggestion',
     ].includes(candidate.skippedReason)
     || Number(candidate.previousNoMatchChecks || 0) > 0
   )).length;

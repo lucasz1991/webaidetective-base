@@ -16,6 +16,8 @@ use Illuminate\Support\Facades\Schema;
 
 class TrackedPersonInstagramSuggestionScanService
 {
+    private const SUGGESTION_CANDIDATE_RECHECK_HOURS = 48;
+
     public function __construct(
         private readonly InstagramScraper $scraper,
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
@@ -162,6 +164,7 @@ class TrackedPersonInstagramSuggestionScanService
         $deepSearchPolicy = $this->scanPolicies->for('suggestion_deep_search');
         $skipPreviouslyChecked = (bool) ($deepSearchPolicy['skip_previously_checked'] ?? true);
         $noMatchSkipAfter = max(1, min(100, (int) ($deepSearchPolicy['no_match_skip_after'] ?? 2)));
+        $candidateRecheckHours = self::SUGGESTION_CANDIDATE_RECHECK_HOURS;
 
         $liveConnections = [];
         $liveInferredFollowers = [];
@@ -454,12 +457,13 @@ class TrackedPersonInstagramSuggestionScanService
                 },
                 $this->withActiveScanControl([
                     'suggestionDebug' => true,
-                    // For explicit DeepSearch with history, keep existing behavior and skip already-known suggestions.
-                    ...($deepSearch && $skipPreviouslyChecked
-                        ? ['suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson, $profile, $noMatchSkipAfter)]
+                    // Vorschlagskandidaten werden per Username-History erst nach Ablauf der Recheck-Frist erneut geprueft.
+                    ...($skipPreviouslyChecked
+                        ? ['suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson, $profile, $noMatchSkipAfter, $candidateRecheckHours)]
                         : []),
-                    // On elevated 3rd scan, force full recheck (no skipping)
-                    ...($elevateToDeepSearch ? ['suggestionSkipPreviouslyChecked' => false] : []),
+                    'suggestionCandidateRecheckHours' => $candidateRecheckHours,
+                    // Auch der automatische vertiefte Lauf respektiert die 48h-Recheck-Grenze.
+                    ...($elevateToDeepSearch ? ['suggestionSkipPreviouslyChecked' => true] : []),
                     ...($deepSearch ? ['suggestionDeepSearchSeedProfiles' => $deepSearchSeedProfiles] : []),
                     // Resume-only: if last scan incomplete, pass pending list and a hint to prefer resume
                     ...($pendingCandidates !== [] ? [
@@ -695,7 +699,7 @@ class TrackedPersonInstagramSuggestionScanService
                 $payload,
                 $analyzedAt,
             );
-            if ($deepSearch) {
+            if ($connections !== []) {
                 if ($trackedPerson) {
                     $this->storeInferredSuggestionConnections(
                         $trackedPerson,
@@ -1001,12 +1005,12 @@ class TrackedPersonInstagramSuggestionScanService
         $persistedEdges = [];
         $targetProfile ??= $this->profileRelationshipStore->ensureProfile($targetUsername);
         $initialSuggestions = $this->mergeObservedSuggestionItems(
-            $this->normalizeObservedSuggestionItems($scanPayload['observedSuggestions'] ?? []),
-            $this->normalizeObservedSuggestionItems($scanPayload['suggestions'] ?? []),
-            $this->normalizeObservedSuggestionItems($scanPayload['candidatesToCheck'] ?? []),
-            $this->normalizeObservedSuggestionItems($scanPayload['skippedCandidates'] ?? []),
-            $this->normalizeObservedSuggestionItems($scanPayload['checkedCandidates'] ?? []),
-            $this->normalizeObservedSuggestionItems($scanPayload['matches'] ?? []),
+            $this->directTargetSuggestionItems($this->normalizeObservedSuggestionItems($scanPayload['observedSuggestions'] ?? [])),
+            $this->directTargetSuggestionItems($this->normalizeObservedSuggestionItems($scanPayload['suggestions'] ?? [])),
+            $this->directTargetSuggestionItems($this->normalizeObservedSuggestionItems($scanPayload['candidatesToCheck'] ?? [])),
+            $this->directTargetSuggestionItems($this->normalizeObservedSuggestionItems($scanPayload['skippedCandidates'] ?? [])),
+            $this->directTargetSuggestionItems($this->normalizeObservedSuggestionItems($scanPayload['checkedCandidates'] ?? [])),
+            $this->directTargetSuggestionItems($this->normalizeObservedSuggestionItems($scanPayload['matches'] ?? [])),
         );
 
         if ($targetProfile) {
@@ -1112,6 +1116,27 @@ class TrackedPersonInstagramSuggestionScanService
     {
         return collect($this->normalizeSuggestionBranchedConnections($branches))
             ->sum(fn (array $branch): int => count($branch['suggestionPreview'] ?? []));
+    }
+
+    private function directTargetSuggestionItems(array $items): array
+    {
+        return array_values(array_filter($items, function (array $item): bool {
+            if ((bool) ($item['deepSearchBranch'] ?? false)) {
+                return false;
+            }
+
+            if ((int) ($item['suggestionLevel'] ?? 0) >= 2) {
+                return false;
+            }
+
+            if (in_array((string) ($item['checkMode'] ?? ''), ['profile-suggestions-level2', 'deepsearch-branch-history'], true)) {
+                return false;
+            }
+
+            $sourceLists = is_array($item['sourceLists'] ?? null) ? $item['sourceLists'] : [];
+
+            return ! in_array('profile_suggestions_level2', $sourceLists, true);
+        }));
     }
 
     private function storeSuggestionRelationshipItems(
@@ -1394,37 +1419,120 @@ class TrackedPersonInstagramSuggestionScanService
     {
         $seeds = [];
         $targetProfile = $profile ?: $this->profileRelationshipStore->ensureProfile($targetUsername);
+        $relationshipListTypes = ['followers', 'following', 'profile_suggestions'];
+        $profileColumns = 'id,username,display_name,profile_url,profile_image_url,is_private,profile_visibility,posts_count,followers_count,following_count,last_scanned_at';
+        $addSeed = function (mixed $rawUsername, array $attributes = [], array|string|null $sourceLists = null) use (&$seeds): void {
+            $username = $this->scraper->normalizeInstagramUsername(is_scalar($rawUsername) ? (string) $rawUsername : null);
+
+            if ($username === null) {
+                return;
+            }
+
+            $incomingSourceLists = is_array($sourceLists)
+                ? $sourceLists
+                : (is_string($sourceLists) && $sourceLists !== '' ? [$sourceLists] : []);
+            $previousSourceLists = is_array($seeds[$username]['sourceLists'] ?? null)
+                ? $seeds[$username]['sourceLists']
+                : [];
+
+            $seeds[$username] = [
+                ...($seeds[$username] ?? []),
+                ...array_filter($attributes, static fn ($value): bool => $value !== null && $value !== ''),
+                'username' => $username,
+                'profileUrl' => $this->nullableTrim($attributes['profileUrl'] ?? null)
+                    ?: ($seeds[$username]['profileUrl'] ?? 'https://www.instagram.com/'.$username.'/'),
+                'sourceLists' => array_values(array_unique(array_filter([
+                    ...$previousSourceLists,
+                    ...$incomingSourceLists,
+                ], static fn ($value): bool => is_string($value) && $value !== ''))),
+            ];
+        };
+        $profileAttributes = function (?InstagramProfile $profile, ?InstagramProfileRelationship $relationship = null): array {
+            return [
+                'displayName' => $this->nullableTrim($profile?->display_name ?? $relationship?->display_name_snapshot ?? null),
+                'profileUrl' => $this->nullableTrim($profile?->profile_url ?? $relationship?->profile_url_snapshot ?? null),
+                'profileImageUrl' => $this->nullableTrim($profile?->profile_image_url ?? null),
+                'profileVisibility' => $profile?->profile_visibility,
+                'isPrivate' => is_bool($profile?->is_private) ? $profile->is_private : null,
+                'postsCount' => is_numeric($profile?->posts_count) ? (int) $profile->posts_count : null,
+                'followersCount' => is_numeric($profile?->followers_count) ? (int) $profile->followers_count : null,
+                'followingCount' => is_numeric($profile?->following_count) ? (int) $profile->following_count : null,
+                'lastScannedAt' => $profile?->last_scanned_at?->toIso8601String(),
+            ];
+        };
 
         if ($targetProfile) {
             InstagramProfileRelationship::query()
-                ->with('relatedInstagramProfile:id,username,display_name,profile_url,profile_image_url,is_private,profile_visibility,posts_count,followers_count,following_count')
+                ->with('relatedInstagramProfile:'.$profileColumns)
                 ->where('source_instagram_profile_id', $targetProfile->id)
-                ->where('list_type', 'profile_suggestions')
+                ->whereIn('list_type', $relationshipListTypes)
                 ->where('status', 'active')
                 ->latest('last_seen_at')
-                ->limit(1000)
-                ->get()
-                ->each(function (InstagramProfileRelationship $relationship) use (&$seeds): void {
+                ->limit(5000)
+                ->get(['id', 'related_instagram_profile_id', 'list_type', 'display_name_snapshot', 'profile_url_snapshot', 'last_seen_at'])
+                ->each(function (InstagramProfileRelationship $relationship) use ($addSeed, $profileAttributes): void {
                     $relatedProfile = $relationship->relatedInstagramProfile;
-                    $username = $this->scraper->normalizeInstagramUsername($relatedProfile?->username);
 
-                    if ($username === null) {
-                        return;
-                    }
+                    $addSeed(
+                        $relatedProfile?->username,
+                        $profileAttributes($relatedProfile, $relationship),
+                        [$relationship->list_type, 'target_direct_'.$relationship->list_type],
+                    );
+                });
 
-                    $seeds[$username] = [
-                        ...($seeds[$username] ?? []),
-                        'username' => $username,
-                        'displayName' => $this->nullableTrim($relatedProfile?->display_name ?? $relationship->display_name_snapshot ?? null),
-                        'profileUrl' => $this->nullableTrim($relatedProfile?->profile_url ?? $relationship->profile_url_snapshot ?? null)
-                            ?: 'https://www.instagram.com/'.$username.'/',
-                        'profileImageUrl' => $this->nullableTrim($relatedProfile?->profile_image_url ?? null),
-                        'profileVisibility' => $relatedProfile?->profile_visibility,
-                        'isPrivate' => is_bool($relatedProfile?->is_private) ? $relatedProfile->is_private : null,
-                        'postsCount' => is_numeric($relatedProfile?->posts_count) ? (int) $relatedProfile->posts_count : null,
-                        'followersCount' => is_numeric($relatedProfile?->followers_count) ? (int) $relatedProfile->followers_count : null,
-                        'followingCount' => is_numeric($relatedProfile?->following_count) ? (int) $relatedProfile->following_count : null,
-                    ];
+            InstagramProfileRelationship::query()
+                ->with('sourceInstagramProfile:'.$profileColumns)
+                ->where('related_instagram_profile_id', $targetProfile->id)
+                ->whereIn('list_type', $relationshipListTypes)
+                ->where('status', 'active')
+                ->latest('last_seen_at')
+                ->limit(5000)
+                ->get(['id', 'source_instagram_profile_id', 'list_type', 'display_name_snapshot', 'profile_url_snapshot', 'last_seen_at'])
+                ->each(function (InstagramProfileRelationship $relationship) use ($addSeed, $profileAttributes): void {
+                    $sourceProfile = $relationship->sourceInstagramProfile;
+
+                    $addSeed(
+                        $sourceProfile?->username,
+                        $profileAttributes($sourceProfile, $relationship),
+                        [$relationship->list_type, 'inverse_'.$relationship->list_type],
+                    );
+                });
+        }
+
+        if ($trackedPerson) {
+            TrackedPersonInstagramInferredConnection::query()
+                ->with('candidateInstagramProfile:'.$profileColumns)
+                ->where('tracked_person_id', $trackedPerson->id)
+                ->whereIn('relationship_type', ['suggestion_connection', 'follows_target', 'followed_by_target'])
+                ->where('status', 'active')
+                ->latest('last_seen_at')
+                ->limit(5000)
+                ->get([
+                    'candidate_username',
+                    'candidate_instagram_profile_id',
+                    'candidate_display_name',
+                    'candidate_profile_url',
+                    'relationship_type',
+                    'source_lists',
+                    'last_seen_at',
+                ])
+                ->each(function (TrackedPersonInstagramInferredConnection $connection) use ($addSeed, $profileAttributes): void {
+                    $candidateProfile = $connection->candidateInstagramProfile;
+                    $sourceLists = is_array($connection->source_lists) ? $connection->source_lists : [];
+
+                    $addSeed(
+                        $candidateProfile?->username ?: $connection->candidate_username,
+                        [
+                            ...$profileAttributes($candidateProfile),
+                            'displayName' => $this->nullableTrim($candidateProfile?->display_name ?? $connection->candidate_display_name ?? null),
+                            'profileUrl' => $this->nullableTrim($candidateProfile?->profile_url ?? $connection->candidate_profile_url ?? null),
+                            'lastInferredAt' => $connection->last_seen_at?->toIso8601String(),
+                        ],
+                        [
+                            ...$sourceLists,
+                            'inferred_'.$connection->relationship_type,
+                        ],
+                    );
                 });
         }
 
@@ -1438,7 +1546,7 @@ class TrackedPersonInstagramSuggestionScanService
             $scanQuery->where('instagram_profile_id', $profile->id);
         }
 
-        $scanQuery->get()->each(function (TrackedPersonInstagramSuggestionScan $scan) use (&$seeds): void {
+        $scanQuery->get()->each(function (TrackedPersonInstagramSuggestionScan $scan) use ($addSeed): void {
             $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
 
             if ($this->isSuggestionDeepSearchPayload($payload)) {
@@ -1456,19 +1564,7 @@ class TrackedPersonInstagramSuggestionScanService
                 $payload['suggestionConnections'] ?? [],
             ] as $items) {
                 foreach ($this->normalizeObservedSuggestionItems($items) as $item) {
-                    $username = $this->scraper->normalizeInstagramUsername($item['username'] ?? null);
-
-                    if ($username === null) {
-                        continue;
-                    }
-
-                    $seeds[$username] = [
-                        ...($seeds[$username] ?? []),
-                        ...$item,
-                        'username' => $username,
-                        'profileUrl' => $this->nullableTrim($item['profileUrl'] ?? null)
-                            ?: 'https://www.instagram.com/'.$username.'/',
-                    ];
+                    $addSeed($item['username'] ?? null, $item, ['previous_suggestion_scan']);
                 }
             }
         });
@@ -1543,7 +1639,7 @@ class TrackedPersonInstagramSuggestionScanService
             $skippedReason = is_scalar($item['skippedReason'] ?? null) ? (string) $item['skippedReason'] : null;
 
             // Exclude already-saved matches or permanently dismissed non-matches
-            if (in_array($skippedReason, ['already-saved-match', 'already-dismissed-no-match', 'already-known-suggestion'], true)) {
+            if (in_array($skippedReason, ['already-saved-match', 'already-dismissed-no-match', 'already-known-suggestion', 'recently-checked-suggestion'], true)) {
                 continue;
             }
 
@@ -1584,17 +1680,82 @@ class TrackedPersonInstagramSuggestionScanService
         ?TrackedPerson $trackedPerson,
         ?InstagramProfile $profile,
         int $noMatchSkipAfter,
+        int $recheckHours = self::SUGGESTION_CANDIDATE_RECHECK_HOURS,
     ): array {
         $history = [];
+        $recheckHours = max(1, $recheckHours);
+        $recheckCutoff = now('UTC')->subHours($recheckHours);
+
+        $normalizeUsername = function (mixed $rawUsername): ?string {
+            return $this->scraper->normalizeInstagramUsername(is_scalar($rawUsername) ? (string) $rawUsername : null);
+        };
+        $touchHistory = function (mixed $rawUsername, array $attributes = []) use (&$history, $normalizeUsername): ?string {
+            $username = $normalizeUsername($rawUsername);
+
+            if ($username === null) {
+                return null;
+            }
+
+            $history[$username] = [
+                ...($history[$username] ?? []),
+                'noMatchChecks' => (int) ($history[$username]['noMatchChecks'] ?? 0),
+                'permanentlyDismissed' => (bool) ($history[$username]['permanentlyDismissed'] ?? false),
+                ...$attributes,
+            ];
+
+            return $username;
+        };
+        $markChecked = function (mixed $rawUsername, mixed $checkedAt = null) use (&$history, $touchHistory, $recheckHours, $recheckCutoff): ?string {
+            $username = $touchHistory($rawUsername);
+
+            if ($username === null) {
+                return null;
+            }
+
+            $checkedAt = $this->parseSuggestionHistoryTimestamp($checkedAt) ?: now('UTC');
+            $previousCheckedAt = $this->parseSuggestionHistoryTimestamp($history[$username]['lastCheckedAt'] ?? null);
+
+            if ($previousCheckedAt === null || $checkedAt->greaterThan($previousCheckedAt)) {
+                $history[$username]['lastCheckedAt'] = $checkedAt->toIso8601String();
+                $history[$username]['recheckAfter'] = $checkedAt->copy()->addHours($recheckHours)->toIso8601String();
+                $history[$username]['recentlyChecked'] = $checkedAt->greaterThanOrEqualTo($recheckCutoff);
+            } else {
+                $history[$username]['recentlyChecked'] = (bool) ($history[$username]['recentlyChecked'] ?? false)
+                    || $previousCheckedAt->greaterThanOrEqualTo($recheckCutoff);
+            }
+
+            return $username;
+        };
+        $markSuggestionProfileScanned = function (mixed $rawUsername, mixed $scannedAt = null) use (&$history, $touchHistory, $recheckHours, $recheckCutoff): ?string {
+            $username = $touchHistory($rawUsername);
+
+            if ($username === null) {
+                return null;
+            }
+
+            $scannedAt = $this->parseSuggestionHistoryTimestamp($scannedAt) ?: now('UTC');
+            $previousScannedAt = $this->parseSuggestionHistoryTimestamp($history[$username]['lastSuggestionProfileScanAt'] ?? null);
+
+            if ($previousScannedAt === null || $scannedAt->greaterThan($previousScannedAt)) {
+                $history[$username]['lastSuggestionProfileScanAt'] = $scannedAt->toIso8601String();
+                $history[$username]['suggestionProfileRecheckAfter'] = $scannedAt->copy()->addHours($recheckHours)->toIso8601String();
+                $history[$username]['recentlySuggestionProfileScanned'] = $scannedAt->greaterThanOrEqualTo($recheckCutoff);
+            } else {
+                $history[$username]['recentlySuggestionProfileScanned'] = (bool) ($history[$username]['recentlySuggestionProfileScanned'] ?? false)
+                    || $previousScannedAt->greaterThanOrEqualTo($recheckCutoff);
+            }
+
+            return $username;
+        };
 
         if ($trackedPerson) {
             TrackedPersonInstagramInferredConnection::query()
                 ->where('tracked_person_id', $trackedPerson->id)
-                ->where('relationship_type', 'suggestion_connection')
+                ->whereIn('relationship_type', ['suggestion_connection', 'follows_target', 'followed_by_target'])
                 ->where('status', 'active')
-                ->get(['candidate_username'])
-                ->each(function (TrackedPersonInstagramInferredConnection $connection) use (&$history): void {
-                    $username = $this->scraper->normalizeInstagramUsername($connection->candidate_username);
+                ->get(['candidate_username', 'relationship_type', 'last_seen_at'])
+                ->each(function (TrackedPersonInstagramInferredConnection $connection) use (&$history, $markChecked): void {
+                    $username = $markChecked($connection->candidate_username, $connection->last_seen_at);
 
                     if ($username === null) {
                         return;
@@ -1603,7 +1764,7 @@ class TrackedPersonInstagramSuggestionScanService
                     $history[$username] = [
                         ...($history[$username] ?? []),
                         'hasMatch' => true,
-                        'knownSuggestion' => true,
+                        'knownSuggestion' => (bool) (($history[$username]['knownSuggestion'] ?? false) || $connection->relationship_type === 'suggestion_connection'),
                         'knownProfile' => true,
                         'noMatchChecks' => (int) ($history[$username]['noMatchChecks'] ?? 0),
                         'permanentlyDismissed' => false,
@@ -1621,8 +1782,8 @@ class TrackedPersonInstagramSuggestionScanService
                 ->where('source_instagram_profile_id', $profile->id)
                 ->where('status', 'active')
                 ->get(['id', 'related_instagram_profile_id', 'list_type'])
-                ->each(function (InstagramProfileRelationship $relationship) use (&$history): void {
-                    $username = $this->scraper->normalizeInstagramUsername($relationship->relatedInstagramProfile?->username);
+                ->each(function (InstagramProfileRelationship $relationship) use (&$history, $touchHistory): void {
+                    $username = $touchHistory($relationship->relatedInstagramProfile?->username);
 
                     if ($username === null) {
                         return;
@@ -1651,9 +1812,10 @@ class TrackedPersonInstagramSuggestionScanService
         }
 
         $scanQuery->get()
-            ->each(function (TrackedPersonInstagramSuggestionScan $scan) use (&$history, $noMatchSkipAfter): void {
+            ->each(function (TrackedPersonInstagramSuggestionScan $scan) use (&$history, $noMatchSkipAfter, $markChecked, $markSuggestionProfileScanned, $touchHistory, $recheckCutoff): void {
                 $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
                 $scanPayload = $this->suggestionPayload($payload);
+                $scanCheckedAt = $scan->analyzed_at ?: $scan->created_at;
 
                 foreach ([
                     $scanPayload['observedSuggestions'] ?? [],
@@ -1662,7 +1824,7 @@ class TrackedPersonInstagramSuggestionScanService
                     $scanPayload['skippedCandidates'] ?? [],
                 ] as $items) {
                     foreach ($this->normalizeObservedSuggestionItems($items) as $item) {
-                        $username = $this->scraper->normalizeInstagramUsername($item['username'] ?? null);
+                        $username = $touchHistory($item['username'] ?? null);
 
                         if ($username === null) {
                             continue;
@@ -1675,11 +1837,19 @@ class TrackedPersonInstagramSuggestionScanService
                             'noMatchChecks' => (int) ($history[$username]['noMatchChecks'] ?? 0),
                             'permanentlyDismissed' => (bool) ($history[$username]['permanentlyDismissed'] ?? false),
                         ];
+
+                        if ((bool) ($item['recentlyChecked'] ?? false) || filled($item['lastCheckedAt'] ?? null)) {
+                            $markChecked($username, $item['lastCheckedAt'] ?? $scanCheckedAt);
+                        }
+
+                        if ((bool) ($item['recentlySuggestionProfileScanned'] ?? false) || filled($item['lastSuggestionProfileScanAt'] ?? null)) {
+                            $markSuggestionProfileScanned($username, $item['lastSuggestionProfileScanAt'] ?? $scanCheckedAt);
+                        }
                     }
                 }
 
                 foreach ($this->normalizeSuggestionConnections($payload['suggestionConnections'] ?? []) as $connection) {
-                    $username = $this->scraper->normalizeInstagramUsername($connection['username'] ?? null);
+                    $username = $markChecked($connection['username'] ?? null, $scanCheckedAt);
 
                     if ($username === null) {
                         continue;
@@ -1696,7 +1866,7 @@ class TrackedPersonInstagramSuggestionScanService
                 }
 
                 foreach ($this->normalizeSuggestionConnections($scanPayload['matches'] ?? []) as $connection) {
-                    $username = $this->scraper->normalizeInstagramUsername($connection['username'] ?? null);
+                    $username = $markChecked($connection['username'] ?? null, $scanCheckedAt);
 
                     if ($username === null) {
                         continue;
@@ -1729,6 +1899,25 @@ class TrackedPersonInstagramSuggestionScanService
                         continue;
                     }
 
+                    $checkMode = is_scalar($candidate['checkMode'] ?? null)
+                        ? (string) $candidate['checkMode']
+                        : 'profile-suggestions';
+
+                    if ($checkMode === 'profile-suggestions-level2') {
+                        $markSuggestionProfileScanned($username, $scanCheckedAt);
+                        $history[$username] = [
+                            ...($history[$username] ?? []),
+                            'knownProfile' => true,
+                            'knownSuggestion' => (bool) ($history[$username]['knownSuggestion'] ?? false),
+                            'noMatchChecks' => (int) ($history[$username]['noMatchChecks'] ?? 0),
+                            'permanentlyDismissed' => (bool) ($history[$username]['permanentlyDismissed'] ?? false),
+                        ];
+
+                        continue;
+                    }
+
+                    $markChecked($username, $scanCheckedAt);
+
                     $hasCandidateMatch = (bool) ($candidate['targetFoundAsSuggestion'] ?? false)
                         || (bool) ($candidate['targetFoundInPublicLists'] ?? false)
                         || (bool) ($candidate['targetFoundInFollowers'] ?? false)
@@ -1747,9 +1936,6 @@ class TrackedPersonInstagramSuggestionScanService
                         continue;
                     }
 
-                    $checkMode = is_scalar($candidate['checkMode'] ?? null)
-                        ? (string) $candidate['checkMode']
-                        : 'profile-suggestions';
                     $wasDefinitiveNoMatch = (bool) ($candidate['checked'] ?? false)
                         && ! filled($candidate['error'] ?? null)
                         && (
@@ -1765,20 +1951,50 @@ class TrackedPersonInstagramSuggestionScanService
                     }
 
                     $noMatchChecks = (int) ($history[$username]['noMatchChecks'] ?? 0) + 1;
+                    $recentlyChecked = $this->parseSuggestionHistoryTimestamp($history[$username]['lastCheckedAt'] ?? null)
+                        ?->greaterThanOrEqualTo($recheckCutoff) ?? false;
                     $history[$username] = [
                         ...($history[$username] ?? []),
                         'hasMatch' => false,
                         'noMatchChecks' => $noMatchChecks,
-                        'permanentlyDismissed' => $noMatchChecks >= $noMatchSkipAfter
+                        'recentlyChecked' => $recentlyChecked,
+                        'permanentlyDismissed' => $recentlyChecked && ($noMatchChecks >= $noMatchSkipAfter
                             || (
                                 $noMatchSkipAfter <= 2
                                 && (bool) ($candidate['finalDismissedAfterSecondMiss'] ?? false)
-                            ),
+                            )),
                     ];
                 }
             });
 
         return $history;
+    }
+
+    private function parseSuggestionHistoryTimestamp(mixed $value): ?Carbon
+    {
+        if ($value instanceof Carbon) {
+            return $value->copy()->timezone('UTC');
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return Carbon::instance($value)->timezone('UTC');
+        }
+
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+
+        if ($value === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($value)->timezone('UTC');
+        } catch (\Throwable) {
+            return null;
+        }
     }
 
     private function normalizeSuggestionConnections(mixed $connections): array
@@ -1916,7 +2132,7 @@ class TrackedPersonInstagramSuggestionScanService
 
             $skippedReason = $this->nullableTrim($item['skippedReason'] ?? null);
             $alreadyKnown = (bool) ($item['alreadyKnown'] ?? false)
-                || in_array($skippedReason, ['already-saved-match', 'already-scanned-suggestion', 'already-known-suggestion'], true)
+                || in_array($skippedReason, ['already-saved-match', 'already-scanned-suggestion', 'already-known-suggestion', 'recently-checked-suggestion'], true)
                 || (bool) ($item['previousTargetFoundAsSuggestion'] ?? false);
 
             $normalized[$username] = [
@@ -1932,12 +2148,28 @@ class TrackedPersonInstagramSuggestionScanService
                 'postsCount' => is_numeric($item['postsCount'] ?? null) ? (int) $item['postsCount'] : null,
                 'followersCount' => is_numeric($item['followersCount'] ?? null) ? (int) $item['followersCount'] : null,
                 'followingCount' => is_numeric($item['followingCount'] ?? null) ? (int) $item['followingCount'] : null,
+                'sourceLists' => is_array($item['sourceLists'] ?? null)
+                    ? array_values(array_filter(array_map(
+                        static fn ($value): string => is_scalar($value) ? trim((string) $value) : '',
+                        $item['sourceLists'],
+                    )))
+                    : [],
+                'suggestionLevel' => is_numeric($item['suggestionLevel'] ?? null) ? (int) $item['suggestionLevel'] : null,
+                'checkMode' => $this->nullableTrim($item['checkMode'] ?? null),
+                'deepSearchBranch' => (bool) ($item['deepSearchBranch'] ?? false),
+                'sourceSeedUsername' => $this->scraper->normalizeInstagramUsername($item['sourceSeedUsername'] ?? null),
                 'checked' => array_key_exists('checked', $item) ? (bool) $item['checked'] : false,
                 'skipped' => array_key_exists('skipped', $item) ? (bool) $item['skipped'] : false,
                 'matched' => array_key_exists('matched', $item) ? (bool) $item['matched'] : false,
                 'alreadyKnown' => $alreadyKnown,
                 'dismissedFromSuggestions' => (bool) ($item['dismissedFromSuggestions'] ?? false),
                 'skippedReason' => $skippedReason,
+                'recentlyChecked' => (bool) ($item['recentlyChecked'] ?? false),
+                'lastCheckedAt' => $this->nullableTrim($item['lastCheckedAt'] ?? null),
+                'recheckAfter' => $this->nullableTrim($item['recheckAfter'] ?? null),
+                'recentlySuggestionProfileScanned' => (bool) ($item['recentlySuggestionProfileScanned'] ?? false),
+                'lastSuggestionProfileScanAt' => $this->nullableTrim($item['lastSuggestionProfileScanAt'] ?? null),
+                'suggestionProfileRecheckAfter' => $this->nullableTrim($item['suggestionProfileRecheckAfter'] ?? null),
                 'previousNoMatchChecks' => is_numeric($item['previousNoMatchChecks'] ?? null)
                     ? max(0, (int) $item['previousNoMatchChecks'])
                     : null,
@@ -1967,6 +2199,8 @@ class TrackedPersonInstagramSuggestionScanService
                     'checked' => (bool) (($merged[$username]['checked'] ?? false) || ($item['checked'] ?? false)),
                     'skipped' => (bool) (($merged[$username]['skipped'] ?? false) || ($item['skipped'] ?? false)),
                     'matched' => (bool) (($merged[$username]['matched'] ?? false) || ($item['matched'] ?? false)),
+                    'recentlyChecked' => (bool) (($merged[$username]['recentlyChecked'] ?? false) || ($item['recentlyChecked'] ?? false)),
+                    'recentlySuggestionProfileScanned' => (bool) (($merged[$username]['recentlySuggestionProfileScanned'] ?? false) || ($item['recentlySuggestionProfileScanned'] ?? false)),
                 ];
             }
         }

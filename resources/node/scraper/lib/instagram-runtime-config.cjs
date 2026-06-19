@@ -15,13 +15,41 @@ function normalizeSuggestionCandidateHistory(value = {}, helpers = {}) {
 
     const state = rawState && typeof rawState === 'object' && !Array.isArray(rawState) ? rawState : {};
     const noMatchChecks = Math.max(0, Math.floor(Number(state.noMatchChecks || state.no_match_checks || 0)));
+    const lastCheckedAt = String(state.lastCheckedAt || state.last_checked_at || '').trim() || null;
+    const recheckAfter = String(state.recheckAfter || state.recheck_after || '').trim() || null;
+    const lastSuggestionProfileScanAt = String(
+      state.lastSuggestionProfileScanAt
+      || state.last_suggestion_profile_scan_at
+      || state.lastProfileSuggestionScanAt
+      || state.last_profile_suggestion_scan_at
+      || '',
+    ).trim() || null;
+    const suggestionProfileRecheckAfter = String(
+      state.suggestionProfileRecheckAfter
+      || state.suggestion_profile_recheck_after
+      || state.profileSuggestionRecheckAfter
+      || state.profile_suggestion_recheck_after
+      || '',
+    ).trim() || null;
 
     history[username] = {
       hasMatch: state.hasMatch === true || state.has_match === true,
+      knownSuggestion: state.knownSuggestion === true || state.known_suggestion === true,
+      knownProfile: state.knownProfile === true || state.known_profile === true,
       noMatchChecks,
       permanentlyDismissed:
         state.permanentlyDismissed === true
         || state.permanently_dismissed === true,
+      recentlyChecked: state.recentlyChecked === true || state.recently_checked === true,
+      lastCheckedAt,
+      recheckAfter,
+      recentlySuggestionProfileScanned:
+        state.recentlySuggestionProfileScanned === true
+        || state.recently_suggestion_profile_scanned === true
+        || state.recentlyProfileSuggestionScanned === true
+        || state.recently_profile_suggestion_scanned === true,
+      lastSuggestionProfileScanAt,
+      suggestionProfileRecheckAfter,
     };
   }
 
@@ -169,6 +197,14 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
     suggestionNoMatchSkipAfter: Math.min(
       100,
       Math.floor(normalizeNumberAtLeast(input?.suggestionNoMatchSkipAfter, merged.suggestionNoMatchSkipAfter || 2, 1)),
+    ),
+    suggestionCandidateRecheckHours: Math.min(
+      168,
+      Math.floor(normalizeNumberAtLeast(
+        input?.suggestionCandidateRecheckHours || input?.suggestion_candidate_recheck_hours,
+        merged.suggestionCandidateRecheckHours || 48,
+        1,
+      )),
     ),
     suggestionMaxScraperProfileSwitches: Math.min(
       10,

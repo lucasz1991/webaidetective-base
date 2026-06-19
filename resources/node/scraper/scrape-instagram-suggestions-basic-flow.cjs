@@ -2,8 +2,8 @@
 
 // Basic-Flow fuer Instagram-Vorschlaege: Erkennt Vorschlaege und prueft sie direkt
 // (oeffentliche Profile: Followers/Following-Listen; private Profile: Kandidaten-Vorschlaege).
-// Implementierung: nutzt die bestehende Kernfunktion aus scrape-instagram-suggestions.cjs mit deepSearch=true,
-// erzwingt dabei aber ohne History-Skip eine vollstaendige erneute Pruefung und setzt passende Scan-Metadaten.
+// Implementierung: nutzt die bestehende Kernfunktion aus scrape-instagram-suggestions.cjs mit deepSearch=true
+// und respektiert dabei die konfigurierte History-/Recheck-Grenze.
 
 const { runProfileSuggestionConnectionScan: runProfileSuggestionConnectionScanCore } = require('./scrape-instagram-suggestions.cjs');
 
@@ -19,8 +19,8 @@ async function runInstagramSuggestionsBasicFlow(
   const originalRuntimeConfig = runtimeState.runtimeConfig || {};
   const runtimeConfig = {
     ...originalRuntimeConfig,
-    // Fuer den Basic-Lauf standardmaessig alles neu pruefen (kein History-Skip)
-    suggestionSkipPreviouslyChecked: false,
+    // Der Basic-Lauf prueft nur Kandidaten, deren Recheck-Fenster abgelaufen ist.
+    suggestionSkipPreviouslyChecked: originalRuntimeConfig.suggestionSkipPreviouslyChecked !== false,
     // Basic-Lauf soll nichts aggressiv aus der UI entfernen
     suggestionDismissChecked: false,
   };
