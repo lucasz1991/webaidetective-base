@@ -16,6 +16,7 @@ class InstagramPostScan extends Model
         'tracked_person_id',
         'snapshot_id',
         'user_id',
+        'instagram_username',
         'status_level',
         'status_message',
         'attempted',

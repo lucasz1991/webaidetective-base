@@ -133,6 +133,14 @@
                                 <button
                                     type="button"
                                     @click="$dispatch('close')"
+                                    wire:click="$dispatch('open-instagram-scan-costs-modal')"
+                                    class="w-full rounded-3xl px-3 py-2 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                                >
+                                    Scan-Kosten
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="$dispatch('close')"
                                     wire:click="scanInstagramSuggestions"
                                     wire:loading.attr="disabled"
                                     wire:target="scanInstagramSuggestions"
@@ -307,6 +315,11 @@
     <livewire:user.tracked-person-relationship-lists
         :tracked-person-id="$trackedPerson->id"
         :key="'tracked-person-relationship-lists-'.$trackedPerson->id"
+    />
+
+    <livewire:user.instagram-scan-costs-modal
+        :tracked-person-id="$trackedPerson->id"
+        :key="'instagram-scan-costs-tracked-person-'.$trackedPerson->id"
     />
 
     <x-modal wire:model="showSettingsModal" maxWidth="2xl">

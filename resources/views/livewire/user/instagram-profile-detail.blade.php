@@ -188,6 +188,15 @@
                         <div class="my-2 border-t border-slate-100"></div>
                         <div class="px-3 pb-1 pt-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">Aktionen</div>
 
+                        <button
+                            type="button"
+                            @click="$dispatch('close')"
+                            wire:click="$dispatch('open-instagram-scan-costs-modal')"
+                            class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                        >
+                            Scan-Kosten
+                        </button>
+
                         @if($trackedPerson)
                             <a
                                 href="{{ route('tracked-people.show', $trackedPerson->id) }}"
@@ -323,46 +332,10 @@
         empty-text="Noch keine Beitraege gespeichert."
     />
 
-    <section class="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-        <div class="flex flex-wrap items-start justify-between gap-4">
-            <div>
-                <p class="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Scan-Kosten</p>
-                <h2 class="mt-1 text-lg font-bold text-slate-950">Credits werden fuer jeden Lauf gespeichert</h2>
-                <p class="mt-1 text-sm text-slate-500">
-                    Basis {{ number_format($scanCostSummary['base'], 0, ',', '.') }} +
-                    {{ number_format($scanCostSummary['per_minute'], 0, ',', '.') }} Credits je angefangener Minute,
-                    maximal {{ number_format($scanCostSummary['max_minutes'], 0, ',', '.') }} Minuten.
-                    Downloads kosten zusaetzlich {{ number_format($scanCostSummary['media_download'], 0, ',', '.') }} Credits je Datei.
-                </p>
-            </div>
-            <div class="rounded-2xl bg-slate-950 px-4 py-3 text-white">
-                <div class="text-[10px] font-semibold uppercase tracking-wide text-slate-300">Verfuegbar</div>
-                <div class="mt-1 text-xl font-bold">
-                    {{ number_format((int) (($creditWallet?->available_credits ?? 0) + ($creditWallet?->bonus_credits ?? 0)), 0, ',', '.') }}
-                </div>
-                <div class="text-xs text-slate-300">Credits</div>
-            </div>
-        </div>
-
-        <div class="mt-5 border-t border-slate-200 pt-4">
-            <h3 class="text-sm font-bold text-slate-950">Letzte Kosten fuer {{ $profile->display_handle }}</h3>
-            <div class="mt-3 space-y-2">
-                @forelse($recentScanTransactions as $transaction)
-                    <div class="flex items-center justify-between gap-4 rounded-2xl bg-slate-50 px-3 py-2 text-sm">
-                        <div class="min-w-0">
-                            <div class="truncate font-semibold text-slate-800">{{ $transaction->description }}</div>
-                            <div class="text-xs text-slate-500">{{ $transaction->created_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') }}</div>
-                        </div>
-                        <div class="shrink-0 font-bold text-rose-700">
-                            {{ number_format(abs((int) $transaction->amount), 0, ',', '.') }} Credits
-                        </div>
-                    </div>
-                @empty
-                    <p class="text-sm text-slate-500">Fuer dieses Profil wurden noch keine Scan-Kosten gebucht.</p>
-                @endforelse
-            </div>
-        </div>
-    </section>
+    <livewire:user.instagram-scan-costs-modal
+        :instagram-profile-id="$profile->id"
+        :key="'instagram-scan-costs-profile-'.$profile->id"
+    />
 
     <x-instagram-profile-list-modal
         model="showListModal"

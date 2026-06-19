@@ -16,6 +16,10 @@ class InstagramPostMediaStorage
 
     private const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
 
+    public function __construct(
+        private readonly InstagramMediaAssetStore $mediaAssets,
+    ) {}
+
     public function storeForPost(InstagramPost $post, array $mediaItems): void
     {
         $mediaItems = collect($mediaItems)
@@ -116,6 +120,22 @@ class InstagramPostMediaStorage
             return $this->failedResult('Keine gueltige Medien-URL vorhanden.');
         }
 
+        $username = $this->mediaAssets->normalizeUsername($post->instagramProfile?->username)
+            ?: 'profile-'.$post->instagram_profile_id;
+        $assetRole = $fileRole === 'preview' ? 'post_preview' : 'post_media';
+        $cachedByUrl = $this->mediaAssets->findReusableByUrl($username, $assetRole, $expectedType, $url);
+
+        if ($cachedByUrl) {
+            return [
+                'ok' => true,
+                'storage_path' => $cachedByUrl->storage_path,
+                'mime_type' => $cachedByUrl->mime_type,
+                'file_size' => $cachedByUrl->file_size,
+                'content_hash' => $cachedByUrl->content_hash,
+                'error' => null,
+            ];
+        }
+
         $temporaryDirectory = storage_path('app/tmp/instagram-post-media');
         File::ensureDirectoryExists($temporaryDirectory);
         $temporaryPath = $temporaryDirectory.DIRECTORY_SEPARATOR.Str::uuid().'.download';
@@ -168,7 +188,38 @@ class InstagramPostMediaStorage
 
         $contentHash = hash_file('sha256', $temporaryPath);
         $extension = $this->extension($mimeType, $url, $expectedType);
-        $username = Str::lower((string) $post->instagramProfile?->username) ?: 'profile-'.$post->instagram_profile_id;
+        $cachedByHash = $this->mediaAssets->findReusableByHash($username, $assetRole, $expectedType, $contentHash);
+
+        if ($cachedByHash) {
+            File::delete($temporaryPath);
+
+            $this->mediaAssets->remember(
+                $username,
+                $assetRole,
+                $expectedType,
+                $url,
+                $contentHash,
+                $cachedByHash->storage_path,
+                $cachedByHash->mime_type ?: $mimeType,
+                $cachedByHash->file_size ?: $fileSize,
+                [
+                    'shortcode' => $post->shortcode,
+                    'position' => $position,
+                    'file_role' => $fileRole,
+                    'dedupe' => 'hash',
+                ],
+            );
+
+            return [
+                'ok' => true,
+                'storage_path' => $cachedByHash->storage_path,
+                'mime_type' => $cachedByHash->mime_type ?: ($mimeType ?: null),
+                'file_size' => $cachedByHash->file_size ?: $fileSize,
+                'content_hash' => $contentHash,
+                'error' => null,
+            ];
+        }
+
         $relativePath = sprintf(
             'instagram-posts/%s/%s/%02d-%s-%s.%s',
             trim($username, '@/'),
@@ -192,6 +243,22 @@ class InstagramPostMediaStorage
         }
 
         File::delete($temporaryPath);
+
+        $this->mediaAssets->remember(
+            $username,
+            $assetRole,
+            $expectedType,
+            $url,
+            $contentHash,
+            $relativePath,
+            $mimeType ?: null,
+            $fileSize,
+            [
+                'shortcode' => $post->shortcode,
+                'position' => $position,
+                'file_role' => $fileRole,
+            ],
+        );
 
         return [
             'ok' => true,

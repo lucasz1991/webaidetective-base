@@ -12,12 +12,28 @@ class InstagramProfileImageStorage
 {
     private const MAX_IMAGE_BYTES = 5242880;
 
+    public function __construct(
+        private readonly InstagramMediaAssetStore $mediaAssets,
+    ) {}
+
     public function storeFromUrl(InstagramProfile $profile, ?string $imageUrl): ?string
     {
         $imageUrl = $this->normalizeImageUrl($imageUrl);
+        $username = $this->mediaAssets->normalizeUsername($profile->username);
 
-        if ($imageUrl === null || blank($profile->username)) {
+        if ($imageUrl === null || $username === null) {
             return null;
+        }
+
+        $cachedByUrl = $this->mediaAssets->findReusableByUrl($username, 'profile_image', 'image', $imageUrl);
+
+        if ($cachedByUrl) {
+            $profile->forceFill([
+                'profile_image_path' => $cachedByUrl->storage_path,
+                'profile_image_hash' => $cachedByUrl->content_hash ?: $profile->profile_image_hash,
+            ])->save();
+
+            return $cachedByUrl->storage_path;
         }
 
         try {
@@ -64,17 +80,64 @@ class InstagramProfileImageStorage
 
         $contentHash = hash('sha256', $body);
 
-        if ($profile->profile_image_hash === $contentHash && filled($profile->profile_image_path)) {
+        if (
+            $profile->profile_image_hash === $contentHash
+            && filled($profile->profile_image_path)
+            && Storage::disk('public')->exists($profile->profile_image_path)
+        ) {
+            $this->mediaAssets->remember(
+                $username,
+                'profile_image',
+                'image',
+                $imageUrl,
+                $contentHash,
+                $profile->profile_image_path,
+                $response->header('Content-Type'),
+                strlen($body),
+            );
+
             return $profile->profile_image_path;
         }
 
+        $cachedByHash = $this->mediaAssets->findReusableByHash($username, 'profile_image', 'image', $contentHash);
+
+        if ($cachedByHash) {
+            $this->mediaAssets->remember(
+                $username,
+                'profile_image',
+                'image',
+                $imageUrl,
+                $contentHash,
+                $cachedByHash->storage_path,
+                $cachedByHash->mime_type ?: $response->header('Content-Type'),
+                $cachedByHash->file_size ?: strlen($body),
+            );
+
+            $profile->forceFill([
+                'profile_image_path' => $cachedByHash->storage_path,
+                'profile_image_hash' => $contentHash,
+            ])->save();
+
+            return $cachedByHash->storage_path;
+        }
+
         $extension = $this->guessExtension($response->header('Content-Type'), $imageUrl);
-        $username = Str::lower(ltrim((string) $profile->username, '@'));
         $relativePath = 'instagram-profiles/'.$username.'/profile-'.substr($contentHash, 0, 20).'.'.$extension;
 
         if (! Storage::disk('public')->exists($relativePath)) {
             Storage::disk('public')->put($relativePath, $body);
         }
+
+        $this->mediaAssets->remember(
+            $username,
+            'profile_image',
+            'image',
+            $imageUrl,
+            $contentHash,
+            $relativePath,
+            $response->header('Content-Type'),
+            strlen($body),
+        );
 
         $profile->forceFill([
             'profile_image_path' => $relativePath,

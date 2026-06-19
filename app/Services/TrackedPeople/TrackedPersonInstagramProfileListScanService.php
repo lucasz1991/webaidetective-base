@@ -12,6 +12,7 @@ use App\Services\Social\InstagramScraper;
 use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class TrackedPersonInstagramProfileListScanService
@@ -22,6 +23,7 @@ class TrackedPersonInstagramProfileListScanService
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
+        private readonly InstagramScanEventStore $scanEvents,
     ) {}
 
     private ?array $activeScanControl = null;
@@ -132,6 +134,38 @@ class TrackedPersonInstagramProfileListScanService
             $expectedOverride = $relationship === 'followers' ? 'expectedFollowerCount' : 'expectedFollowingCount';
             $expectedCount = $relationship === 'followers' ? $profile->followers_count : $profile->following_count;
             $previousActiveItems = $this->activeRelationshipItems($profile, $relationship);
+            $progressScan = $this->profileRelationshipStore->startDirectRelationshipListScan(
+                $profile,
+                $contextPerson,
+                $relationship,
+                'network_map_profile_list',
+                $userId,
+                $expectedCount !== null ? max(0, (int) $expectedCount) : null,
+                $label.' von @'.$username.' wird gestartet; Fortschritt wird gespeichert.',
+            );
+            $scanProgress = $this->createScanEventProgressCallback(
+                $progress,
+                $progressScan,
+                $username,
+                $contextPerson?->id,
+                $userId,
+            );
+
+            if ($progressScan) {
+                $this->scanEvents->started(
+                    'instagram_profile_list_scan',
+                    $progressScan,
+                    $username,
+                    $contextPerson?->id,
+                    $userId,
+                    $label.' von @'.$username.' wurde gestartet.',
+                    [
+                        'phase' => $relationship,
+                        'percent' => $start,
+                        'expected' => $expectedCount,
+                    ],
+                );
+            }
 
             // Resume-Entscheidung: Fuer grosse Listen (>= 250) und unvollstaendigen letzten Lauf direkt die alphabetische Suche nutzen
             $shouldResumeViaSearch = false;
@@ -160,7 +194,7 @@ class TrackedPersonInstagramProfileListScanService
                 ];
             }
 
-            $this->reportProgress($progress, [
+            $this->reportProgress($scanProgress, [
                 'phase' => $relationship,
                 'percent' => $start,
                 'message' => ($shouldResumeViaSearch
@@ -168,14 +202,28 @@ class TrackedPersonInstagramProfileListScanService
                     : $label.' von @'.$username.' wird vorbereitet.'),
             ]);
 
-            $payload = $this->scraper->scrape(
-                $username,
-                $operationMode,
-                $progress,
-                $this->withActiveScanControl($runtimeOverrides),
-                $start,
-                $end,
-            );
+            try {
+                $payload = $this->scraper->scrape(
+                    $username,
+                    $operationMode,
+                    $scanProgress,
+                    $this->withActiveScanControl($runtimeOverrides),
+                    $start,
+                    $end,
+                );
+            } catch (\Throwable $exception) {
+                $this->markProgressScanFailed(
+                    $progressScan,
+                    $username,
+                    $contextPerson?->id,
+                    $userId,
+                    $relationship,
+                    $exception,
+                );
+
+                throw $exception;
+            }
+
             $payload['analyzedAt'] = now('UTC')->toIso8601String();
             $extracted = $this->extractor->extract($payload);
             $listKey = $relationship === 'followers' ? 'followers_list' : 'following_list';
@@ -220,6 +268,7 @@ class TrackedPersonInstagramProfileListScanService
                 $payload,
                 'network_map_profile_list',
                 $userId,
+                $progressScan,
             );
 
             if ($scan instanceof InstagramProfileListScan) {
@@ -230,6 +279,21 @@ class TrackedPersonInstagramProfileListScanService
                     'Instagram-'.($relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' @'.$username,
                 );
                 $scans->push($scan);
+                $this->scanEvents->finished(
+                    'instagram_profile_list_scan',
+                    $scan,
+                    $username,
+                    $contextPerson?->id,
+                    $userId,
+                    $scan->status_message ?: $label.' von @'.$username.' wurde gespeichert.',
+                    [
+                        'phase' => $relationship,
+                        'percent' => $end,
+                        'statusLevel' => $scan->status_level,
+                        'loaded' => $scan->observed_count,
+                        'expected' => $scan->expected_count,
+                    ],
+                );
             }
 
             if ($relationship === 'followers') {
@@ -238,7 +302,7 @@ class TrackedPersonInstagramProfileListScanService
                 $observedFollowing = (int) ($relationshipList['observedCount'] ?? 0);
             }
 
-            $this->reportProgress($progress, [
+            $this->reportProgress($scanProgress, [
                 'phase' => $relationship,
                 'percent' => $end,
                 'message' => $label.' von @'.$username.' wurde gespeichert.',
@@ -265,10 +329,87 @@ class TrackedPersonInstagramProfileListScanService
         return $scans->values();
     }
 
+    private function createScanEventProgressCallback(
+        ?callable $progress,
+        ?InstagramProfileListScan $scan,
+        string $username,
+        ?int $trackedPersonId,
+        int $userId,
+    ): callable {
+        return function (array $state) use ($progress, $scan, $username, $trackedPersonId, $userId): void {
+            try {
+                $this->scanEvents->progress(
+                    'instagram_profile_list_scan',
+                    $scan?->fresh() ?: $scan,
+                    $username,
+                    $trackedPersonId,
+                    $userId,
+                    $state,
+                );
+            } catch (\Throwable) {
+                // Event-Logging darf den Listen-Scan nicht abbrechen.
+            }
+
+            if ($progress) {
+                $progress($state);
+            }
+        };
+    }
+
+    private function markProgressScanFailed(
+        ?InstagramProfileListScan $scan,
+        string $username,
+        ?int $trackedPersonId,
+        int $userId,
+        string $relationship,
+        \Throwable $exception,
+    ): void {
+        if (! $scan) {
+            return;
+        }
+
+        $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
+        $message = ($relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' fehlgeschlagen: '.$exception->getMessage();
+
+        $scan->forceFill([
+            'status_level' => 'error',
+            'status_message' => $message,
+            'raw_payload' => [
+                ...$payload,
+                'ok' => false,
+                'progressStatus' => 'failed',
+                'error' => $exception->getMessage(),
+                'failedAt' => now('UTC')->toIso8601String(),
+            ],
+            'scanned_at' => now('UTC'),
+        ])->save();
+
+        $this->scanEvents->failed(
+            'instagram_profile_list_scan',
+            $scan,
+            $username,
+            $trackedPersonId,
+            $userId,
+            $message,
+            [
+                'phase' => $relationship,
+                'statusLevel' => 'error',
+            ],
+        );
+    }
+
     private function lastListScanFor(InstagramProfile $profile, string $relationship): ?InstagramProfileListScan
     {
+        $username = $this->scraper->normalizeInstagramUsername($profile->username);
+
         return InstagramProfileListScan::query()
-            ->where('instagram_profile_id', $profile->id)
+            ->where(function ($query) use ($profile, $username): void {
+                $query->where('instagram_profile_id', $profile->id);
+
+                if ($username !== null && Schema::hasColumn('instagram_profile_list_scans', 'instagram_username')) {
+                    $query->orWhere('instagram_username', $username);
+                }
+            })
             ->where('list_type', $relationship)
             ->orderByDesc('scanned_at')
             ->orderByDesc('id')
@@ -550,6 +691,6 @@ class TrackedPersonInstagramProfileListScanService
 
     private function lockKey(InstagramProfile $profile): string
     {
-        return 'instagram-profile-list-scan:'.$profile->id;
+        return 'instagram-profile-list-scan:'.($this->scraper->normalizeInstagramUsername($profile->username) ?: $profile->id);
     }
 }

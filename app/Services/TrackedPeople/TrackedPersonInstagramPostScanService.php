@@ -17,6 +17,7 @@ use App\Services\Support\DatabaseKeepAlive;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 
 class TrackedPersonInstagramPostScanService
 {
@@ -26,6 +27,7 @@ class TrackedPersonInstagramPostScanService
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
         private readonly InstagramPostMediaStorage $postMediaStorage,
+        private readonly InstagramScanEventStore $scanEvents,
     ) {}
 
     private ?array $activeScanControl = null;
@@ -79,21 +81,36 @@ class TrackedPersonInstagramPostScanService
             throw new \RuntimeException('Fuer dieses Profil ist kein gueltiger Instagram-Name hinterlegt.');
         }
 
-        $lock = Cache::lock('instagram-profile-post-scan:'.$profile->id, 3600);
+        $lock = Cache::lock('instagram-profile-post-scan:'.$username, 3600);
 
         if (! $lock->get()) {
             throw new \RuntimeException('Fuer dieses Profil laeuft bereits ein Instagram-Beitragsscan.');
         }
 
         try {
+            $progressScan = $this->startProgressScan($profile, $userId, $trackedPerson, $snapshot, $username);
+            $scanProgress = $this->createScanEventProgressCallback(
+                $progress,
+                $progressScan,
+                $username,
+                $trackedPerson?->id,
+                $userId,
+            );
+
             $payload = $this->scraper->scrape(
                 $username,
                 'posts',
-                $progress,
+                $scanProgress,
                 $this->withActiveScanControl([]),
             );
 
-            return $this->storeScan($trackedPerson, $profile, $snapshot, $payload, $userId);
+            return $this->storeScan($trackedPerson, $profile, $snapshot, $payload, $userId, $progressScan);
+        } catch (\Throwable $exception) {
+            if (isset($progressScan) && $progressScan instanceof InstagramPostScan) {
+                $this->markProgressScanFailed($progressScan, $username, $trackedPerson?->id, $userId, $exception);
+            }
+
+            throw $exception;
         } finally {
             $lock->release();
         }
@@ -105,6 +122,7 @@ class TrackedPersonInstagramPostScanService
         ?TrackedPersonInstagramSnapshot $snapshot,
         array $payload,
         int $userId,
+        ?InstagramPostScan $existingScan = null,
     ): InstagramPostScan {
         $this->assertActiveScanCurrent();
         DatabaseKeepAlive::ping(0);
@@ -127,11 +145,12 @@ class TrackedPersonInstagramPostScanService
             $userId,
             $actorProfileIds,
         ): array {
-            $scan = InstagramPostScan::create([
+            $scanData = [
                 'instagram_profile_id' => $profile->id,
                 'tracked_person_id' => $trackedPerson?->id,
                 'snapshot_id' => $snapshot?->id,
                 'user_id' => $userId,
+                'instagram_username' => $this->normalizeUsername($profile->username),
                 'status_level' => (string) ($payload['statusLevel'] ?? $postPayload['statusLevel'] ?? 'unknown'),
                 'status_message' => (string) ($payload['statusMessage'] ?? $postPayload['statusMessage'] ?? 'Instagram-Beitragsscan abgeschlossen.'),
                 'attempted' => (bool) ($postPayload['attempted'] ?? true),
@@ -145,7 +164,10 @@ class TrackedPersonInstagramPostScanService
                 'unchanged_count' => 0,
                 'raw_payload' => $rawPayload,
                 'scanned_at' => $scannedAt,
-            ]);
+            ];
+
+            $scan = $existingScan ?: new InstagramPostScan;
+            $scan->forceFill($this->withOptionalPostScanUsername($scanData))->save();
             $counts = ['new' => 0, 'updated' => 0, 'unchanged' => 0];
             $mediaQueue = [];
 
@@ -288,7 +310,139 @@ class TrackedPersonInstagramPostScanService
             'Instagram-Beitragsscan @'.$profile->username,
         );
 
+        $this->scanEvents->finished(
+            'instagram_post_scan',
+            $scan,
+            $profile->username,
+            $trackedPerson?->id,
+            $userId,
+            $scan->status_message ?: 'Instagram-Beitragsscan abgeschlossen.',
+            [
+                'phase' => 'posts',
+                'statusLevel' => $scan->status_level,
+                'percent' => 100,
+                'loaded' => $scan->observed_count,
+            ],
+        );
+
         return $scan->fresh();
+    }
+
+    private function startProgressScan(
+        InstagramProfile $profile,
+        int $userId,
+        ?TrackedPerson $trackedPerson,
+        ?TrackedPersonInstagramSnapshot $snapshot,
+        string $username,
+    ): InstagramPostScan {
+        $now = now('UTC');
+        $scan = InstagramPostScan::create($this->withOptionalPostScanUsername([
+            'instagram_profile_id' => $profile->id,
+            'tracked_person_id' => $trackedPerson?->id,
+            'snapshot_id' => $snapshot?->id,
+            'user_id' => $userId,
+            'instagram_username' => $username,
+            'status_level' => 'partial',
+            'status_message' => 'Instagram-Beitragsscan laeuft; Fortschritt wird gespeichert.',
+            'attempted' => true,
+            'available' => false,
+            'complete' => false,
+            'rate_limited' => false,
+            'gracefully_stopped' => false,
+            'observed_count' => 0,
+            'new_count' => 0,
+            'updated_count' => 0,
+            'unchanged_count' => 0,
+            'raw_payload' => [
+                'ok' => false,
+                'progressStatus' => 'in_progress',
+                'startedAt' => $now->toIso8601String(),
+                'instagramUsername' => $username,
+            ],
+            'scanned_at' => $now,
+        ]));
+
+        $this->scanEvents->started(
+            'instagram_post_scan',
+            $scan,
+            $username,
+            $trackedPerson?->id,
+            $userId,
+            'Instagram-Beitragsscan @'.$username.' wurde gestartet.',
+            [
+                'phase' => 'posts',
+                'percent' => 0,
+            ],
+        );
+
+        return $scan;
+    }
+
+    private function createScanEventProgressCallback(
+        ?callable $progress,
+        InstagramPostScan $scan,
+        string $username,
+        ?int $trackedPersonId,
+        int $userId,
+    ): callable {
+        return function (array $state) use ($progress, $scan, $username, $trackedPersonId, $userId): void {
+            try {
+                $this->scanEvents->progress(
+                    'instagram_post_scan',
+                    $scan->fresh() ?: $scan,
+                    $username,
+                    $trackedPersonId,
+                    $userId,
+                    [
+                        'phase' => $state['phase'] ?? 'posts',
+                        ...$state,
+                    ],
+                );
+            } catch (\Throwable) {
+                // Event-Logging darf den Beitragsscan nicht abbrechen.
+            }
+
+            if ($progress) {
+                $progress($state);
+            }
+        };
+    }
+
+    private function markProgressScanFailed(
+        InstagramPostScan $scan,
+        string $username,
+        ?int $trackedPersonId,
+        int $userId,
+        \Throwable $exception,
+    ): void {
+        $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
+        $message = 'Instagram-Beitragsscan fehlgeschlagen: '.$exception->getMessage();
+
+        $scan->forceFill([
+            'status_level' => 'error',
+            'status_message' => $message,
+            'raw_payload' => [
+                ...$payload,
+                'ok' => false,
+                'progressStatus' => 'failed',
+                'error' => $exception->getMessage(),
+                'failedAt' => now('UTC')->toIso8601String(),
+            ],
+            'scanned_at' => now('UTC'),
+        ])->save();
+
+        $this->scanEvents->failed(
+            'instagram_post_scan',
+            $scan,
+            $username,
+            $trackedPersonId,
+            $userId,
+            $message,
+            [
+                'phase' => 'posts',
+                'statusLevel' => 'error',
+            ],
+        );
     }
 
     private function normalizePosts(mixed $posts): array
@@ -532,6 +686,15 @@ class TrackedPersonInstagramPostScanService
             ->whereIn('username', array_keys($actorsByUsername))
             ->pluck('id', 'username')
             ->all();
+    }
+
+    private function withOptionalPostScanUsername(array $payload): array
+    {
+        if (! Schema::hasColumn('instagram_post_scans', 'instagram_username')) {
+            unset($payload['instagram_username']);
+        }
+
+        return $payload;
     }
 
     private function storePostLikes(

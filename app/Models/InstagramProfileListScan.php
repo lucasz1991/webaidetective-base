@@ -18,6 +18,7 @@ class InstagramProfileListScan extends Model
         'tracked_person_id',
         'snapshot_id',
         'user_id',
+        'instagram_username',
         'list_type',
         'scan_mode',
         'status_level',

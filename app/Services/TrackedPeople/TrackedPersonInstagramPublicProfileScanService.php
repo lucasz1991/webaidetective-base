@@ -29,6 +29,7 @@ class TrackedPersonInstagramPublicProfileScanService
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
         private readonly InstagramScanPolicyService $scanPolicies,
+        private readonly InstagramScanEventStore $scanEvents,
     ) {}
 
     private ?array $activeScanControl = null;
@@ -545,10 +546,24 @@ class TrackedPersonInstagramPublicProfileScanService
                 'analyzed_at' => now('UTC'),
             ])->save();
 
+            $this->scanEvents->started(
+                'tracked_person_instagram_public_profile_scan',
+                $resumableScan,
+                $targetUsername,
+                $trackedPerson->id,
+                (int) $trackedPerson->user_id,
+                'Public-Profile-Verbindungsscan mit @'.$publicUsername.' wird fortgesetzt.',
+                [
+                    'phase' => 'public-connections',
+                    'stage' => 'scan-resumed',
+                    'percent' => 0,
+                ],
+            );
+
             return $resumableScan->fresh();
         }
 
-        return TrackedPersonInstagramPublicProfileScan::create([
+        $scan = TrackedPersonInstagramPublicProfileScan::create([
             'tracked_person_id' => $trackedPerson->id,
             'public_profile_id' => $publicProfile->id,
             'user_id' => $trackedPerson->user_id,
@@ -574,6 +589,22 @@ class TrackedPersonInstagramPublicProfileScanService
             ],
             'analyzed_at' => now('UTC'),
         ]);
+
+        $this->scanEvents->started(
+            'tracked_person_instagram_public_profile_scan',
+            $scan,
+            $targetUsername,
+            $trackedPerson->id,
+            (int) $trackedPerson->user_id,
+            'Public-Profile-Verbindungsscan mit @'.$publicUsername.' wurde gestartet.',
+            [
+                'phase' => 'public-connections',
+                'stage' => 'scan-started',
+                'percent' => 0,
+            ],
+        );
+
+        return $scan;
     }
 
     private function persistProgressScanState(
@@ -655,6 +686,20 @@ class TrackedPersonInstagramPublicProfileScanService
         ])->save();
 
         $this->storeInferredConnections($trackedPerson, $publicProfile, $scan, $payload, now('UTC'));
+
+        $this->scanEvents->progress(
+            'tracked_person_instagram_public_profile_scan',
+            $scan,
+            $targetUsername,
+            $trackedPerson->id,
+            (int) $trackedPerson->user_id,
+            [
+                ...$state,
+                'phase' => 'public-connections',
+                'statusLevel' => 'partial',
+                'message' => $statusInfo['summary'],
+            ],
+        );
     }
 
     private function mergeFinalPayloadWithProgress(
@@ -1004,6 +1049,22 @@ class TrackedPersonInstagramPublicProfileScanService
                 );
             }
 
+            $this->scanEvents->finished(
+                'tracked_person_instagram_public_profile_scan',
+                $scan,
+                $scan->target_username,
+                $trackedPerson->id,
+                (int) $trackedPerson->user_id,
+                $scan->status_message ?: 'Public-Profile-Verbindungsscan abgeschlossen.',
+                [
+                    'phase' => 'public-connections',
+                    'statusLevel' => $scan->status_level,
+                    'percent' => 100,
+                    'foundFollowers' => count($payload['inferredFollowers'] ?? []),
+                    'foundFollowing' => count($payload['inferredFollowing'] ?? []),
+                ],
+            );
+
             $this->storeInferredConnections($trackedPerson, $publicProfile, $scan, $payload, $analyzedAt);
 
             $relationshipType = $this->mapRelationTypeToPublicProfile($relationType);
@@ -1068,6 +1129,19 @@ class TrackedPersonInstagramPublicProfileScanService
                 'progressStatus' => 'failed',
             ],
             now('UTC'),
+        );
+
+        $this->scanEvents->failed(
+            'tracked_person_instagram_public_profile_scan',
+            $scan,
+            $targetUsername,
+            $trackedPerson->id,
+            (int) $trackedPerson->user_id,
+            $errorInfo['summary'],
+            [
+                'phase' => 'public-connections',
+                'statusLevel' => 'error',
+            ],
         );
 
         return $scan;

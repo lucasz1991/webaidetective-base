@@ -232,6 +232,7 @@ class InstagramProfileRelationshipStore
         array $payload = [],
         string $scanMode = 'profile_list',
         ?int $userId = null,
+        ?InstagramProfileListScan $existingScan = null,
     ): ?InstagramProfileListScan {
         if (! $this->isReady() || ! in_array($listType, ['followers', 'following'], true)) {
             return null;
@@ -240,11 +241,12 @@ class InstagramProfileRelationshipStore
         DatabaseKeepAlive::ping(0);
 
         $scannedAt = $this->parseTimestamp($payload['analyzedAt'] ?? null) ?: now('UTC');
-        $scan = InstagramProfileListScan::create([
+        $scanData = [
             'instagram_profile_id' => $sourceProfile->id,
             'tracked_person_id' => $trackedPerson?->id,
             'snapshot_id' => null,
             'user_id' => $trackedPerson?->user_id ?: $userId,
+            'instagram_username' => $this->normalizeUsername($sourceProfile->username),
             'list_type' => $listType,
             'scan_mode' => $scanMode,
             'status_level' => $this->directRelationshipListStatusLevel($relationshipList, $payload),
@@ -271,7 +273,10 @@ class InstagramProfileRelationshipStore
                 'status_message' => $payload['statusMessage'] ?? null,
             ],
             'scanned_at' => $scannedAt,
-        ]);
+        ];
+
+        $scan = $existingScan ?: new InstagramProfileListScan;
+        $scan->forceFill($this->withOptionalListScanUsername($scanData))->save();
 
         $addedUsernames = $this->usernameLookup($relationshipList['addedItems'] ?? []);
 
@@ -299,6 +304,55 @@ class InstagramProfileRelationshipStore
         }
 
         return $scan;
+    }
+
+    public function startDirectRelationshipListScan(
+        InstagramProfile $sourceProfile,
+        ?TrackedPerson $trackedPerson,
+        string $listType,
+        string $scanMode = 'profile_list',
+        ?int $userId = null,
+        ?int $expectedCount = null,
+        ?string $message = null,
+    ): ?InstagramProfileListScan {
+        if (! $this->isReady() || ! in_array($listType, ['followers', 'following'], true)) {
+            return null;
+        }
+
+        $username = $this->normalizeUsername($sourceProfile->username);
+        $now = now('UTC');
+
+        return InstagramProfileListScan::create($this->withOptionalListScanUsername([
+            'instagram_profile_id' => $sourceProfile->id,
+            'tracked_person_id' => $trackedPerson?->id,
+            'snapshot_id' => null,
+            'user_id' => $trackedPerson?->user_id ?: $userId,
+            'instagram_username' => $username,
+            'list_type' => $listType,
+            'scan_mode' => $scanMode,
+            'status_level' => 'partial',
+            'status_message' => $message ?: (($listType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' wird gestartet; Fortschritt wird gespeichert.'),
+            'attempted' => true,
+            'available' => false,
+            'complete' => false,
+            'rate_limited' => false,
+            'gracefully_stopped' => false,
+            'expected_count' => $expectedCount,
+            'observed_count' => 0,
+            'active_count' => 0,
+            'known_count' => 0,
+            'added_count' => 0,
+            'removed_count' => 0,
+            'search_attempted' => false,
+            'search_rounds' => 0,
+            'raw_payload' => [
+                'ok' => false,
+                'progressStatus' => 'in_progress',
+                'startedAt' => $now->toIso8601String(),
+                'instagramUsername' => $username,
+            ],
+            'scanned_at' => $now,
+        ]));
     }
 
     private function attachPreservedRelationshipToScan(
@@ -450,12 +504,21 @@ class InstagramProfileRelationshipStore
         }
 
         $resolvedUserId = $trackedPerson?->user_id ?: $userId;
+        $username = $this->normalizeUsername($sourceProfile->username);
         $query = InstagramProfileListScan::query()
-            ->where('instagram_profile_id', $sourceProfile->id)
             ->where('list_type', $listType)
             ->where('scan_mode', 'profile_list_live')
             ->where('complete', false)
             ->whereNull('snapshot_id');
+
+        if ($this->hasColumn('instagram_profile_list_scans', 'instagram_username') && $username !== null) {
+            $query->where(function ($query) use ($sourceProfile, $username): void {
+                $query->where('instagram_profile_id', $sourceProfile->id)
+                    ->orWhere('instagram_username', $username);
+            });
+        } else {
+            $query->where('instagram_profile_id', $sourceProfile->id);
+        }
 
         $resolvedUserId
             ? $query->where('user_id', $resolvedUserId)
@@ -464,11 +527,12 @@ class InstagramProfileRelationshipStore
         $scan = $query->latest('scanned_at')->first();
 
         if (! $scan) {
-            $scan = InstagramProfileListScan::create([
+            $scan = InstagramProfileListScan::create($this->withOptionalListScanUsername([
                 'instagram_profile_id' => $sourceProfile->id,
                 'tracked_person_id' => $trackedPerson?->id,
                 'snapshot_id' => null,
                 'user_id' => $resolvedUserId,
+                'instagram_username' => $username,
                 'list_type' => $listType,
                 'scan_mode' => 'profile_list_live',
                 'status_level' => 'partial',
@@ -488,7 +552,7 @@ class InstagramProfileRelationshipStore
                 'search_rounds' => 0,
                 'raw_payload' => [],
                 'scanned_at' => $observedAt,
-            ]);
+            ]));
         }
 
         foreach ($normalizedItems as $item) {
@@ -500,9 +564,10 @@ class InstagramProfileRelationshipStore
             ->count();
         $existingPayload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
 
-        $scan->forceFill([
+        $scan->forceFill($this->withOptionalListScanUsername([
             'tracked_person_id' => $scan->tracked_person_id ?: $trackedPerson?->id,
             'user_id' => $scan->user_id ?: $resolvedUserId,
+            'instagram_username' => $scan->instagram_username ?: $username,
             'status_level' => 'partial',
             'status_message' => ($listType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' wird live gespeichert: '.number_format($activeCount, 0, ',', '.').' Eintraege.',
             'attempted' => true,
@@ -522,7 +587,7 @@ class InstagramProfileRelationshipStore
                 'last_progress_at' => $observedAt->toIso8601String(),
             ],
             'scanned_at' => $observedAt,
-        ])->save();
+        ]))->save();
 
         return $scan;
     }
@@ -761,11 +826,12 @@ class InstagramProfileRelationshipStore
         string $scanMode,
     ): InstagramProfileListScan {
         $scannedAt = $this->parseTimestamp($snapshot->analyzed_at) ?: now('UTC');
-        $scan = InstagramProfileListScan::create([
+        $scan = InstagramProfileListScan::create($this->withOptionalListScanUsername([
             'instagram_profile_id' => $sourceProfile->id,
             'tracked_person_id' => $trackedPerson->id,
             'snapshot_id' => $snapshot->id,
             'user_id' => $trackedPerson->user_id,
+            'instagram_username' => $this->normalizeUsername($sourceProfile->username),
             'list_type' => $listType,
             'scan_mode' => $scanMode,
             'status_level' => $this->relationshipListStatusLevel($relationshipList, $snapshot),
@@ -785,7 +851,7 @@ class InstagramProfileRelationshipStore
             'search_rounds' => (int) ($relationshipList['searchRounds'] ?? 0),
             'raw_payload' => $this->relationshipListScanPayload($relationshipList),
             'scanned_at' => $scannedAt,
-        ]);
+        ]));
 
         $addedUsernames = $this->usernameLookup($relationshipList['addedItems'] ?? []);
 
@@ -1311,5 +1377,14 @@ class InstagramProfileRelationshipStore
         }
 
         return $this->columnCache[$key] = Schema::hasColumn($table, $column);
+    }
+
+    private function withOptionalListScanUsername(array $payload): array
+    {
+        if (! $this->hasColumn('instagram_profile_list_scans', 'instagram_username')) {
+            unset($payload['instagram_username']);
+        }
+
+        return $payload;
     }
 }

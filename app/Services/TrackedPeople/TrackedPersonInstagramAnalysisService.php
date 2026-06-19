@@ -5,6 +5,7 @@ namespace App\Services\TrackedPeople;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Services\Billing\ScanCreditService;
+use App\Services\Social\InstagramMediaAssetStore;
 use App\Services\Social\InstagramProfileDataExtractor;
 use App\Services\Social\InstagramScraper;
 use App\Services\Support\DatabaseKeepAlive;
@@ -25,6 +26,8 @@ class TrackedPersonInstagramAnalysisService
         private readonly InstagramProfileChangeNotificationService $profileChangeNotifications,
         private readonly ScanCreditService $scanCreditService,
         private readonly InstagramScanPolicyService $scanPolicies,
+        private readonly InstagramMediaAssetStore $mediaAssets,
+        private readonly InstagramScanEventStore $scanEvents,
     ) {}
 
     private ?array $activeScanControl = null;
@@ -219,9 +222,7 @@ class TrackedPersonInstagramAnalysisService
                 $previousSnapshot,
             );
             $profileMedia = collect($storedMedia)->firstWhere('is_profile_image', true);
-            $profileImagePath = ($profileMedia['reused_existing'] ?? false)
-                ? null
-                : ($profileMedia['storage_path'] ?? null);
+            $profileImagePath = $profileMedia['storage_path'] ?? null;
             $profileImageHash = $profileMedia['content_hash'] ?? null;
 
             if ($profileImageHash === null && $previousSnapshot?->profile_image_hash) {
@@ -317,6 +318,19 @@ class TrackedPersonInstagramAnalysisService
             $snapshot,
             $payload,
             ($fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' @'.$trackedPerson->instagram_username,
+        );
+
+        $this->scanEvents->finished(
+            'tracked_person_instagram_snapshot',
+            $snapshot,
+            $trackedPerson->instagram_username,
+            $trackedPerson->id,
+            (int) $trackedPerson->user_id,
+            $snapshot->status_message ?: ($fullScan ? 'Instagram-Analyse abgeschlossen.' : 'Instagram-Mini-Scan abgeschlossen.'),
+            [
+                'statusLevel' => $snapshot->status_level,
+                'phase' => 'done',
+            ],
         );
 
         $this->discardActiveProgressSnapshot($snapshot->id);
@@ -472,9 +486,7 @@ class TrackedPersonInstagramAnalysisService
                 $previousSnapshot,
             );
             $profileMedia = collect($storedMedia)->firstWhere('is_profile_image', true);
-            $profileImagePath = ($profileMedia['reused_existing'] ?? false)
-                ? null
-                : ($profileMedia['storage_path'] ?? null);
+            $profileImagePath = $profileMedia['storage_path'] ?? null;
             $profileImageHash = $profileMedia['content_hash'] ?? null;
 
             if ($profileImageHash === null && $previousSnapshot?->profile_image_hash) {
@@ -554,6 +566,19 @@ class TrackedPersonInstagramAnalysisService
             'Instagram-'.$label.' @'.$trackedPerson->instagram_username,
         );
 
+        $this->scanEvents->finished(
+            'tracked_person_instagram_snapshot',
+            $snapshot,
+            $trackedPerson->instagram_username,
+            $trackedPerson->id,
+            (int) $trackedPerson->user_id,
+            $snapshot->status_message ?: $label.'-Scan abgeschlossen.',
+            [
+                'statusLevel' => $snapshot->status_level,
+                'phase' => 'done',
+            ],
+        );
+
         $this->discardActiveProgressSnapshot($snapshot->id);
 
         return $snapshot->fresh('media');
@@ -570,6 +595,19 @@ class TrackedPersonInstagramAnalysisService
                 $this->persistTrackedPersonProgressSnapshot($trackedPerson, $state);
             } catch (\Throwable) {
                 // Live-Fortschritt darf den laufenden Scan nicht abbrechen.
+            }
+
+            try {
+                $this->scanEvents->progress(
+                    'tracked_person_instagram_snapshot',
+                    $this->activeProgressSnapshot?->fresh(),
+                    $trackedPerson->instagram_username,
+                    $trackedPerson->id,
+                    (int) $trackedPerson->user_id,
+                    $state,
+                );
+            } catch (\Throwable) {
+                // Event-Logging darf den laufenden Scan nicht abbrechen.
             }
 
             if ($progress) {
@@ -2324,6 +2362,7 @@ class TrackedPersonInstagramAnalysisService
                 $persistedWarnings,
                 $isProfileImage ? $previousProfileImageHash : null,
                 $isProfileImage ? $previousProfileImagePath : null,
+                $trackedPerson->instagram_username,
             );
 
             if (($downloadedMedia['should_create_media_row'] ?? true) === false) {
@@ -2368,7 +2407,27 @@ class TrackedPersonInstagramAnalysisService
         array &$persistedWarnings,
         ?string $previousProfileImageHash = null,
         ?string $previousProfileImagePath = null,
+        ?string $instagramUsername = null,
     ): array {
+        $username = $this->mediaAssets->normalizeUsername($instagramUsername);
+        $mediaRole = $mediaType === 'profile' ? 'profile_image' : 'snapshot_image';
+
+        if ($username !== null) {
+            $cachedByUrl = $this->mediaAssets->findReusableByUrl($username, $mediaRole, 'image', $imageUrl);
+
+            if ($cachedByUrl) {
+                return [
+                    'storage_path' => $cachedByUrl->storage_path,
+                    'content_hash' => $cachedByUrl->content_hash,
+                    'should_create_media_row' => ! (
+                        $previousProfileImageHash !== null
+                        && $previousProfileImagePath !== null
+                        && $cachedByUrl->content_hash === $previousProfileImageHash
+                    ),
+                ];
+            }
+        }
+
         try {
             $response = Http::withHeaders([
                 'User-Agent' => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -2394,12 +2453,27 @@ class TrackedPersonInstagramAnalysisService
 
         $body = $response->body();
         $contentHash = hash('sha256', $body);
+        $mimeType = $response->header('Content-Type');
 
         if (
             $previousProfileImageHash !== null
             && $previousProfileImagePath !== null
             && $contentHash === $previousProfileImageHash
         ) {
+            if ($username !== null) {
+                $this->mediaAssets->remember(
+                    $username,
+                    $mediaRole,
+                    'image',
+                    $imageUrl,
+                    $contentHash,
+                    $previousProfileImagePath,
+                    $mimeType,
+                    strlen($body),
+                    ['source' => 'tracked_person_snapshot_previous_reuse'],
+                );
+            }
+
             return [
                 'storage_path' => $previousProfileImagePath,
                 'content_hash' => $contentHash,
@@ -2407,11 +2481,53 @@ class TrackedPersonInstagramAnalysisService
             ];
         }
 
-        $extension = $this->guessExtension($response->header('Content-Type'), $imageUrl);
-        $filename = $mediaType.'-'.str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT).'.'.$extension;
-        $relativePath = $directory.'/'.$filename;
+        if ($username !== null) {
+            $cachedByHash = $this->mediaAssets->findReusableByHash($username, $mediaRole, 'image', $contentHash);
 
-        Storage::disk('public')->put($relativePath, $body);
+            if ($cachedByHash) {
+                $this->mediaAssets->remember(
+                    $username,
+                    $mediaRole,
+                    'image',
+                    $imageUrl,
+                    $contentHash,
+                    $cachedByHash->storage_path,
+                    $cachedByHash->mime_type ?: $mimeType,
+                    $cachedByHash->file_size ?: strlen($body),
+                    ['source' => 'tracked_person_snapshot_hash_reuse'],
+                );
+
+                return [
+                    'storage_path' => $cachedByHash->storage_path,
+                    'content_hash' => $contentHash,
+                    'should_create_media_row' => true,
+                ];
+            }
+        }
+
+        $extension = $this->guessExtension($mimeType, $imageUrl);
+        $filename = $mediaType.'-'.str_pad((string) ($index + 1), 2, '0', STR_PAD_LEFT).'-'.substr($contentHash, 0, 20).'.'.$extension;
+        $relativePath = $username !== null
+            ? 'instagram-media-assets/'.$username.'/'.$mediaRole.'/'.$filename
+            : $directory.'/'.$filename;
+
+        if (! Storage::disk('public')->exists($relativePath)) {
+            Storage::disk('public')->put($relativePath, $body);
+        }
+
+        if ($username !== null) {
+            $this->mediaAssets->remember(
+                $username,
+                $mediaRole,
+                'image',
+                $imageUrl,
+                $contentHash,
+                $relativePath,
+                $mimeType,
+                strlen($body),
+                ['source' => 'tracked_person_snapshot_download'],
+            );
+        }
 
         return [
             'storage_path' => $relativePath,

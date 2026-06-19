@@ -2,7 +2,6 @@
 
 namespace App\Livewire\User;
 
-use App\Models\CreditTransaction;
 use App\Models\InstagramPost;
 use App\Models\InstagramProfile;
 use App\Models\Setting;
@@ -175,14 +174,6 @@ class InstagramProfileDetail extends Component
             'latestFollowingScan' => $latestFollowingScan,
             'lastScanStatus' => $lastScanStatus,
             'scanCostSummary' => $this->scanCostSummary(),
-            'creditWallet' => Auth::user()->creditWallet()->first(),
-            'recentScanTransactions' => CreditTransaction::query()
-                ->where('user_id', $userId)
-                ->where('type', CreditTransaction::TYPE_SCAN)
-                ->where('description', 'like', '%@'.$profile->username.'%')
-                ->latest()
-                ->limit(10)
-                ->get(),
             'selectedPost' => $selectedPost,
         ])->layout('layouts.app');
     }

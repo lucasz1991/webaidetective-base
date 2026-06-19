@@ -22,6 +22,7 @@ class TrackedPersonInstagramSuggestionScanService
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
         private readonly ScanCreditService $scanCreditService,
         private readonly InstagramScanPolicyService $scanPolicies,
+        private readonly InstagramScanEventStore $scanEvents,
     ) {}
 
     private ?array $activeScanControl = null;
@@ -120,7 +121,7 @@ class TrackedPersonInstagramSuggestionScanService
             $scanContextId,
             $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan',
         );
-        $lockKey = 'instagram-profile-suggestion-scan:'.$profile->id;
+        $lockKey = 'instagram-profile-suggestion-scan:'.$targetUsername;
         Cache::lock($lockKey, 3600)->forceRelease();
         $lock = Cache::lock($lockKey, 3600);
 
@@ -215,6 +216,14 @@ class TrackedPersonInstagramSuggestionScanService
             [$resumePendingOnly, $pendingCandidates] = $this->buildResumePendingFromLastScan($lastScan);
         }
 
+        $progressScan = $this->startProgressScan(
+            $trackedPerson,
+            $profile,
+            $userId,
+            $targetUsername,
+            $deepSearch,
+        );
+
         try {
             $payload = $this->scraper->scrape(
                 $targetUsername,
@@ -222,8 +231,10 @@ class TrackedPersonInstagramSuggestionScanService
                 $deepSearch || $elevateToDeepSearch ? 'suggestion-connections' : 'suggestions',
                 function (array $state) use (
                     $trackedPerson,
+                    $progressScan,
                     $targetUsername,
                     $progress,
+                    $userId,
                     &$liveConnections,
                     &$liveInferredFollowers,
                     &$liveInferredFollowing,
@@ -235,6 +246,22 @@ class TrackedPersonInstagramSuggestionScanService
                     &$persistedSuggestionEdges,
                 ): void {
                     DatabaseKeepAlive::ping(15);
+
+                    try {
+                        $this->scanEvents->progress(
+                            'tracked_person_instagram_suggestion_scan',
+                            $progressScan->fresh() ?: $progressScan,
+                            $targetUsername,
+                            $trackedPerson?->id,
+                            $userId,
+                            [
+                                'phase' => 'suggestions',
+                                ...$state,
+                            ],
+                        );
+                    } catch (\Throwable) {
+                        // Event-Logging darf den Vorschlaege-Scan nicht abbrechen.
+                    }
 
                     // Suggestion-Connections (Matches) zusammenfuehren
                     if (array_key_exists('suggestionConnections', $state)) {
@@ -487,6 +514,8 @@ class TrackedPersonInstagramSuggestionScanService
                 'observedSuggestions' => $liveObservedSuggestions,
                 'suggestionBranchedConnections' => $liveBranchedConnections,
             ]);
+
+            $this->markProgressScanFailed($progressScan, $targetUsername, $trackedPerson?->id, $userId, $message, $exception);
         }
 
         return $this->storeScan(
@@ -497,6 +526,89 @@ class TrackedPersonInstagramSuggestionScanService
             $payload,
             $liveConnections,
             $deepSearch,
+            $progressScan,
+        );
+    }
+
+    private function startProgressScan(
+        ?TrackedPerson $trackedPerson,
+        ?InstagramProfile $profile,
+        int $userId,
+        string $targetUsername,
+        bool $deepSearch,
+    ): TrackedPersonInstagramSuggestionScan {
+        $now = now('UTC');
+        $scan = TrackedPersonInstagramSuggestionScan::create([
+            'tracked_person_id' => $trackedPerson?->id,
+            'instagram_profile_id' => $profile?->id,
+            'user_id' => $userId,
+            'target_username' => $targetUsername,
+            'status_level' => 'partial',
+            'status_message' => ($deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan').' laeuft; Fortschritt wird gespeichert.',
+            'suggestions_observed_count' => 0,
+            'suggestions_checked_count' => 0,
+            'suggestion_matches_count' => 0,
+            'gracefully_stopped' => false,
+            'raw_payload' => [
+                'ok' => false,
+                'progressStatus' => 'in_progress',
+                'operationMode' => $deepSearch ? 'suggestion-connections' : 'suggestions',
+                'targetUsername' => $targetUsername,
+                'startedAt' => $now->toIso8601String(),
+            ],
+            'analyzed_at' => $now,
+        ]);
+
+        $this->scanEvents->started(
+            'tracked_person_instagram_suggestion_scan',
+            $scan,
+            $targetUsername,
+            $trackedPerson?->id,
+            $userId,
+            ($deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan').' @'.$targetUsername.' wurde gestartet.',
+            [
+                'phase' => 'suggestions',
+                'percent' => 0,
+            ],
+        );
+
+        return $scan;
+    }
+
+    private function markProgressScanFailed(
+        TrackedPersonInstagramSuggestionScan $scan,
+        string $targetUsername,
+        ?int $trackedPersonId,
+        int $userId,
+        string $message,
+        \Throwable $exception,
+    ): void {
+        $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
+
+        $scan->forceFill([
+            'status_level' => 'error',
+            'status_message' => $message,
+            'raw_payload' => [
+                ...$payload,
+                'ok' => false,
+                'progressStatus' => 'failed',
+                'error' => $exception->getMessage(),
+                'failedAt' => now('UTC')->toIso8601String(),
+            ],
+            'analyzed_at' => now('UTC'),
+        ])->save();
+
+        $this->scanEvents->failed(
+            'tracked_person_instagram_suggestion_scan',
+            $scan,
+            $targetUsername,
+            $trackedPersonId,
+            $userId,
+            $message,
+            [
+                'phase' => 'suggestions',
+                'statusLevel' => 'error',
+            ],
         );
     }
 
@@ -508,6 +620,7 @@ class TrackedPersonInstagramSuggestionScanService
         array $payload,
         array $liveConnections,
         bool $deepSearch,
+        ?TrackedPersonInstagramSuggestionScan $existingScan = null,
     ): TrackedPersonInstagramSuggestionScan {
         $this->assertActiveScanCurrent();
         DatabaseKeepAlive::ping(0);
@@ -552,7 +665,7 @@ class TrackedPersonInstagramSuggestionScanService
             $analyzedAt,
             $deepSearch,
         ): TrackedPersonInstagramSuggestionScan {
-            $scan = TrackedPersonInstagramSuggestionScan::create([
+            $scanData = [
                 'tracked_person_id' => $trackedPerson?->id,
                 'instagram_profile_id' => $profile?->id,
                 'user_id' => $userId,
@@ -567,7 +680,10 @@ class TrackedPersonInstagramSuggestionScanService
                 'gracefully_stopped' => (bool) ($payload['gracefullyStopped'] ?? $scanPayload['gracefullyStopped'] ?? false),
                 'raw_payload' => $payload,
                 'analyzed_at' => $analyzedAt,
-            ]);
+            ];
+
+            $scan = $existingScan ?: new TrackedPersonInstagramSuggestionScan;
+            $scan->forceFill($scanData)->save();
 
             // Endgueltig alle beobachteten Kandidaten dieses Laufs nochmals sicherstellen
             $this->storeObservedSuggestionProfiles($trackedPerson, $payload, $analyzedAt);
@@ -614,6 +730,21 @@ class TrackedPersonInstagramSuggestionScanService
             $scan,
             $payload,
             'Instagram-'.($deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan').' @'.$targetUsername,
+        );
+
+        $this->scanEvents->finished(
+            'tracked_person_instagram_suggestion_scan',
+            $scan,
+            $targetUsername,
+            $trackedPerson?->id,
+            $userId,
+            $scan->status_message ?: (($deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan').' abgeschlossen.'),
+            [
+                'phase' => 'suggestions',
+                'statusLevel' => $scan->status_level,
+                'percent' => 100,
+                'foundSuggestions' => $scan->suggestions_observed_count,
+            ],
         );
 
         return $scan;
