@@ -12,17 +12,7 @@
 @endphp
 
 <section class="bg-white">
-    <div class="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-3">
-        <div>
-            <h3 class="text-base font-bold text-slate-950">{{ $title }}</h3>
-            <p class="mt-0.5 text-xs font-semibold text-slate-500">
-                {{ number_format($postCount, 0, ',', '.') }} Beitraege
-                @if($lastScanAt)
-                    &middot; Letzter Scan {{ $lastScanAt->timezone(config('app.timezone'))->format('d.m.Y H:i') }}
-                @endif
-            </p>
-        </div>
-    </div>
+
 
     <div class="flex justify-center border-b border-slate-200">
         <div class="-mb-px inline-flex items-center gap-2 border-t border-slate-950 px-6 py-3 text-[11px] font-bold uppercase tracking-[0.18em] text-slate-950">
@@ -32,7 +22,7 @@
                 <rect x="4" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"/>
                 <rect x="14" y="14" width="6" height="6" stroke="currentColor" stroke-width="2"/>
             </svg>
-            Posts
+            Posts&nbsp;{{ number_format($postCount, 0, ',', '.') }}
         </div>
     </div>
 
