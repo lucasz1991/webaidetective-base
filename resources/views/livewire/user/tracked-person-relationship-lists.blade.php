@@ -259,7 +259,7 @@
                             @if($listData['hasMoreActiveItems'])
                                 <div
                                     wire:key="{{ $listType }}-relationship-load-more-{{ $listData['visibleLimit'] }}"
-                                    x-intersect.once="$wire.loadMoreRelationshipList('{{ $listType }}')"
+                                    x-intersect.full.once="$wire.loadMoreRelationshipList('{{ $listType }}')"
                                     class="mt-3 flex items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-xs font-semibold text-slate-500"
                                 >
                                     <span class="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500"></span>

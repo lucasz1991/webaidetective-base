@@ -2,10 +2,17 @@
     'model',
     'title',
     'scan' => null,
+    'listType' => 'followers',
+    'visibleLimit' => 50,
+    'itemsPerPage' => 50,
 ])
 
 @php
     $items = $scan?->items ?? collect();
+    $visibleLimit = max(1, (int) $visibleLimit);
+    $itemsPerPage = max(1, (int) $itemsPerPage);
+    $visibleItems = $items->take($visibleLimit);
+    $hasMoreItems = $items->count() > $visibleLimit;
     $activeItems = $items->whereIn('item_status', ['observed', 'added'])->values();
     $addedItems = $items->where('item_status', 'added')->values();
     $removedItems = $items->where('item_status', 'removed')->values();
@@ -54,7 +61,7 @@
                 </div>
 
                 <div class="space-y-2">
-                    @forelse($items as $item)
+                    @forelse($visibleItems as $item)
                         @php
                             $searchText = strtolower(trim($item->username_snapshot.' '.$item->display_name_snapshot));
                             $active = in_array($item->item_status, ['observed', 'added'], true);
@@ -76,6 +83,17 @@
                         <p class="rounded-lg border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">Der Scan enthaelt keine gespeicherten Eintraege.</p>
                     @endforelse
                 </div>
+
+                @if($hasMoreItems)
+                    <div
+                        wire:key="{{ $listType }}-instagram-profile-list-load-more-{{ $visibleLimit }}"
+                        x-intersect.full.once="$wire.loadMoreInstagramProfileList('{{ $listType }}')"
+                        class="mt-3 flex items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-white px-4 py-3 text-xs font-semibold text-slate-500"
+                    >
+                        <span class="h-4 w-4 animate-spin rounded-full border-2 border-slate-200 border-t-slate-500"></span>
+                        <span>Weitere {{ number_format($itemsPerPage, 0, ',', '.') }} laden</span>
+                    </div>
+                @endif
             @else
                 <p class="rounded-lg border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">Noch keine Liste gespeichert.</p>
             @endif

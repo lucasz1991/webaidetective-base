@@ -89,6 +89,33 @@
                     </div>
 
                     <div class="max-h-[75vh] overflow-y-auto p-2">
+                        <x-instagram.scan-actions
+                            :scan-cost-summary="$scanCostSummary"
+                            :profile-url="$profile->profile_url ?: 'https://www.instagram.com/'.$profile->username.'/'"
+                        >
+                            @if($trackedPerson)
+                                <a
+                                    href="{{ route('tracked-people.show', $trackedPerson->id) }}"
+                                    wire:navigate
+                                    @click="$dispatch('close')"
+                                    class="block rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                                >
+                                    Beobachtete Person oeffnen
+                                </a>
+                            @else
+                                <button
+                                    type="button"
+                                    @click="$dispatch('close')"
+                                    wire:click="addAsTrackedPerson"
+                                    wire:loading.attr="disabled"
+                                    wire:target="addAsTrackedPerson"
+                                    class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-50"
+                                >
+                                    Tracking aktivieren
+                                </button>
+                            @endif
+                        </x-instagram.scan-actions>
+                        {{--
                         <div class="px-3 pb-1 pt-2 text-[11px] font-bold uppercase tracking-wide text-slate-400">Profil scannen</div>
 
                         <button
@@ -247,6 +274,7 @@
                         >
                             Gefolgt-Liste ansehen
                         </button>
+                        --}}
                     </div>
                 </x-slot>
             </x-ui.dropdown.anchor-dropdown>
@@ -452,6 +480,9 @@
         model="showListModal"
         :title="$activeListType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste'"
         :scan="$activeListType === 'followers' ? $latestFollowersScan : $latestFollowingScan"
+        :list-type="$activeListType"
+        :visible-limit="$listModalVisibleLimit"
+        :items-per-page="$listModalItemsPerPage"
     />
 
     <x-instagram-post-engagement-modal

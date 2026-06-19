@@ -6,6 +6,7 @@ use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\InstagramPost;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScan;
+use App\Models\Setting;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramMedia;
@@ -1622,6 +1623,7 @@ class TrackedPersonDetail extends Component
             'historySnapshotRows' => $this->historySnapshotRows($trackedPerson->instagramSnapshots ?? collect()),
             'resumableInstagramScan' => $this->resumableInstagramScan($trackedPerson),
             'selectedPost' => $selectedPost,
+            'scanCostSummary' => $this->scanCostSummary(),
         ];
     }
 
@@ -2337,6 +2339,26 @@ class TrackedPersonDetail extends Component
             ->trackedPeople()
             ->whereKey($this->trackedPersonId)
             ->firstOrFail();
+    }
+
+    private function scanCostSummary(): array
+    {
+        $settings = Setting::getValue('billing', 'credit_costs');
+        $settings = is_array($settings) ? $settings : [];
+        $base = max(0, (int) ($settings['scan_base_credit'] ?? 1));
+        $profile = max(0, (int) ($settings['profile_scan'] ?? 1));
+        $post = max(0, (int) ($settings['post_scan'] ?? 3));
+        $minimum = max(0, (int) ($settings['scan_minimum_credits'] ?? 1));
+        $perMinute = max(0, (int) ($settings['scan_credit_per_minute'] ?? 2));
+
+        return [
+            'base' => $base,
+            'per_minute' => $perMinute,
+            'max_minutes' => max(1, (int) ($settings['scan_max_billable_minutes'] ?? 30)),
+            'profile' => max($minimum, $base + $profile),
+            'post' => max($minimum, $base + $profile + $post),
+            'media_download' => max(0, (int) ($settings['media_download_per_file'] ?? 5)),
+        ];
     }
 
     private function fillFormFromModel(TrackedPerson $trackedPerson): void

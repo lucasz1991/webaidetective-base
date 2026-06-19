@@ -119,7 +119,7 @@
                         width="auto"
                         :offset="8"
                         dropdown-classes=""
-                        content-classes="w-64 rounded-3xl border border-slate-200 bg-white"
+                        content-classes="w-[min(22rem,calc(100vw-2rem))] rounded-2xl border border-slate-200 bg-white"
                     >
                         <x-slot name="trigger">
                             <button
@@ -133,7 +133,31 @@
                         </x-slot>
 
                         <x-slot name="content">
-                            <div class="flex flex-col p-2">
+                            <div class="max-h-[75vh] overflow-y-auto p-2">
+                                <button
+                                    type="button"
+                                    @click="$dispatch('close')"
+                                    wire:click="confirmTrackedPersonDeletion"
+                                    class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-rose-700 hover:bg-rose-50"
+                                >
+                                    Person loeschen
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="$dispatch('close')"
+                                    wire:click="$set('showSettingsModal', true)"
+                                    class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                                >
+                                    Einstellungen
+                                </button>
+
+                                <x-instagram.scan-actions
+                                    :scan-cost-summary="$scanCostSummary"
+                                    :disabled="! $trackedPerson->instagram_username"
+                                    :profile-url="$trackedPerson->instagram_username ? 'https://www.instagram.com/'.$trackedPerson->instagram_username.'/' : null"
+                                    list-action-mode="dispatch"
+                                />
+                                {{--
                                 <button
                                     type="button"
                                     @click="$dispatch('close')"
@@ -191,6 +215,7 @@
                                 >
                                     Vorschlaege DeepSearch
                                 </button>
+                                --}}
                             </div>
                         </x-slot>
                     </x-ui.dropdown.anchor-dropdown>

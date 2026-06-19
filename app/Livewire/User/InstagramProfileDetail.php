@@ -18,11 +18,18 @@ use Livewire\Component;
 
 class InstagramProfileDetail extends Component
 {
+    private const LIST_ITEMS_PER_PAGE = 50;
+
     public int $instagramProfileId;
 
     public bool $showListModal = false;
 
     public string $activeListType = 'followers';
+
+    public array $listModalPages = [
+        'followers' => 1,
+        'following' => 1,
+    ];
 
     public bool $showPostEngagementModal = false;
 
@@ -174,6 +181,8 @@ class InstagramProfileDetail extends Component
             'latestFollowingScan' => $latestFollowingScan,
             'lastScanStatus' => $lastScanStatus,
             'scanCostSummary' => $this->scanCostSummary(),
+            'listModalVisibleLimit' => $this->listModalVisibleLimit($this->activeListType),
+            'listModalItemsPerPage' => self::LIST_ITEMS_PER_PAGE,
             'selectedPost' => $selectedPost,
         ])->layout('layouts.app');
     }
@@ -205,7 +214,17 @@ class InstagramProfileDetail extends Component
         }
 
         $this->activeListType = $listType;
+        $this->listModalPages[$listType] = 1;
         $this->showListModal = true;
+    }
+
+    public function loadMoreInstagramProfileList(string $listType): void
+    {
+        if (! in_array($listType, ['followers', 'following'], true)) {
+            return;
+        }
+
+        $this->listModalPages[$listType] = max(1, (int) ($this->listModalPages[$listType] ?? 1)) + 1;
     }
 
     public function openPostEngagementModal(int $postId, string $type): void
@@ -494,6 +513,13 @@ class InstagramProfileDetail extends Component
         $chargedCredits = max(0, $this->usedCredits() - $usedCreditsBefore);
 
         return ' Kosten: '.number_format($chargedCredits, 0, ',', '.').' Credits.';
+    }
+
+    private function listModalVisibleLimit(string $listType): int
+    {
+        $page = max(1, (int) ($this->listModalPages[$listType] ?? 1));
+
+        return $page * self::LIST_ITEMS_PER_PAGE;
     }
 
     private function scanCostSummary(): array
