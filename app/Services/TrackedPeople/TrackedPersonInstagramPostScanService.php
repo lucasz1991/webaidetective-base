@@ -144,6 +144,7 @@ class TrackedPersonInstagramPostScanService
             $scannedAt,
             $userId,
             $actorProfileIds,
+            $existingScan,
         ): array {
             $scanData = [
                 'instagram_profile_id' => $profile->id,
