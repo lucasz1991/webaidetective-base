@@ -668,6 +668,7 @@ class TrackedPersonInstagramSuggestionScanService
             $connections,
             $analyzedAt,
             $deepSearch,
+            $existingScan,
         ): TrackedPersonInstagramSuggestionScan {
             $scanData = [
                 'tracked_person_id' => $trackedPerson?->id,
