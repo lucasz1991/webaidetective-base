@@ -363,23 +363,28 @@
                 @endif
             </div>
         </div>
-
+        
         @if($detailStatus)
-            <div @class([
-                'mt-4 rounded-3xl border px-4 py-3 text-sm',
-                'border-emerald-200 bg-emerald-50 text-emerald-900' => $detailStatusLevel === 'success',
-                'border-amber-200 bg-amber-50 text-amber-950' => $detailStatusLevel === 'partial',
+        <div @class([
+        'mt-4 rounded-3xl border px-4 py-3 text-sm',
+        'border-emerald-200 bg-emerald-50 text-emerald-900' => $detailStatusLevel === 'success',
+        'border-amber-200 bg-amber-50 text-amber-950' => $detailStatusLevel === 'partial',
                 'border-rose-200 bg-rose-50 text-rose-900' => $detailStatusLevel === 'error',
-            ])>
+                ])>
                 {{ $detailStatus }}
             </div>
-        @endif
-    </x-profile.detail-hero>
-
-    <livewire:user.instagram-scan-activity-panel
-        :instagram-profile-id="$profile->id"
-        lazy
-    />
+            @endif
+        </x-profile.detail-hero>
+        
+        
+        <div class="xl:order-last xl:col-span-2">
+            <x-instagram-posts-gallery
+                :posts="$profile->posts"
+                title="Gespeicherte Beitraege"
+                :last-scan-at="$profile->postScans->first()?->scanned_at"
+                empty-text="Noch keine Beitraege gespeichert."
+            />
+        </div>
 
     <section class="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div class="flex flex-wrap items-start justify-between gap-4">
@@ -425,51 +430,15 @@
 
 
 
-    <div class="xl:order-last xl:col-span-2">
-        <x-instagram-posts-gallery
-            :posts="$profile->posts"
-            title="Gespeicherte Beitraege"
-            :last-scan-at="$profile->postScans->first()?->scanned_at"
-            empty-text="Noch keine Beitraege gespeichert."
-        />
-    </div>
 
-
-    <section wire:poll.5s.visible class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 class="text-base font-bold text-slate-950">Letzte Listenscans</h2>
-        <div class="mt-4 max-h-96 overflow-auto">
-            <table class="min-w-full divide-y divide-slate-200 text-sm">
-                <thead class="sticky top-0 z-10 bg-white text-left text-xs font-semibold uppercase tracking-wide text-slate-500 shadow-sm">
-                    <tr>
-                        <th class="px-3 py-2">Liste</th>
-                        <th class="px-3 py-2">Status</th>
-                        <th class="px-3 py-2">Aktiv</th>
-                        <th class="px-3 py-2">Beobachtet</th>
-                        <th class="px-3 py-2">Zeitpunkt</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100">
-                    @forelse($profile->listScans as $scan)
-                        <tr>
-                            <td class="px-3 py-2 font-semibold text-slate-800">{{ $scan->list_type }}</td>
-                            <td class="px-3 py-2 text-slate-600">{{ $scan->status_level }}</td>
-                            <td class="px-3 py-2 text-slate-600">{{ number_format($scan->active_count) }}</td>
-                            <td class="px-3 py-2 text-slate-600">{{ number_format($scan->observed_count) }}</td>
-                            <td class="px-3 py-2 text-slate-600">{{ $scan->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}</td>
-                        </tr>
-                    @empty
-                        <tr><td colspan="5" class="px-3 py-5 text-center text-slate-500">Noch keine Listenscans gespeichert.</td></tr>
-                    @endforelse
-                </tbody>
-            </table>
-        </div>
-    </section>
 
     <x-instagram-profile-list-modal
         model="showListModal"
         :title="$activeListType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste'"
         :scan="$activeListType === 'followers' ? $latestFollowersScan : $latestFollowingScan"
     />
+
+
 
     <x-instagram-post-engagement-modal
         :selected-post="$selectedPost"
