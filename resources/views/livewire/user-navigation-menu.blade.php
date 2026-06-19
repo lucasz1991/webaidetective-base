@@ -148,7 +148,7 @@
                              <!-- Inbox Buttons -->
                              <div class="flex items-center space-x-6 mr-2">
                                  @if (Auth::check() && $currentUrl !== url('/messages'))
-                                 <div x-data="{ modalOpen: false, selectedMessage: null }">
+                                  <div>
                                      <x-ui.dropdown.anchor-dropdown
                                          align="right"
                                          width="auto"
@@ -192,17 +192,20 @@
                                          </x-slot>
                                          <x-slot name="content">
                                         <div class="relative max-w-full">
-                                                     <button type="button" @click="open = false; selectedMessage = null;" class="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-slate-100 hover:text-gray-600" aria-label="Nachrichten schließen">
+                                                     <button type="button" @click="open = false;" class="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-slate-100 hover:text-gray-600" aria-label="Nachrichten schließen">
                                                          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                                                          </svg>
                                                      </button>
                                              <!-- Nachrichtenliste -->
                                              @forelse($receivedMessages as $message)
-                                             <button
-                                                 type="button"
-                                                 @click="modalOpen = true; open = false; selectedMessage = @js(['subject' => $message->subject, 'body' => $message->message, 'createdAt' => $message->created_at->diffForHumans()]); $wire.setMessageStatus({{ $message->id }})"
-                                                 class="flex w-full items-center p-4 text-left transition hover:bg-slate-50 @if($message->status == 1) bg-blue-50 @endif">
+                                              <button
+                                                  type="button"
+                                                  @click="open = false"
+                                                  wire:click="showMessagePreview({{ $message->id }})"
+                                                  wire:loading.attr="disabled"
+                                                  wire:target="showMessagePreview({{ $message->id }})"
+                                                  class="flex w-full items-center p-4 text-left transition hover:bg-slate-50 @if($message->status == 1) bg-blue-50 @endif">
                                                  <div class="block h-10 w-10 size-4 flex-none rounded-full">
                                                      <x-application-mark class="h-10 w-10" />
                                                  </div>
@@ -227,44 +230,35 @@
                                              </div>
                                          </div>
                                          </x-slot>
-                                     </x-ui.dropdown.anchor-dropdown>
-                                     <!-- Modal -->
-                                     <div 
-                                         x-show="modalOpen" 
-                                         x-cloak
-                                         class="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50"
-                                         x-transition:enter="transition ease-out duration-200"
-                                             x-transition:enter-start="opacity-0"
-                                             x-transition:enter-end="opacity-100"
-                                             x-transition:leave="transition ease-in duration-200"
-                                             x-transition:leave-start="opacity-100"
-                                             x-transition:leave-end="opacity-0">
-                                        <div x-on:click.outside="modalOpen = false" class="relative w-[90%] max-w-md rounded-lg bg-white p-6 shadow-lg">
-                                             <div>
-                                                 <button type="button" @click="modalOpen = false; selectedMessage = null;" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
-                                                     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                                                     </svg>
-                                                 </button>
-                                                 <div>
-                                                     <div class="flex">
-                                                         <span class="inline-block  text-xs font-medium text-gray-700 mb-2 bg-green-100 px-2 py-1 rounded-full" x-text="selectedMessage?.createdAt"></span>
-                                                     </div>
-                                                 </div>
-                                                 <h3 class="text-xl font-semibold mb-4 border-b pb-2" x-text="selectedMessage?.subject"></h3>
-                                                 <div class="my-6">
-                                                     <p class="text-gray-800" x-html="selectedMessage?.body"></p>
-                                                 </div>
-                                                 </div>
-                                                 <div class="flex justify-end mt-4">
-                                                     <button type="button" @click="modalOpen = false; isClicked = true; setTimeout(() => isClicked = false, 100)" 
-                                                     x-data="{ isClicked: false }" 
-                                                     :style="isClicked ? 'transform:scale(0.7);' : 'transform:scale(1);'"
-                                                     class="transition-all duration-100 py-2.5 px-5  text-sm font-medium text-gray-900 focus:outline-none bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-4 focus:ring-gray-100 ">Schließen</button>
-                                                 </div>
-                                         </div>
-                                     </div>
-                                </div>
+                                      </x-ui.dropdown.anchor-dropdown>
+                                      <!-- Modal -->
+                                      <x-modal wire:model="showMessagePreviewModal" maxWidth="2xl">
+                                          <div class="border border-gray-300 rounded-lg p-4 relative">
+                                              <button type="button" x-on:click="$dispatch('close')" wire:click="closeMessagePreview" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+                                                  <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                                                  </svg>
+                                              </button>
+                                              <div class="flex">
+                                                  <span class="inline-block text-xs font-medium text-gray-700 mb-2 bg-green-100 px-2 py-1 rounded-full">
+                                                      {{ $selectedMessagePreview['created_at'] ?? '' }}
+                                                  </span>
+                                              </div>
+                                              <h3 class="text-xl font-semibold mb-4 border-b pb-2">
+                                                  {{ $selectedMessagePreview['subject'] ?? '' }}
+                                              </h3>
+                                              <div class="my-6">
+                                                  <p class="text-gray-800">{!! $selectedMessagePreview['body'] ?? '' !!}</p>
+                                              </div>
+                                          </div>
+
+                                          <div class="flex justify-end mt-4 mb-2">
+                                              <button type="button" x-on:click="$dispatch('close')" wire:click="closeMessagePreview" class="transition-all duration-100 py-2.5 px-5 text-sm font-medium text-gray-900 focus:outline-none bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-4 focus:ring-gray-100">
+                                                  Schließen
+                                              </button>
+                                          </div>
+                                      </x-modal>
+                                 </div>
                                 @endif
 
                                  @if (Auth::check())

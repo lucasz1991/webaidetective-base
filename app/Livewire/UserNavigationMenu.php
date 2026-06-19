@@ -16,6 +16,10 @@ class UserNavigationMenu extends Component
 
     public $message;
 
+    public ?array $selectedMessagePreview = null;
+
+    public bool $showMessagePreviewModal = false;
+
     public array $subscriptionSummary = [];
 
     protected $listeners = [
@@ -84,6 +88,54 @@ class UserNavigationMenu extends Component
         ]);
 
         $this->refreshNavigationData();
+    }
+
+    public function showMessagePreview($messageId): void
+    {
+        if (! auth()->check()) {
+            $this->selectedMessagePreview = null;
+            $this->showMessagePreviewModal = false;
+
+            return;
+        }
+
+        $message = auth()->user()
+            ->receivedMessages()
+            ->find($messageId);
+
+        if (! $message) {
+            $this->selectedMessagePreview = null;
+            $this->showMessagePreviewModal = false;
+            $this->refreshNavigationData();
+
+            return;
+        }
+
+        $message->update([
+            'status' => 2,
+        ]);
+
+        $this->selectedMessagePreview = [
+            'created_at' => $message->created_at?->diffForHumans() ?? '',
+            'subject' => $message->subject ?? '',
+            'body' => $message->message ?? '',
+        ];
+        $this->showMessagePreviewModal = true;
+
+        $this->refreshNavigationData();
+    }
+
+    public function closeMessagePreview(): void
+    {
+        $this->selectedMessagePreview = null;
+        $this->showMessagePreviewModal = false;
+    }
+
+    public function updatedShowMessagePreviewModal($value): void
+    {
+        if (! $value) {
+            $this->selectedMessagePreview = null;
+        }
     }
 
     public function render()

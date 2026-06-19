@@ -4,6 +4,7 @@ import mask from '@alpinejs/mask';
 import resize from '@alpinejs/resize';
 import intersect from '@alpinejs/intersect'
 import anchor from '@alpinejs/anchor';
+import focus from '@alpinejs/focus';
 import MetisMenu from "metismenujs";
 import './network-map';
 
@@ -17,6 +18,7 @@ function registerAlpinePlugins() {
   window.Alpine.plugin(resize);
   window.Alpine.plugin(intersect);
   window.Alpine.plugin(anchor);
+  window.Alpine.plugin(focus);
   window.Alpine.__webaidetectivePluginsRegistered = true;
 }
 

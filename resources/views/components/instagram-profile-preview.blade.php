@@ -71,6 +71,7 @@
             default => 'Liste',
         };
     };
+    $hasActionDropdown = (bool) $trackedPersonId || (isset($actions) && $actions->isNotEmpty());
 @endphp
 
 <div>
@@ -81,9 +82,44 @@
                     <div class="text-xs font-semibold uppercase tracking-wide text-slate-500">Instagram-Profilvorschau</div>
                     <h3 class="mt-1 truncate text-lg font-bold text-slate-950">{{ $handle }}</h3>
                 </div>
-                <button type="button" x-on:click="$dispatch('close')" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
-                    Schliessen
-                </button>
+                <div class="flex shrink-0 items-center gap-2">
+                    @if($hasActionDropdown)
+                        <x-ui.dropdown.anchor-dropdown
+                            align="right"
+                            width="auto"
+                            :offset="8"
+                            dropdown-classes=""
+                            content-classes="w-96 max-w-[calc(100vw-2rem)] rounded-xl border border-slate-200 bg-white"
+                        >
+                            <x-slot name="trigger">
+                                <button type="button" x-bind:aria-expanded="open" title="Scanaktionen" aria-label="Scanaktionen" class="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-pink-200 bg-pink-50 text-pink-700 hover:bg-pink-100">
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M12 3v3M12 18v3M3 12h3M18 12h3M6.6 6.6l2.1 2.1M15.3 15.3l2.1 2.1M17.4 6.6l-2.1 2.1M8.7 15.3l-2.1 2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                                    </svg>
+                                </button>
+                            </x-slot>
+
+                            <x-slot name="content">
+                                <div class="max-h-[70vh] overflow-y-auto p-3 text-left">
+                                    @if($trackedPersonId)
+                                        <livewire:user.tracked-person-detail
+                                            :tracked-person-id="(int) $trackedPersonId"
+                                            :compact="true"
+                                            :key="'shared-instagram-profile-preview-actions-'.$trackedPersonId"
+                                        />
+                                    @elseif(isset($actions) && $actions->isNotEmpty())
+                                        {{ $actions }}
+                                    @endif
+                                </div>
+                            </x-slot>
+                        </x-ui.dropdown.anchor-dropdown>
+                    @endif
+
+                    <button type="button" x-on:click="$dispatch('close')" class="shrink-0 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                        Schliessen
+                    </button>
+                </div>
             </div>
 
             <div class="overflow-y-auto p-4 sm:p-5">
@@ -153,20 +189,6 @@
                 @if($trackedPersonId)
                     <div class="mt-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800">
                         Follower- und Gefolgt-Zahlen oeffnen die gemeinsamen Listenmodale mit den einheitlichen Profilzeilen.
-                    </div>
-                @endif
-
-                @if($trackedPersonId)
-                    <div class="mt-5">
-                        <livewire:user.tracked-person-detail
-                            :tracked-person-id="(int) $trackedPersonId"
-                            :compact="true"
-                            :key="'shared-instagram-profile-preview-'.$trackedPersonId"
-                        />
-                    </div>
-                @else
-                    <div class="mt-5">
-                        {{ $actions ?? '' }}
                     </div>
                 @endif
 
