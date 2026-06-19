@@ -36,7 +36,7 @@
         @endisset
     </div>
 
-    <div class="px-4 py-4 sm:px-5 sm:py-5">
+    <div class="">
         {{ $slot }}
     </div>
 </section>
