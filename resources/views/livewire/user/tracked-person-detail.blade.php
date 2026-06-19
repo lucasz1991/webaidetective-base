@@ -1,5 +1,15 @@
 <div class="container mx-auto space-y-4" x-data="{ toasts: [] }" x-init="window.addEventListener('toast', e => { toasts.push(e.detail); setTimeout(() => toasts.shift(), 3000); })" x-cloak>
-    @php($isAdmin = auth()->user()?->role === 'admin')
+    @php
+        $isAdmin = auth()->user()?->role === 'admin';
+        $detailTabs = [
+            'posts' => 'Posts',
+            'verbindungen' => 'Verbindungen',
+        ];
+
+        if ($isAdmin) {
+            $detailTabs['analyse'] = 'Analysen';
+        }
+    @endphp
 
     <div class="fixed top-4 right-4 z-50 space-y-2">
         <template x-for="(t, i) in toasts" :key="i">
@@ -539,17 +549,6 @@
             </div>
         </div>
     </x-modal>
-
-    @php
-        $detailTabs = [
-            'posts' => 'Posts',
-            'verbindungen' => 'Verbindungen',
-        ];
-
-        if ($isAdmin) {
-            $detailTabs['analyse'] = 'Analysen';
-        }
-    @endphp
 
     <section
         id="profilinfos"
