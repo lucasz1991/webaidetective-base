@@ -36,6 +36,9 @@ class InstagramProfileDataExtractor
             'visible_counts_complete' => $counts['visible_complete'],
             'profile_image_url' => $profileImageUrl,
             'image_urls' => $this->extractImageUrls($html, $profileImageUrl),
+            'story_scan' => is_array(data_get($payload, 'profile.storyScan'))
+                ? data_get($payload, 'profile.storyScan')
+                : (is_array($payload['storyScan'] ?? null) ? $payload['storyScan'] : []),
             'followers_list' => $this->extractFollowersList($payload),
             'following_list' => $this->extractFollowingList($payload),
         ];

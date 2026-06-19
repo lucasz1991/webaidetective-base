@@ -30,11 +30,14 @@
                 @if($trackedPerson->exists)
                     <button
                         type="button"
-                        wire:click="$dispatch('tracked-person-run-instagram-analysis')"
+                        wire:click="$parent.analyzeInstagram"
+                        wire:loading.attr="disabled"
+                        wire:target="$parent.analyzeInstagram"
                         @disabled(! $trackedPerson->instagram_username)
                         class="inline-flex h-11 items-center justify-center rounded-3xl bg-gradient-to-r from-rose-500 to-fuchsia-600 px-4 text-sm font-semibold text-white shadow-sm hover:from-rose-600 hover:to-fuchsia-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        Vollanalyse
+                        <span wire:loading.remove wire:target="$parent.analyzeInstagram">Vollanalyse</span>
+                        <span wire:loading wire:target="$parent.analyzeInstagram">Laeuft...</span>
                     </button>
                 @else
                     <div class="rounded-3xl border border-slate-200 bg-slate-50 px-4 py-5 text-sm text-slate-500">

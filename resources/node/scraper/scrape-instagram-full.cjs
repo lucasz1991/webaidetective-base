@@ -16,6 +16,7 @@ async function runInstagramFullScanFlow(context) {
   } = context;
   const {
     captureLivePreviewScreenshot,
+    collectInstagramStories,
     collectProfileInfo,
     collectRelationshipListWithAccountSwitches,
     markGracefulStopIfRequested,
@@ -80,6 +81,31 @@ async function runInstagramFullScanFlow(context) {
 
   if (scanState.gracefullyStopped) {
     notes.push('Instagram-Scan wurde ueber die Oberflaeche nach den Grunddaten beendet.');
+  }
+
+  if (!scanState.gracefullyStopped) {
+    scanState.storyScanResult = await collectInstagramStories(
+      page,
+      scanState.initialProfile,
+      username,
+      profileUrl,
+      scanState.runtimeConfig,
+      flags.artifacts?.screenshotPath || null,
+    );
+    scanState.initialProfile.storyScan = scanState.storyScanResult;
+    scanState.initialHtml = await page.content().catch(() => scanState.initialHtml);
+    scanState.title = await page.title().catch(() => scanState.title);
+    scanState.finalUrl = page.url();
+
+    if (scanState.storyScanResult.gracefullyStopped) {
+      scanState.gracefullyStopped = true;
+    } else if (scanState.storyScanResult.available) {
+      notes.push(`Story-Scan abgeschlossen: ${scanState.storyScanResult.observedCount || 0} Elemente gespeichert.`);
+    } else if (scanState.storyScanResult.reason === 'story-not-observable-login-required') {
+      notes.push('Story-Status konnte ohne gueltige Instagram-Session nicht geprueft werden.');
+    } else {
+      notes.push('Keine aktive Story am Profil erkannt.');
+    }
   }
 
   if (flags.shouldCollectFollowers && !scanState.gracefullyStopped) {

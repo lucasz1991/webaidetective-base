@@ -134,7 +134,6 @@ class TrackedPersonDetail extends Component
 
     protected $listeners = [
         'tracked-person-refresh' => '$refresh',
-        'tracked-person-run-instagram-analysis' => 'analyzeInstagram',
         'scan-instagram-relationship-list' => 'scanInstagramRelationshipList',
         'scan-instagram-profile-from-list' => 'scanInstagramProfileFromList',
     ];

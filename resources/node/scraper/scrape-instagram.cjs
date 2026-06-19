@@ -4,6 +4,7 @@ const { attachScanBilling } = require('./lib/scan-billing.cjs');
 const { runInstagramFullScanFlow } = require('./scrape-instagram-full.cjs');
 const { runInstagramListScanFlow } = require('./scrape-instagram-list.cjs');
 const { runInstagramPostsScanFlow } = require('./scrape-instagram-posts.cjs');
+const { runInstagramStoriesScanFlow } = require('./scrape-instagram-stories.cjs');
 const { runProfileSuggestionConnectionScan: runProfileSuggestionConnectionScanFromModule } = require('./scrape-instagram-suggestions-router.cjs');
 const {
   configureRuntimeEnvironment,
@@ -57,6 +58,7 @@ const isFollowersSearchMode = ['followers-search', 'search-followers'].includes(
 const isFollowingSearchMode = ['following-search', 'search-following'].includes(operationMode);
 const isSuggestionsMode = ['suggestions', 'profile-suggestions', 'suggestion-connections'].includes(operationMode);
 const isPostsMode = ['posts', 'post-scan'].includes(operationMode);
+const isStoriesMode = ['stories', 'story-scan'].includes(operationMode);
 const isFullScanMode = ['analyze', 'profile', 'basic', 'grunddaten'].includes(operationMode);
 const isListScanMode = [
   'followers',
@@ -144,6 +146,9 @@ const runtimeConfigDefaults = {
   postScanOpenLikesDialogEnabled: true,
   postScanLikeDialogMaxScrollRounds: 40,
   postScanCommentDialogMaxScrollRounds: 40,
+  storyScanMaxItems: 50,
+  storyScanViewerOpenTimeoutMs: 7000,
+  storyScanSlideWaitMs: 900,
   profileHoverCardsEnabled: true,
   profileHoverCardWaitMs: 850,
   suggestionDismissChecked: false,
@@ -3512,6 +3517,806 @@ async function collectInstagramPosts(
       reachedEnd: linkCollection.reachedEnd,
       timelineApi: linkCollection.timelineApi,
     },
+    statusLevel,
+    statusMessage,
+  };
+}
+
+async function inspectInstagramProfileStory(page, username) {
+  const normalizedUsername = normalizeInstagramUsername(username);
+
+  return page.evaluate((targetUsername) => {
+    const cleanText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+    const cleanUsername = (value = '') => String(value || '')
+      .replace(/^@/, '')
+      .replace(/[^a-z0-9._]/gi, '')
+      .toLowerCase();
+    const isVisible = (element) => {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number(style.opacity || 1) > 0;
+    };
+    const pathParts = (href = '') => {
+      try {
+        return new URL(href, window.location.origin).pathname.split('/').filter(Boolean);
+      } catch (error) {
+        return [];
+      }
+    };
+    const profilePathMatches = (href = '') => {
+      const parts = pathParts(href);
+
+      return parts.length === 1 && cleanUsername(parts[0]) === targetUsername;
+    };
+    const storyPathMatches = (href = '') => {
+      const parts = pathParts(href);
+
+      return parts[0] === 'stories' && cleanUsername(parts[1] || '') === targetUsername;
+    };
+    const looksLikeStoryColor = (value = '') => {
+      const text = String(value || '').toLowerCase();
+
+      if (/(?:#c13584|#e1306c|#fd1d1d|#f56040|#f77737|#fcaf45|#833ab4)/i.test(text)) {
+        return true;
+      }
+
+      return Array.from(text.matchAll(/rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/g))
+        .some((match) => {
+          const red = Number(match[1]);
+          const green = Number(match[2]);
+          const blue = Number(match[3]);
+
+          return red >= 180
+            && ((blue >= 90 && red >= green + 35) || (green >= 60 && green <= 190 && red >= blue + 25));
+        });
+    };
+    const canvasLooksLikeStoryRing = (canvas) => {
+      try {
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+
+        if (!context || canvas.width <= 0 || canvas.height <= 0) {
+          return false;
+        }
+
+        const sampleWidth = Math.min(48, canvas.width);
+        const sampleHeight = Math.min(48, canvas.height);
+        const sample = document.createElement('canvas');
+        sample.width = sampleWidth;
+        sample.height = sampleHeight;
+        const sampleContext = sample.getContext('2d', { willReadFrequently: true });
+
+        sampleContext.drawImage(canvas, 0, 0, sampleWidth, sampleHeight);
+        const pixels = sampleContext.getImageData(0, 0, sampleWidth, sampleHeight).data;
+        let colorfulPixels = 0;
+
+        for (let index = 0; index < pixels.length; index += 4) {
+          const red = pixels[index];
+          const green = pixels[index + 1];
+          const blue = pixels[index + 2];
+          const alpha = pixels[index + 3];
+
+          if (
+            alpha >= 80
+            && red >= 180
+            && ((blue >= 90 && red >= green + 35) || (green >= 60 && green <= 190 && red >= blue + 25))
+          ) {
+            colorfulPixels += 1;
+          }
+        }
+
+        return colorfulPixels >= 3;
+      } catch (error) {
+        return false;
+      }
+    };
+    const candidates = Array.from(document.querySelectorAll('header img, main img'))
+      .filter(isVisible)
+      .map((image) => {
+        const rect = image.getBoundingClientRect();
+        const alt = cleanText(image.getAttribute('alt') || '');
+        const anchor = image.closest('a[href]');
+        const profileAnchor = anchor && profilePathMatches(anchor.getAttribute('href') || '');
+        const altMatches = cleanUsername(alt).includes(targetUsername)
+          || /(?:profilbild|profile picture|avatar)/i.test(alt);
+        const plausibleSize = rect.width >= 48
+          && rect.height >= 48
+          && rect.width <= 240
+          && rect.height <= 240;
+        const score = (profileAnchor ? 50 : 0)
+          + (altMatches ? 30 : 0)
+          + (plausibleSize ? 20 : 0)
+          + (rect.top >= 0 && rect.top <= 520 ? 10 : 0)
+          + Math.min(20, Math.round(rect.width / 8));
+
+        return { image, rect, alt, score };
+      })
+      .filter((entry) => entry.score >= 30)
+      .sort((left, right) => right.score - left.score);
+    const selected = candidates[0] || null;
+
+    if (!selected) {
+      return {
+        available: false,
+        confidence: 'none',
+        reason: 'profile-image-not-found',
+        clickableFound: false,
+        diagnostics: { imageCandidates: candidates.length },
+      };
+    }
+
+    const clickable = selected.image.closest('a[href*="/stories/"], button, [role="button"], a')
+      || selected.image.parentElement;
+    const href = clickable?.getAttribute?.('href')
+      || selected.image.closest('a[href]')?.getAttribute('href')
+      || '';
+    const label = cleanText([
+      clickable?.getAttribute?.('aria-label') || '',
+      clickable?.getAttribute?.('title') || '',
+      selected.image.getAttribute('alt') || '',
+    ].join(' '));
+    const unavailableLabel = /(?:keine story|no story|story nicht verf(?:u|\u00fc)gbar|story unavailable)/i.test(label);
+    const positiveLabel = !unavailableLabel
+      && /(?:story ansehen|story anzeigen|view story|watch story|open story|aktuelle story|active story)/i.test(label);
+    const genericStoryLabel = !unavailableLabel && /(?:story|stories|geschichte)/i.test(label);
+    const visualDiagnostics = [];
+    let storyRingDetected = false;
+    let current = selected.image;
+
+    for (let depth = 0; current && depth < 6; depth += 1, current = current.parentElement) {
+      const rect = current.getBoundingClientRect();
+      const style = window.getComputedStyle(current);
+      const before = window.getComputedStyle(current, '::before');
+      const after = window.getComputedStyle(current, '::after');
+      const svgMarkup = Array.from(current.querySelectorAll('svg'))
+        .slice(0, 2)
+        .map((svg) => svg.outerHTML.slice(0, 1600))
+        .join(' ');
+      const visualText = [
+        style.background,
+        style.backgroundColor,
+        style.backgroundImage,
+        style.borderColor,
+        style.boxShadow,
+        before.background,
+        before.backgroundColor,
+        before.backgroundImage,
+        before.borderColor,
+        after.background,
+        after.backgroundColor,
+        after.backgroundImage,
+        after.borderColor,
+        svgMarkup,
+      ].join(' ');
+      const surroundsImage = rect.width >= selected.rect.width + 3
+        && rect.height >= selected.rect.height + 3
+        && rect.width <= selected.rect.width + 32
+        && rect.height <= selected.rect.height + 32;
+      const surroundingCanvases = Array.from(current.querySelectorAll('canvas'))
+        .map((canvas) => {
+          const canvasRect = canvas.getBoundingClientRect();
+          const surrounds = canvasRect.width >= selected.rect.width + 3
+            && canvasRect.height >= selected.rect.height + 3
+            && canvasRect.width <= selected.rect.width + 32
+            && canvasRect.height <= selected.rect.height + 32;
+
+          return {
+            canvas,
+            surrounds,
+            width: Math.round(canvasRect.width),
+            height: Math.round(canvasRect.height),
+            colorful: surrounds && canvasLooksLikeStoryRing(canvas),
+          };
+        })
+        .filter((entry) => entry.surrounds);
+      const canvasRingDetected = surroundingCanvases.some((entry) => entry.colorful);
+      const colorful = looksLikeStoryColor(visualText) || canvasRingDetected;
+
+      visualDiagnostics.push({
+        depth,
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        surroundsImage,
+        colorful,
+        canvasRingDetected,
+        canvases: surroundingCanvases.map(({ width, height, colorful: canvasColorful }) => ({
+          width,
+          height,
+          colorful: canvasColorful,
+        })),
+        backgroundImage: String(style.backgroundImage || '').slice(0, 300),
+        borderColor: String(style.borderColor || '').slice(0, 120),
+      });
+
+      if (surroundsImage && colorful) {
+        storyRingDetected = true;
+      }
+    }
+
+    const directStoryLink = storyPathMatches(href);
+    const available = directStoryLink
+      || positiveLabel
+      || storyRingDetected
+      || (genericStoryLabel && storyRingDetected);
+
+    if (available && clickable) {
+      clickable.setAttribute('data-webaidetective-story-trigger', '1');
+    }
+
+    return {
+      available,
+      confidence: directStoryLink || positiveLabel ? 'high' : (storyRingDetected ? 'visual' : 'none'),
+      reason: available ? 'active-story-detected' : 'no-active-story-indicator',
+      clickableFound: Boolean(clickable),
+      directStoryLink,
+      positiveStoryLabel: positiveLabel,
+      genericStoryLabel,
+      storyRingDetected,
+      href: href || null,
+      clickableText: label.slice(0, 240) || null,
+      profileImage: {
+        alt: selected.alt || null,
+        width: Math.round(selected.rect.width),
+        height: Math.round(selected.rect.height),
+        top: Math.round(selected.rect.top),
+        left: Math.round(selected.rect.left),
+      },
+      diagnostics: {
+        imageCandidates: candidates.length,
+        visual: visualDiagnostics,
+      },
+    };
+  }, normalizedUsername).catch((error) => ({
+    available: false,
+    confidence: 'none',
+    reason: 'story-detection-error',
+    clickableFound: false,
+    error: normalizeText(error.message || String(error)),
+  }));
+}
+
+async function inspectInstagramStoryViewer(page, username) {
+  const normalizedUsername = normalizeInstagramUsername(username);
+
+  return page.evaluate((targetUsername) => {
+    const visible = (element) => {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden';
+    };
+    const pathname = window.location.pathname;
+    const storyPath = pathname.startsWith('/stories/');
+    const targetStoryPath = pathname.toLowerCase().startsWith(`/stories/${targetUsername.toLowerCase()}/`);
+    const visibleVideos = Array.from(document.querySelectorAll('video')).filter(visible);
+    const storyControls = Array.from(document.querySelectorAll('button, [role="button"], [aria-label]'))
+      .filter(visible)
+      .map((element) => [
+        element.getAttribute('aria-label') || '',
+        element.getAttribute('title') || '',
+        element.innerText || '',
+      ].join(' '))
+      .filter((text) => /(?:next|previous|pause|play|weiter|zur(?:u|\u00fc)ck|n(?:a|\u00e4)chste)/i.test(text));
+    const largeImages = Array.from(document.images)
+      .filter(visible)
+      .filter((image) => {
+        const rect = image.getBoundingClientRect();
+
+        return rect.width >= 280 && rect.height >= 280;
+      });
+    const dialog = Array.from(document.querySelectorAll('div[role="dialog"]')).find(visible) || null;
+    const viewerDetected = storyPath
+      || visibleVideos.length > 0
+      || (storyControls.length >= 2 && largeImages.length > 0);
+    const profilePictureDialog = Boolean(dialog)
+      && !storyPath
+      && visibleVideos.length === 0
+      && storyControls.length < 2
+      && largeImages.length > 0;
+
+    return {
+      open: viewerDetected && !profilePictureDialog,
+      storyPath,
+      targetStoryPath,
+      profilePictureDialog,
+      pathname,
+      visibleVideoCount: visibleVideos.length,
+      largeVisibleImageCount: largeImages.length,
+      storyControlCount: storyControls.length,
+    };
+  }, normalizedUsername).catch(() => ({
+    open: false,
+    storyPath: false,
+    targetStoryPath: false,
+    profilePictureDialog: false,
+    pathname: '',
+    visibleVideoCount: 0,
+    largeVisibleImageCount: 0,
+    storyControlCount: 0,
+  }));
+}
+
+async function waitForInstagramStoryViewer(page, username, timeoutMs = 7000) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const state = await inspectInstagramStoryViewer(page, username);
+
+    if (state.open || state.profilePictureDialog) {
+      return state;
+    }
+
+    await sleep(250);
+  }
+
+  return {
+    open: false,
+    storyPath: false,
+    targetStoryPath: false,
+    profilePictureDialog: false,
+    pathname: page.url(),
+    timedOut: true,
+  };
+}
+
+async function collectCurrentInstagramStorySlide(page, username) {
+  const normalizedUsername = normalizeInstagramUsername(username);
+
+  return page.evaluate((targetUsername) => {
+    const cleanText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+    const visible = (element) => {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && Number(style.opacity || 1) > 0;
+    };
+    const area = (element) => {
+      const rect = element.getBoundingClientRect();
+
+      return rect.width * rect.height;
+    };
+    const pathParts = window.location.pathname.split('/').filter(Boolean);
+    const ownerUsername = pathParts[0] === 'stories'
+      ? String(pathParts[1] || '').toLowerCase()
+      : targetUsername;
+    const storyId = pathParts[0] === 'stories' ? (pathParts[2] || null) : null;
+    const mediaCandidates = [
+      ...Array.from(document.querySelectorAll('video')).filter(visible),
+      ...Array.from(document.images)
+        .filter(visible)
+        .filter((image) => {
+          const rect = image.getBoundingClientRect();
+
+          return rect.width >= 240 && rect.height >= 240;
+        }),
+    ].sort((left, right) => area(right) - area(left));
+    const media = mediaCandidates[0] || null;
+    const mediaRect = media?.getBoundingClientRect?.() || null;
+    const viewerRoot = media?.closest?.('section, article, main, div[role="dialog"]')
+      || document.querySelector('main')
+      || document.body;
+    const publishedAt = viewerRoot.querySelector('time[datetime]')?.getAttribute('datetime')
+      || document.querySelector('time[datetime]')?.getAttribute('datetime')
+      || null;
+    const timeText = cleanText(
+      viewerRoot.querySelector('time')?.innerText
+      || viewerRoot.querySelector('time')?.textContent
+      || '',
+    ) || null;
+    const ignoredText = /^(?:weiter|zur(?:u|\u00fc)ck|next|previous|pause|play|schlie(?:ss|\u00df)en|close|antworten|reply|nachricht senden|send message)$/i;
+    const textItems = Array.from(viewerRoot.querySelectorAll('span, div, p, h1, h2, h3, a'))
+      .filter(visible)
+      .map((element) => cleanText(element.innerText || element.textContent || ''))
+      .filter((text) => text && text.length <= 500 && !ignoredText.test(text));
+    const uniqueTexts = Array.from(new Set(textItems))
+      .filter((text) => !text.toLowerCase().startsWith(targetUsername.toLowerCase()))
+      .sort((left, right) => left.length - right.length)
+      .slice(0, 30);
+    const links = Array.from(viewerRoot.querySelectorAll('a[href]'))
+      .filter(visible)
+      .map((anchor) => ({
+        href: anchor.href || anchor.getAttribute('href') || null,
+        text: cleanText(anchor.innerText || anchor.textContent || '') || null,
+      }))
+      .filter((link) => link.href)
+      .slice(0, 30);
+    const sourceUrl = media
+      ? (media.currentSrc || media.src || media.getAttribute('src') || null)
+      : null;
+    const previewUrl = media?.tagName === 'VIDEO'
+      ? (media.poster || media.getAttribute('poster') || null)
+      : sourceUrl;
+    const mediaType = media?.tagName === 'VIDEO' ? 'video' : (media ? 'image' : null);
+    const fingerprint = [
+      ownerUsername,
+      storyId || '',
+      sourceUrl || '',
+      publishedAt || timeText || '',
+      uniqueTexts.slice(0, 5).join('|'),
+    ].join('::');
+
+    return {
+      ownerUsername,
+      ownerMatches: ownerUsername.toLowerCase() === targetUsername.toLowerCase(),
+      storyId,
+      storyUrl: window.location.href,
+      mediaType,
+      sourceUrl,
+      previewUrl,
+      width: mediaRect ? Math.round(mediaRect.width) : null,
+      height: mediaRect ? Math.round(mediaRect.height) : null,
+      durationSeconds: media?.tagName === 'VIDEO' && Number.isFinite(Number(media.duration))
+        ? Number(media.duration)
+        : null,
+      publishedAt,
+      timeText,
+      text: uniqueTexts.join('\n') || null,
+      textItems: uniqueTexts,
+      links,
+      fingerprint,
+    };
+  }, normalizedUsername).catch((error) => ({
+    ownerUsername: normalizedUsername,
+    ownerMatches: true,
+    storyId: null,
+    storyUrl: page.url(),
+    mediaType: null,
+    sourceUrl: null,
+    previewUrl: null,
+    publishedAt: null,
+    timeText: null,
+    text: null,
+    textItems: [],
+    links: [],
+    fingerprint: '',
+    error: normalizeText(error.message || String(error)),
+  }));
+}
+
+async function advanceInstagramStoryViewer(page) {
+  const result = await page.evaluate(() => {
+    const visible = (element) => {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden';
+    };
+    const labelFor = (element) => [
+      element.getAttribute('aria-label') || '',
+      element.getAttribute('title') || '',
+      element.innerText || '',
+    ].join(' ').replace(/\s+/g, ' ').trim();
+    const controls = Array.from(document.querySelectorAll('button, [role="button"], [aria-label]'))
+      .filter(visible)
+      .map((element) => ({
+        element: element.closest('button, [role="button"]') || element,
+        label: labelFor(element),
+      }))
+      .filter((entry) => /^(?:weiter|n(?:a|\u00e4)chste|next|next story)$/i.test(entry.label))
+      .sort((left, right) => (
+        right.element.getBoundingClientRect().left - left.element.getBoundingClientRect().left
+      ));
+
+    if (!controls[0]) {
+      return { advanced: false, method: null };
+    }
+
+    controls[0].element.click();
+
+    return {
+      advanced: true,
+      method: 'next-control',
+      label: controls[0].label,
+    };
+  }).catch(() => ({ advanced: false, method: null }));
+
+  if (result.advanced) {
+    return result;
+  }
+
+  await page.keyboard.press('ArrowRight').catch(() => {});
+
+  return {
+    advanced: true,
+    method: 'arrow-right',
+  };
+}
+
+async function closeInstagramStoryViewer(page, profileUrl, runtimeConfig) {
+  await page.keyboard.press('Escape').catch(() => {});
+  await sleep(500);
+
+  if (page.url().includes('/stories/')) {
+    await navigateWithSoftTimeout(page, profileUrl, runtimeConfig);
+    await sleep(700);
+  }
+}
+
+async function collectInstagramStories(
+  page,
+  profile,
+  username,
+  profileUrl,
+  runtimeConfig = {},
+  baseScreenshotPath = null,
+) {
+  const detection = await inspectInstagramProfileStory(page, username);
+  const storyVisibilityBlocked = Boolean(profile?.requiresLogin);
+  const emptyResult = {
+    attempted: !storyVisibilityBlocked,
+    available: false,
+    complete: !storyVisibilityBlocked,
+    gracefullyStopped: false,
+    limited: false,
+    observedCount: 0,
+    items: [],
+    detection,
+    statusLevel: storyVisibilityBlocked ? 'partial' : 'success',
+    statusMessage: storyVisibilityBlocked
+      ? `Story-Status von @${username} ist ohne gueltige Instagram-Session nicht sichtbar.`
+      : `Keine aktive Instagram-Story fuer @${username} erkannt.`,
+    reason: storyVisibilityBlocked
+      ? 'story-not-observable-login-required'
+      : (detection.reason || 'no-active-story-indicator'),
+  };
+
+  progressLog('stories-detected', {
+    relationship: 'stories',
+    loaded: 0,
+    expectedCount: 0,
+    storyAvailable: Boolean(detection.available),
+    storyVisibilityBlocked,
+    storyDetectionConfidence: detection.confidence || 'none',
+    message: storyVisibilityBlocked
+      ? `Story-Status von @${username} ist ohne gueltige Instagram-Session nicht sichtbar.`
+      : (detection.available
+      ? `Aktive Story von @${username} erkannt.`
+      : `Keine aktive Story von @${username} erkannt.`),
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  if (!detection.available || !detection.clickableFound) {
+    progressLog('stories-complete', {
+      relationship: 'stories',
+      loaded: 0,
+      expectedCount: 0,
+      complete: emptyResult.complete,
+      reason: emptyResult.reason,
+      message: emptyResult.statusMessage,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+    });
+
+    return emptyResult;
+  }
+
+  const clicked = await page.click('[data-webaidetective-story-trigger="1"]')
+    .then(() => true)
+    .catch(() => false);
+
+  if (!clicked) {
+    const result = {
+      ...emptyResult,
+      available: true,
+      complete: false,
+      statusLevel: 'partial',
+      statusMessage: 'Eine aktive Instagram-Story wurde erkannt, konnte aber nicht geoeffnet werden.',
+      reason: 'story-trigger-click-failed',
+    };
+
+    progressLog('stories-complete', {
+      relationship: 'stories',
+      loaded: 0,
+      expectedCount: 0,
+      complete: false,
+      reason: result.reason,
+      message: result.statusMessage,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+    });
+
+    return result;
+  }
+
+  const viewerState = await waitForInstagramStoryViewer(
+    page,
+    username,
+    Math.max(2000, Number(runtimeConfig.storyScanViewerOpenTimeoutMs || 7000)),
+  );
+
+  if (!viewerState.open) {
+    await page.keyboard.press('Escape').catch(() => {});
+    await sleep(400);
+
+    const result = {
+      ...emptyResult,
+      available: viewerState.profilePictureDialog ? false : true,
+      complete: false,
+      statusLevel: 'partial',
+      statusMessage: viewerState.profilePictureDialog
+        ? 'Der Klick hat nur das grosse Profilbild geoeffnet; es wurde keine Story verarbeitet.'
+        : 'Eine aktive Instagram-Story wurde erkannt, der Story-Viewer aber nicht sicher bestaetigt.',
+      reason: viewerState.profilePictureDialog
+        ? 'profile-picture-opened-instead-of-story'
+        : 'story-viewer-not-confirmed',
+      viewerState,
+    };
+
+    progressLog('stories-complete', {
+      relationship: 'stories',
+      loaded: 0,
+      expectedCount: 0,
+      complete: false,
+      reason: result.reason,
+      message: result.statusMessage,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+    });
+
+    return result;
+  }
+
+  const maxItems = Math.max(1, Math.min(100, Number(runtimeConfig.storyScanMaxItems || 50)));
+  const slideWaitMs = Math.max(350, Number(runtimeConfig.storyScanSlideWaitMs || 900));
+  const items = [];
+  const seenFingerprints = new Set();
+  let complete = false;
+  let reason = 'viewer-closed';
+
+  progressLog('stories-opening', {
+    relationship: 'stories',
+    loaded: 0,
+    expectedCount: maxItems,
+    message: `Story von @${username} wird ausgelesen.`,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  for (let index = 0; index < maxItems; index += 1) {
+    if (markGracefulStopIfRequested('stories', {
+      loaded: items.length,
+      expectedCount: maxItems,
+    })) {
+      reason = 'gracefully-stopped';
+      break;
+    }
+
+    await sleep(slideWaitMs);
+    const slide = await collectCurrentInstagramStorySlide(page, username);
+
+    if (!slide.ownerMatches) {
+      complete = true;
+      reason = 'next-profile-reached';
+      break;
+    }
+
+    if (!slide.fingerprint || seenFingerprints.has(slide.fingerprint)) {
+      complete = items.length > 0;
+      reason = items.length > 0 ? 'last-slide-reached' : 'story-slide-not-readable';
+      break;
+    }
+
+    seenFingerprints.add(slide.fingerprint);
+    let screenshotPath = null;
+
+    if (baseScreenshotPath && runtimeConfig.skipDebugArtifacts !== true) {
+      screenshotPath = buildRelatedScreenshotPath(
+        baseScreenshotPath,
+        `story-${String(index + 1).padStart(2, '0')}`,
+        pathHelperOptions,
+      );
+      await page.screenshot({
+        path: screenshotPath,
+        fullPage: false,
+      }).catch(() => {
+        screenshotPath = null;
+      });
+    }
+
+    items.push({
+      ...slide,
+      position: index,
+      screenshotPath,
+      fingerprint: undefined,
+    });
+
+    progressLog('stories-item-collected', {
+      relationship: 'stories',
+      loaded: items.length,
+      expectedCount: maxItems,
+      storyId: slide.storyId,
+      mediaType: slide.mediaType,
+      message: `Story-Element ${items.length} von @${username} gespeichert.`,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
+    });
+
+    const previousFingerprint = slide.fingerprint;
+    await advanceInstagramStoryViewer(page);
+    await sleep(slideWaitMs);
+
+    const nextViewerState = await inspectInstagramStoryViewer(page, username);
+
+    if (!nextViewerState.open) {
+      complete = true;
+      reason = 'viewer-closed-after-last-slide';
+      break;
+    }
+
+    const nextSlide = await collectCurrentInstagramStorySlide(page, username);
+
+    if (!nextSlide.ownerMatches) {
+      complete = true;
+      reason = 'next-profile-reached';
+      break;
+    }
+
+    if (nextSlide.fingerprint === previousFingerprint) {
+      complete = true;
+      reason = 'last-slide-reached';
+      break;
+    }
+  }
+
+  await closeInstagramStoryViewer(page, profileUrl, runtimeConfig);
+
+  const gracefullyStopped = reason === 'gracefully-stopped';
+  const limited = items.length >= maxItems && !complete;
+  const statusLevel = gracefullyStopped || limited || items.length === 0 ? 'partial' : 'success';
+  const statusMessage = gracefullyStopped
+    ? 'Instagram-Story-Scan wurde beendet; bisherige Story-Elemente werden gespeichert.'
+    : (limited
+      ? `Instagram-Story-Scan am konfigurierten Limit von ${maxItems} Elementen beendet.`
+      : (items.length > 0
+        ? `Instagram-Story-Scan abgeschlossen: ${items.length} Story-Elemente gespeichert.`
+        : 'Instagram-Story wurde geoeffnet, aber es konnten keine Story-Elemente ausgelesen werden.'));
+
+  progressLog('stories-complete', {
+    relationship: 'stories',
+    loaded: items.length,
+    expectedCount: items.length,
+    complete,
+    reason,
+    message: statusMessage,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  return {
+    attempted: true,
+    available: true,
+    complete,
+    gracefullyStopped,
+    limited,
+    observedCount: items.length,
+    items,
+    detection,
+    viewerState,
+    reason,
     statusLevel,
     statusMessage,
   };
@@ -9944,6 +10749,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
   let finalUrl = profileUrl;
   let suggestionScanResult = null;
   let postsScanResult = null;
+  let storyScanResult = null;
   let terminationSignalHandled = false;
   let loginDiagnostics = {
     attempted: false,
@@ -10285,6 +11091,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       title,
       finalUrl,
       postsScanResult,
+      storyScanResult,
       suggestionScanResult,
       gracefullyStopped,
       batchPayload: null,
@@ -10306,6 +11113,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       helpers: {
         captureLivePreviewScreenshot,
         collectInstagramPosts,
+        collectInstagramStories,
         collectProfileInfo,
         collectRelationshipListWithAccountSwitches,
         markGracefulStopIfRequested,
@@ -10362,6 +11170,8 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       }
     } else if (isPostsMode) {
       await runInstagramPostsScanFlow(flowContext);
+    } else if (isStoriesMode) {
+      await runInstagramStoriesScanFlow(flowContext);
     } else {
       progressLog('profile-opening', {
         relationship: null,
@@ -10440,7 +11250,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       }
     }
 
-    if (!isFullScanMode && !isListScanMode && !isPostsMode) {
+    if (!isFullScanMode && !isListScanMode && !isPostsMode && !isStoriesMode) {
       scanState.runtimeConfig = runtimeState.runtimeConfig;
       scanState.cookieFilePath = runtimeState.cookieFilePath;
       scanState.cookieDiagnostics = runtimeState.cookieDiagnostics;
@@ -10450,6 +11260,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       scanState.title = title;
       scanState.finalUrl = finalUrl;
       scanState.postsScanResult = postsScanResult;
+      scanState.storyScanResult = storyScanResult;
       scanState.suggestionScanResult = suggestionScanResult;
       scanState.gracefullyStopped = gracefullyStopped;
     }
@@ -10463,6 +11274,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
     title = scanState.title;
     finalUrl = scanState.finalUrl || page.url();
     postsScanResult = scanState.postsScanResult;
+    storyScanResult = scanState.storyScanResult;
     suggestionScanResult = scanState.suggestionScanResult;
     gracefullyStopped = Boolean(scanState.gracefullyStopped);
 
@@ -10487,7 +11299,13 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       ...(cookieDiagnostics.warnings || []),
       ...(loginDiagnostics.warnings || []),
     ]);
-    const outcome = isPostsMode && postsScanResult
+    const outcome = isStoriesMode && storyScanResult
+      ? {
+        ok: storyScanResult.statusLevel !== 'error',
+        statusLevel: storyScanResult.statusLevel || 'unknown',
+        statusMessage: storyScanResult.statusMessage || 'Instagram-Story-Scan abgeschlossen.',
+      }
+      : isPostsMode && postsScanResult
       ? {
         ok: postsScanResult.statusLevel !== 'error',
         statusLevel: postsScanResult.statusLevel || 'unknown',
@@ -10556,6 +11374,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       loginDiagnostics,
       profile: initialProfile,
       postsScan: postsScanResult,
+      storyScan: storyScanResult,
       suggestionScan: suggestionScanResult,
       suggestionConnections: Array.isArray(suggestionScanResult?.matches)
         ? suggestionScanResult.matches

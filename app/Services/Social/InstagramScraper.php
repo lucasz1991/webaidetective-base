@@ -1235,12 +1235,16 @@ class InstagramScraper
             'posts-opening-item' => $expected > 0 ? min(95, max(35, 35 + (int) floor(($loaded / max(1, $expected)) * 60))) : 50,
             'posts-item-collected' => $expected > 0 ? min(98, max(40, 35 + (int) floor(($loaded / max(1, $expected)) * 63))) : 75,
             'posts-complete' => 100,
+            'stories-detected' => 60,
+            'stories-opening' => 65,
+            'stories-item-collected' => $expected > 0 ? min(98, max(65, 65 + (int) floor(($loaded / max(1, $expected)) * 33))) : 80,
+            'stories-complete' => 100,
             'instagram-daily-time-limit' => 100,
             'account-switching' => 8,
             'profile-session-check' => 12,
             'profile-opening' => 25,
             'profile-page-loaded' => 45,
-            'profile-collected' => 100,
+            'profile-collected' => in_array($operationMode, ['analyze', 'profile', 'stories'], true) ? 55 : 100,
             default => $expected > 0
                 ? min(99, (int) floor(($loaded / max(1, $expected)) * 100))
                 : min(95, (int) floor(($round / $maxRounds) * 100)),
@@ -1393,7 +1397,7 @@ class InstagramScraper
     {
         $operationMode = Str::lower(trim($operationMode));
 
-        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'suggestions', 'suggestion-connections', 'posts', 'login-session'], true)
+        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'suggestions', 'suggestion-connections', 'posts', 'stories', 'login-session'], true)
             ? $operationMode
             : 'analyze';
     }
@@ -1406,6 +1410,7 @@ class InstagramScraper
             'followers', 'following' => 'scrape-instagram-list.cjs',
             'suggestions', 'suggestion-connections' => 'scrape-instagram-suggestions.cjs',
             'posts' => 'scrape-instagram-posts.cjs',
+            'stories' => 'scrape-instagram-stories.cjs',
             default => 'scrape-instagram.cjs',
         };
 
