@@ -8,6 +8,15 @@
             $tone = $listType === 'followers' ? 'emerald' : 'sky';
             $relationshipList = $listData['relationshipList'];
             $stats = $listData['stats'];
+            $controls = $listData['controls'];
+            $visibilityCounts = $controls['visibilityCounts'];
+            $profileCounts = $controls['profileCounts'];
+            $visibilityButtonClass = fn (string $filter): string => $controls['visibilityFilter'] === $filter
+                ? 'border-slate-900 bg-slate-900 text-white'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50';
+            $profileButtonClass = fn (string $filter): string => $controls['profileFilter'] === $filter
+                ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50';
         @endphp
 
         <x-modal wire:model="{{ $modalModel }}" maxWidth="3xl">
@@ -62,6 +71,68 @@
                             >
                         </div>
                         <div class="flex flex-wrap gap-2">
+                            <div class="flex flex-wrap gap-1.5">
+                                @foreach([
+                                    'all' => ['Alle', $visibilityCounts['all']],
+                                    'public' => ['Oeffentlich', $visibilityCounts['public']],
+                                    'private' => ['Privat', $visibilityCounts['private']],
+                                    'unknown' => ['Unbekannt', $visibilityCounts['unknown']],
+                                ] as $filter => [$label, $count])
+                                    <button
+                                        type="button"
+                                        wire:click="setRelationshipVisibilityFilter('{{ $listType }}', '{{ $filter }}')"
+                                        class="rounded-lg border px-3 py-2 text-xs font-semibold {{ $visibilityButtonClass($filter) }}"
+                                    >
+                                        {{ $label }} {{ number_format($count, 0, ',', '.') }}
+                                    </button>
+                                @endforeach
+                            </div>
+                            <div class="flex flex-wrap gap-1.5">
+                                @foreach([
+                                    'all' => ['Alle Profile', $profileCounts['all']],
+                                    'tracked' => ['Beobachtet', $profileCounts['tracked']],
+                                    'untracked' => ['Nicht beobachtet', $profileCounts['untracked']],
+                                    'reconstructed' => ['Rekonstruiert', $profileCounts['reconstructed']],
+                                ] as $filter => [$label, $count])
+                                    <button
+                                        type="button"
+                                        wire:click="setRelationshipProfileFilter('{{ $listType }}', '{{ $filter }}')"
+                                        class="rounded-lg border px-3 py-2 text-xs font-semibold {{ $profileButtonClass($filter) }}"
+                                    >
+                                        {{ $label }} {{ number_format($count, 0, ',', '.') }}
+                                    </button>
+                                @endforeach
+                            </div>
+                            <label class="sr-only" for="{{ $listType }}-sort">Sortierung</label>
+                            <select
+                                id="{{ $listType }}-sort"
+                                wire:change="setRelationshipSort('{{ $listType }}', $event.target.value)"
+                                class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                            >
+                                <option value="default" @selected($controls['sort'] === 'default')>Standard</option>
+                                <option value="newest" @selected($controls['sort'] === 'newest')>Neueste zuerst</option>
+                                <option value="username" @selected($controls['sort'] === 'username')>Username A-Z</option>
+                                <option value="visibility" @selected($controls['sort'] === 'visibility')>Oeffentlich zuerst</option>
+                                <option value="followers" @selected($controls['sort'] === 'followers')>Follower absteigend</option>
+                                <option value="following" @selected($controls['sort'] === 'following')>Gefolgt absteigend</option>
+                                <option value="posts" @selected($controls['sort'] === 'posts')>Beitraege absteigend</option>
+                            </select>
+                        </div>
+
+                        <div class="mt-2 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
+                            <span>{{ number_format($controls['filteredActiveCount'], 0, ',', '.') }} von {{ number_format($controls['totalActiveCount'], 0, ',', '.') }} aktiven Eintraegen nach Filter</span>
+                            @if($controls['visibilityFilter'] !== 'all' || $controls['profileFilter'] !== 'all' || $controls['sort'] !== 'default')
+                                <button
+                                    type="button"
+                                    wire:click="resetRelationshipControls('{{ $listType }}')"
+                                    class="font-bold text-pink-700 hover:text-pink-800"
+                                >
+                                    Zuruecksetzen
+                                </button>
+                            @endif
+                        </div>
+
+                        <div class="mt-3 flex flex-wrap gap-2">
                             @if($listData['addedItems']->isNotEmpty())
                                 <button type="button" x-on:click="showAdded = ! showAdded" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">
                                     Neu {{ number_format($listData['addedItems']->count()) }}
@@ -172,7 +243,7 @@
                             <div class="mb-2 flex items-center justify-between gap-3">
                                 <h4 class="text-sm font-bold text-slate-900">{{ $listData['activeTitle'] }}</h4>
                                 <div class="text-xs font-semibold text-slate-500">
-                                    {{ number_format($listData['visibleActiveCount'], 0, ',', '.') }} / {{ number_format($listData['activeItems']->count(), 0, ',', '.') }}
+                                    {{ number_format($listData['visibleActiveCount'], 0, ',', '.') }} / {{ number_format($controls['filteredActiveCount'], 0, ',', '.') }}
                                 </div>
                             </div>
                             <div class="space-y-2">
@@ -197,7 +268,11 @@
                         @endif
                     @else
                         <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                            {{ $listData['emptyText'] }}
+                            @if($controls['totalActiveCount'] > 0 && $controls['filteredActiveCount'] === 0)
+                                Keine aktiven Eintraege fuer die aktuellen Filter.
+                            @else
+                                {{ $listData['emptyText'] }}
+                            @endif
                             @if(data_get($relationshipList, 'reason'))
                                 Grund: {{ data_get($relationshipList, 'reason') }}
                             @endif

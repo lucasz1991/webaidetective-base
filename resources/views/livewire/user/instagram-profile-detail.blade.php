@@ -402,24 +402,6 @@
             </div>
         </div>
 
-        <div class="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            <div class="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3">
-                <div class="text-xs font-semibold text-slate-500">Mini / Listen / Vorschlaege</div>
-                <div class="mt-1 font-bold text-slate-950">ab {{ number_format($scanCostSummary['profile'], 0, ',', '.') }} Credits</div>
-            </div>
-            <div class="rounded-2xl border border-violet-200 bg-violet-50 px-3 py-3">
-                <div class="text-xs font-semibold text-violet-600">Beitragsscan</div>
-                <div class="mt-1 font-bold text-violet-950">ab {{ number_format($scanCostSummary['post'], 0, ',', '.') }} Credits</div>
-            </div>
-            <div class="rounded-2xl border border-pink-200 bg-pink-50 px-3 py-3">
-                <div class="text-xs font-semibold text-pink-600">Vollanalyse</div>
-                <div class="mt-1 font-bold text-pink-950">Profil plus Folge-Scans</div>
-            </div>
-            <div class="rounded-2xl border border-slate-200 bg-white px-3 py-3">
-                <div class="text-xs font-semibold text-slate-500">Bisher verbraucht</div>
-                <div class="mt-1 font-bold text-slate-950">{{ number_format((int) ($creditWallet?->used_credits ?? 0), 0, ',', '.') }} Credits</div>
-            </div>
-        </div>
 
         <div class="mt-5 border-t border-slate-200 pt-4">
             <h3 class="text-sm font-bold text-slate-950">Letzte Kosten fuer {{ $profile->display_handle }}</h3>
@@ -441,24 +423,7 @@
         </div>
     </section>
 
-    <div class="grid gap-5 xl:grid-cols-2">
-        <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 class="text-base font-bold text-slate-950">Folgt diesen Profilen</h2>
-            <div class="mt-4 max-h-80 space-y-2 overflow-y-auto pr-2">
-                @forelse($profile->sourceRelationships as $relationship)
-                    @php($related = $relationship->relatedInstagramProfile)
-                    @if($related)
-                        <x-instagram.profile-list-item
-                            :item="$related"
-                            :meta="$relationship->list_type"
-                            :show-visibility="false"
-                        />
-                    @endif
-                @empty
-                    <p class="text-sm text-slate-500">Keine aktiven ausgehenden Beziehungen gespeichert.</p>
-                @endforelse
-            </div>
-    </section>
+
 
     <div class="xl:order-last xl:col-span-2">
         <x-instagram-posts-gallery
@@ -469,24 +434,6 @@
         />
     </div>
 
-    <section class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 class="text-base font-bold text-slate-950">Wird von diesen Profilen referenziert</h2>
-            <div class="mt-4 max-h-80 space-y-2 overflow-y-auto pr-2">
-                @forelse($profile->relatedRelationships as $relationship)
-                    @php($source = $relationship->sourceInstagramProfile)
-                    @if($source)
-                        <x-instagram.profile-list-item
-                            :item="$source"
-                            :meta="$relationship->list_type"
-                            :show-visibility="false"
-                        />
-                    @endif
-                @empty
-                    <p class="text-sm text-slate-500">Keine aktiven eingehenden Beziehungen gespeichert.</p>
-                @endforelse
-            </div>
-        </section>
-    </div>
 
     <section wire:poll.5s.visible class="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <h2 class="text-base font-bold text-slate-950">Letzte Listenscans</h2>
