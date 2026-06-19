@@ -134,6 +134,7 @@ class TrackedPersonDetail extends Component
 
     protected $listeners = [
         'tracked-person-refresh' => '$refresh',
+        'tracked-person-run-instagram-analysis' => 'analyzeInstagram',
         'scan-instagram-relationship-list' => 'scanInstagramRelationshipList',
         'scan-instagram-profile-from-list' => 'scanInstagramProfileFromList',
     ];
@@ -332,22 +333,38 @@ class TrackedPersonDetail extends Component
 
     public function analyzeInstagramMini(): void
     {
-        $this->runInstagramAnalysis(false);
+        try {
+            $this->runInstagramAnalysis(false);
+        } finally {
+            $this->dispatch('tracked-person-scan-finished');
+        }
     }
 
     public function analyzeInstagram(): void
     {
-        $this->runInstagramAnalysis(true);
+        try {
+            $this->runInstagramAnalysis(true);
+        } finally {
+            $this->dispatch('tracked-person-scan-finished');
+        }
     }
 
     public function scanInstagramFollowersList(): void
     {
-        $this->runInstagramRelationshipListScan('followers');
+        try {
+            $this->runInstagramRelationshipListScan('followers');
+        } finally {
+            $this->dispatch('tracked-person-scan-finished');
+        }
     }
 
     public function scanInstagramFollowingList(): void
     {
-        $this->runInstagramRelationshipListScan('following');
+        try {
+            $this->runInstagramRelationshipListScan('following');
+        } finally {
+            $this->dispatch('tracked-person-scan-finished');
+        }
     }
 
     public function scanInstagramRelationshipList(string $relationship): void
@@ -544,7 +561,11 @@ class TrackedPersonDetail extends Component
 
     public function scanInstagramSuggestions(): void
     {
-        $this->runInstagramSuggestionScan(false);
+        try {
+            $this->runInstagramSuggestionScan(false);
+        } finally {
+            $this->dispatch('tracked-person-scan-finished');
+        }
     }
 
     public function scanInstagramSuggestionConnections(): void
@@ -554,7 +575,11 @@ class TrackedPersonDetail extends Component
 
     public function scanInstagramSuggestionDeepSearch(): void
     {
-        $this->runInstagramSuggestionScan(true);
+        try {
+            $this->runInstagramSuggestionScan(true);
+        } finally {
+            $this->dispatch('tracked-person-scan-finished');
+        }
     }
 
     public function openProfilePreview(string $nodeId): mixed
@@ -673,6 +698,15 @@ class TrackedPersonDetail extends Component
     }
 
     public function scanInstagramPosts(): void
+    {
+        try {
+            $this->runInstagramPostScan();
+        } finally {
+            $this->dispatch('tracked-person-scan-finished');
+        }
+    }
+
+    private function runInstagramPostScan(): void
     {
         @set_time_limit(0);
         @ignore_user_abort(false);

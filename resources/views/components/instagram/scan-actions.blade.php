@@ -15,7 +15,7 @@
 
 <button
     type="button"
-    @click="$dispatch('close')"
+    @click="$dispatch('close'); window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
     wire:click="analyzeInstagramMini"
     wire:loading.attr="disabled"
     wire:target="analyzeInstagramMini"
@@ -30,7 +30,7 @@
 
 <button
     type="button"
-    @click="$dispatch('close')"
+    @click="$dispatch('close'); window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
     wire:click="analyzeInstagram"
     wire:loading.attr="disabled"
     wire:target="analyzeInstagram"
@@ -48,7 +48,7 @@
 
 <button
     type="button"
-    @click="$dispatch('close')"
+    @click="$dispatch('close'); window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
     wire:click="scanInstagramFollowersList"
     wire:loading.attr="disabled"
     wire:target="scanInstagramFollowersList"
@@ -61,7 +61,7 @@
 
 <button
     type="button"
-    @click="$dispatch('close')"
+    @click="$dispatch('close'); window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
     wire:click="scanInstagramFollowingList"
     wire:loading.attr="disabled"
     wire:target="scanInstagramFollowingList"
@@ -74,7 +74,7 @@
 
 <button
     type="button"
-    @click="$dispatch('close')"
+    @click="$dispatch('close'); window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
     wire:click="scanInstagramPosts"
     wire:loading.attr="disabled"
     wire:target="scanInstagramPosts"
@@ -87,7 +87,7 @@
 
 <button
     type="button"
-    @click="$dispatch('close')"
+    @click="$dispatch('close'); window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
     wire:click="scanInstagramSuggestions"
     wire:loading.attr="disabled"
     wire:target="scanInstagramSuggestions"
@@ -102,7 +102,7 @@
 
 <button
     type="button"
-    @click="$dispatch('close')"
+    @click="$dispatch('close'); window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
     wire:click="scanInstagramSuggestionDeepSearch"
     wire:loading.attr="disabled"
     wire:target="scanInstagramSuggestionDeepSearch"

@@ -1,4 +1,13 @@
-<div class="container mx-auto space-y-4" x-data="{ toasts: [] }" x-init="window.addEventListener('toast', e => { toasts.push(e.detail); setTimeout(() => toasts.shift(), 3000); })" x-cloak>
+<div
+    class="container mx-auto space-y-4"
+    x-data="{ toasts: [], scanPreviewOpen: false }"
+    x-init="
+        window.addEventListener('toast', e => { toasts.push(e.detail); setTimeout(() => toasts.shift(), 3000); });
+        window.addEventListener('tracked-person-scan-starting', () => { scanPreviewOpen = true; });
+        window.addEventListener('tracked-person-scan-finished', () => { scanPreviewOpen = false; });
+    "
+    x-cloak
+>
     @php
         $isAdmin = auth()->user()?->role === 'admin';
         $instagramPosts = $trackedPerson->currentInstagramProfile?->posts ?? collect();
@@ -32,9 +41,9 @@
     </div>
     @if($isAdmin)
         <div
-            wire:loading.flex
+            x-show="scanPreviewOpen"
             wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramRelationshipList,scanInstagramProfileFromList,scanPublicProfileConnections,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts"
-            class="fixed inset-0 z-[60] hidden items-center justify-center bg-slate-950/70 px-4"
+            class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/70 px-4"
         >
             <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
                 <div class="mx-auto rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-1">
