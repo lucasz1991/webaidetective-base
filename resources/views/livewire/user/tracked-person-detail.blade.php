@@ -25,6 +25,7 @@
         }
 
         $detailTabs['verbindungen'] = 'Verbindungen';
+        $detailTabs['aktivitaeten'] = 'Aktivitaeten';
         $detailTabs['karte'] = 'Karte';
 
         if ($isAdmin) {
@@ -1264,6 +1265,17 @@
                         </div>
                     </div>
                 </div>
+            </x-ui.accordion.tab-panel>
+
+            <x-ui.accordion.tab-panel
+                for="aktivitaeten"
+                panel-class="scroll-mt-4 pt-4"
+            >
+                <livewire:user.tracked-person-activity-timeline
+                    :tracked-person-id="$trackedPerson->id"
+                    lazy
+                    :key="'tracked-person-activity-timeline-'.$trackedPerson->id"
+                />
             </x-ui.accordion.tab-panel>
 
             <x-ui.accordion.tab-panel
