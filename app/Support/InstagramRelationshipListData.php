@@ -638,7 +638,7 @@ class InstagramRelationshipListData
         $merged = [];
         $missingUsernameIndex = 0;
 
-        foreach ($baseItems->merge($incomingItems) as $item) {
+        foreach ($baseItems->toBase()->concat($incomingItems->toBase()) as $item) {
             $raw = is_array($item) ? $item : (array) $item;
             $username = $this->normalizeUsername(data_get($raw, 'username', data_get($raw, 'username_snapshot', '')));
             $key = $username ?: '__missing_username_'.(++$missingUsernameIndex);
