@@ -27,33 +27,15 @@ class InstagramRelationshipListData
         $passiveItems = $this->passiveRelationshipItems($trackedPerson, $listType);
 
         if ($liveItems->isNotEmpty()) {
-            $activeItems = $this->sortActive(
-                $activeItems
-                    ->merge($liveItems)
-                    ->unique(fn ($item): string => Str::lower((string) data_get($item, 'username', '')))
-                    ->values(),
-                $addedItems,
-            );
+            $activeItems = $this->sortActive($this->mergeItemsByUsername($activeItems, $liveItems), $addedItems);
         }
 
         if ($reconstructedItems->isNotEmpty()) {
-            $activeItems = $this->sortActive(
-                $activeItems
-                    ->merge($reconstructedItems)
-                    ->unique(fn ($item): string => Str::lower((string) data_get($item, 'username', '')))
-                    ->values(),
-                $addedItems,
-            );
+            $activeItems = $this->sortActive($this->mergeItemsByUsername($activeItems, $reconstructedItems), $addedItems);
         }
 
         if ($passiveItems->isNotEmpty()) {
-            $activeItems = $this->sortActive(
-                $activeItems
-                    ->merge($passiveItems)
-                    ->unique(fn ($item): string => Str::lower((string) data_get($item, 'username', '')))
-                    ->values(),
-                $addedItems,
-            );
+            $activeItems = $this->sortActive($this->mergeItemsByUsername($activeItems, $passiveItems), $addedItems);
         }
 
         $scanRemovedItems = $this->sortNewest($this->loadItems($relationshipList, 'removedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
@@ -180,25 +162,26 @@ class InstagramRelationshipListData
 
     private function passiveRelationshipItems(TrackedPerson $trackedPerson, string $listType): Collection
     {
-        $targetProfileId = (int) $trackedPerson->current_instagram_profile_id;
+        $targetProfileIds = $this->targetProfileIds($trackedPerson);
 
-        if (! $targetProfileId || ! in_array($listType, ['followers', 'following'], true)) {
+        if ($targetProfileIds->isEmpty() || ! in_array($listType, ['followers', 'following'], true)) {
             return collect();
         }
 
         $sourceListType = $listType === 'followers' ? 'following' : 'followers';
-        $targetUsername = ltrim((string) $trackedPerson->instagram_username, '@');
-        $targetHandle = $targetUsername !== '' ? '@'.$targetUsername : 'Zielprofil';
+        $targetUsername = $this->normalizeUsername($trackedPerson->instagram_username)
+            ?: $this->normalizeUsername(InstagramProfile::withTrashed()
+                ->whereKey($targetProfileIds->first())
+                ->value('username'));
+        $targetHandle = $targetUsername ? '@'.$targetUsername : 'Zielprofil';
 
         return InstagramProfileRelationship::query()
-            ->where('related_instagram_profile_id', $targetProfileId)
-            ->where('source_instagram_profile_id', '!=', $targetProfileId)
+            ->whereIn('related_instagram_profile_id', $targetProfileIds->all())
+            ->whereNotIn('source_instagram_profile_id', $targetProfileIds->all())
             ->where('list_type', $sourceListType)
             ->where('status', 'active')
             ->whereNull('removed_at')
-            ->whereHas('lastSeenScan', function ($query) use ($trackedPerson): void {
-                $query->where('user_id', $trackedPerson->user_id);
-            })
+            ->where(fn ($query) => $this->scopeRelationshipToUser($query, $trackedPerson))
             ->with('sourceInstagramProfile')
             ->latest('last_seen_at')
             ->get()
@@ -239,6 +222,40 @@ class InstagramRelationshipListData
             ->filter()
             ->unique(fn (array $item): string => Str::lower((string) $item['username']))
             ->values();
+    }
+
+    private function targetProfileIds(TrackedPerson $trackedPerson): Collection
+    {
+        $ids = collect([(int) $trackedPerson->current_instagram_profile_id])
+            ->filter(fn (int $id): bool => $id > 0);
+        $username = $this->normalizeUsername($trackedPerson->instagram_username);
+
+        if ($username !== null) {
+            $ids = $ids->merge(
+                InstagramProfile::withTrashed()
+                    ->where('username', $username)
+                    ->pluck('id'),
+            );
+        }
+
+        return $ids
+            ->map(fn ($id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values();
+    }
+
+    private function scopeRelationshipToUser($query, TrackedPerson $trackedPerson): void
+    {
+        $userId = (int) $trackedPerson->user_id;
+        $trackedPersonId = (int) $trackedPerson->id;
+
+        $query
+            ->whereHas('lastSeenScan', fn ($scan) => $scan->where('user_id', $userId))
+            ->orWhereHas('firstSeenScan', fn ($scan) => $scan->where('user_id', $userId))
+            ->orWhereHas('scanItems.listScan', fn ($scan) => $scan->where('user_id', $userId))
+            ->orWhere('evidence->user_id', $userId)
+            ->orWhere('evidence->tracked_person_id', $trackedPersonId);
     }
 
     private function reconstructedSuggestionItems(TrackedPerson $trackedPerson, string $listType): Collection
@@ -388,6 +405,40 @@ class InstagramRelationshipListData
             ->values();
     }
 
+    private function mergeItemsByUsername(Collection $baseItems, Collection $incomingItems): Collection
+    {
+        $merged = [];
+        $missingUsernameIndex = 0;
+
+        foreach ($baseItems->merge($incomingItems) as $item) {
+            $raw = is_array($item) ? $item : (array) $item;
+            $username = $this->normalizeUsername(data_get($raw, 'username', data_get($raw, 'username_snapshot', '')));
+            $key = $username ?: '__missing_username_'.(++$missingUsernameIndex);
+
+            if (! isset($merged[$key])) {
+                $merged[$key] = $raw;
+
+                continue;
+            }
+
+            $overlay = array_filter($raw, static fn ($value): bool => $value !== null && $value !== '');
+            $mergedItem = [
+                ...$merged[$key],
+                ...$overlay,
+            ];
+
+            foreach (['isTracked', 'passive', 'reconstructed'] as $flag) {
+                if (array_key_exists($flag, $merged[$key]) || array_key_exists($flag, $raw)) {
+                    $mergedItem[$flag] = (bool) ($merged[$key][$flag] ?? false) || (bool) ($raw[$flag] ?? false);
+                }
+            }
+
+            $merged[$key] = $mergedItem;
+        }
+
+        return collect(array_values($merged));
+    }
+
     private function stats(mixed $relationshipList, Collection $items): array
     {
         $relationshipList = is_array($relationshipList) ? $relationshipList : [];
@@ -448,4 +499,17 @@ class InstagramRelationshipListData
         return 0;
     }
 
+    private function normalizeUsername(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $username = Str::lower(trim((string) $value));
+        $username = preg_replace('/^https?:\/\/(www\.)?instagram\.com\//i', '', $username) ?? $username;
+        $username = trim(ltrim($username, '@'), "/ \t\n\r\0\x0B");
+        $username = preg_replace('/[?#].*$/', '', $username) ?? $username;
+
+        return $username !== '' ? $username : null;
+    }
 }
