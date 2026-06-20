@@ -288,8 +288,12 @@ class TrackedPersonActivityTimeline extends Component
         }
 
         $likes = InstagramPostLike::query()
-            ->whereHas('post', fn (Builder $query) => $query->where('instagram_profile_id', $profileId))
-            ->with('post')
+            ->where(function (Builder $query) use ($profileId): void {
+                $query
+                    ->where('instagram_profile_id', $profileId)
+                    ->orWhereHas('post', fn (Builder $postQuery) => $postQuery->where('instagram_profile_id', $profileId));
+            })
+            ->with('post.instagramProfile')
             ->where(function (Builder $query): void {
                 $query->whereNotNull('first_seen_at')
                     ->orWhereNotNull('removed_at');
@@ -298,19 +302,22 @@ class TrackedPersonActivityTimeline extends Component
             ->limit($this->sourceLimit())
             ->get();
 
-        return $likes->flatMap(function (InstagramPostLike $like): Collection {
+        return $likes->flatMap(function (InstagramPostLike $like) use ($trackedPerson, $profileId): Collection {
             $rows = collect();
-            $displayName = $this->profileDisplayName($like->username, $like->full_name);
+            $isActorActivity = $this->isEngagementOnOtherProfilePost($like->instagram_profile_id, $like->post, $profileId);
+            $displayName = $isActorActivity
+                ? $this->trackedPersonInstagramLabel($trackedPerson)
+                : $this->profileDisplayName($like->username, $like->full_name);
 
             if ($like->first_seen_at) {
                 $rows->push($this->activityRow(
                     'like-'.$like->id.'-seen',
                     'likes',
-                    'Like erfasst',
+                    $isActorActivity ? 'Like bei anderem Profil erfasst' : 'Like auf eigenem Post erfasst',
                     $displayName,
                     $like->first_seen_at,
                     [
-                        'meta' => $this->postMeta($like->post),
+                        'meta' => $this->postMeta($like->post, $isActorActivity),
                         'tone' => 'pink',
                         'url' => $like->post?->post_url,
                         'image_url' => $like->profile_image_url ?: $like->post?->thumbnail_storage_url,
@@ -322,11 +329,11 @@ class TrackedPersonActivityTimeline extends Component
                 $rows->push($this->activityRow(
                     'like-'.$like->id.'-removed',
                     'likes',
-                    'Like entfernt',
+                    $isActorActivity ? 'Like bei anderem Profil entfernt' : 'Like auf eigenem Post entfernt',
                     $displayName,
                     $like->removed_at,
                     [
-                        'meta' => $this->postMeta($like->post),
+                        'meta' => $this->postMeta($like->post, $isActorActivity),
                         'tone' => 'rose',
                         'url' => $like->post?->post_url,
                         'image_url' => $like->profile_image_url ?: $like->post?->thumbnail_storage_url,
@@ -347,8 +354,12 @@ class TrackedPersonActivityTimeline extends Component
         }
 
         $comments = InstagramPostComment::query()
-            ->whereHas('post', fn (Builder $query) => $query->where('instagram_profile_id', $profileId))
-            ->with('post')
+            ->where(function (Builder $query) use ($profileId): void {
+                $query
+                    ->where('instagram_profile_id', $profileId)
+                    ->orWhereHas('post', fn (Builder $postQuery) => $postQuery->where('instagram_profile_id', $profileId));
+            })
+            ->with('post.instagramProfile')
             ->where(function (Builder $query): void {
                 $query->whereNotNull('first_seen_at')
                     ->orWhereNotNull('published_at')
@@ -358,20 +369,23 @@ class TrackedPersonActivityTimeline extends Component
             ->limit($this->sourceLimit())
             ->get();
 
-        return $comments->flatMap(function (InstagramPostComment $comment): Collection {
+        return $comments->flatMap(function (InstagramPostComment $comment) use ($trackedPerson, $profileId): Collection {
             $rows = collect();
-            $displayName = $this->profileDisplayName($comment->username, $comment->full_name);
+            $isActorActivity = $this->isEngagementOnOtherProfilePost($comment->instagram_profile_id, $comment->post, $profileId);
+            $displayName = $isActorActivity
+                ? $this->trackedPersonInstagramLabel($trackedPerson)
+                : $this->profileDisplayName($comment->username, $comment->full_name);
             $text = $comment->comment_text ? Str::limit($comment->comment_text, 160) : 'Kommentar ohne gespeicherten Text.';
 
             if ($comment->first_seen_at || $comment->published_at) {
                 $rows->push($this->activityRow(
                     'comment-'.$comment->id.'-seen',
                     'comments',
-                    'Kommentar erfasst',
+                    $isActorActivity ? 'Kommentar bei anderem Profil erfasst' : 'Kommentar auf eigenem Post erfasst',
                     $displayName.': '.$text,
                     $comment->first_seen_at ?: $comment->published_at,
                     [
-                        'meta' => $this->postMeta($comment->post),
+                        'meta' => $this->postMeta($comment->post, $isActorActivity),
                         'tone' => 'amber',
                         'url' => $comment->post?->post_url,
                         'image_url' => $comment->profile_image_url ?: $comment->post?->thumbnail_storage_url,
@@ -383,11 +397,11 @@ class TrackedPersonActivityTimeline extends Component
                 $rows->push($this->activityRow(
                     'comment-'.$comment->id.'-removed',
                     'comments',
-                    'Kommentar entfernt',
+                    $isActorActivity ? 'Kommentar bei anderem Profil entfernt' : 'Kommentar auf eigenem Post entfernt',
                     $displayName.': '.$text,
                     $comment->removed_at,
                     [
-                        'meta' => $this->postMeta($comment->post),
+                        'meta' => $this->postMeta($comment->post, $isActorActivity),
                         'tone' => 'rose',
                         'url' => $comment->post?->post_url,
                         'image_url' => $comment->profile_image_url ?: $comment->post?->thumbnail_storage_url,
@@ -532,6 +546,25 @@ class TrackedPersonActivityTimeline extends Component
             ->join(' - ') ?: 'Unbekanntes Instagram-Profil';
     }
 
+    private function trackedPersonInstagramLabel(TrackedPerson $trackedPerson): string
+    {
+        return $this->profileDisplayName(
+            $trackedPerson->currentInstagramProfile?->username ?: $trackedPerson->instagram_username,
+            $trackedPerson->currentInstagramProfile?->display_name
+                ?: $trackedPerson->currentInstagramProfile?->full_name
+                ?: $trackedPerson->display_name,
+        );
+    }
+
+    private function isEngagementOnOtherProfilePost(?int $actorProfileId, ?InstagramPost $post, int $targetProfileId): bool
+    {
+        if ((int) $actorProfileId !== $targetProfileId) {
+            return false;
+        }
+
+        return ! $post || (int) $post->instagram_profile_id !== $targetProfileId;
+    }
+
     private function relationshipTitle(string $listType, string $status): string
     {
         return match ([$listType, $status]) {
@@ -542,13 +575,16 @@ class TrackedPersonActivityTimeline extends Component
         };
     }
 
-    private function postMeta(?InstagramPost $post): ?string
+    private function postMeta(?InstagramPost $post, bool $includeOwner = false): ?string
     {
         if (! $post) {
             return null;
         }
 
         return collect([
+            $includeOwner && $post->instagramProfile
+                ? 'bei '.$post->instagramProfile->display_handle
+                : null,
             $post->shortcode ? 'Post #'.$post->shortcode : 'Post',
             $post->published_at ? $post->published_at->timezone(config('app.timezone'))->format('d.m.Y') : null,
         ])->filter()->join(' - ');
