@@ -11,11 +11,34 @@
     $items = $scan?->items ?? collect();
     $visibleLimit = max(1, (int) $visibleLimit);
     $itemsPerPage = max(1, (int) $itemsPerPage);
-    $visibleItems = $items->take($visibleLimit);
+    $visibleItems = $items->take($visibleLimit)->values();
     $hasMoreItems = $items->count() > $visibleLimit;
     $activeItems = $items->whereIn('item_status', ['observed', 'added'])->values();
     $addedItems = $items->where('item_status', 'added')->values();
     $removedItems = $items->where('item_status', 'removed')->values();
+    $sortRows = $visibleItems
+        ->map(fn ($item, int $index): array => [
+            'index' => $index,
+            'name' => strtolower(trim(($item->display_name_snapshot ?: $item->username_snapshot).' '.$item->username_snapshot)),
+            'status' => match ($item->item_status) {
+                'added' => 0,
+                'observed' => 1,
+                'removed' => 2,
+                default => 3,
+            },
+        ]);
+    $nameAscRanks = $sortRows
+        ->sortBy([['name', 'asc'], ['index', 'asc']])
+        ->values()
+        ->mapWithKeys(fn (array $row, int $rank): array => [$row['index'] => $rank]);
+    $nameDescRanks = $sortRows
+        ->sortBy([['name', 'desc'], ['index', 'asc']])
+        ->values()
+        ->mapWithKeys(fn (array $row, int $rank): array => [$row['index'] => $rank]);
+    $statusRanks = $sortRows
+        ->sortBy([['status', 'asc'], ['name', 'asc'], ['index', 'asc']])
+        ->values()
+        ->mapWithKeys(fn (array $row, int $rank): array => [$row['index'] => $rank]);
 @endphp
 
 <x-modal wire:model="{{ $model }}" maxWidth="3xl">
@@ -24,12 +47,29 @@
         x-data="{
             search: '',
             filter: 'active',
+            sort: 'default',
             filterLabel() {
                 return {
                     active: 'Aktiv',
                     added: 'Neu',
                     removed: 'Entfernt',
                 }[this.filter] || 'Filter';
+            },
+            sortLabel() {
+                return {
+                    default: 'Standard',
+                    nameAsc: 'Name A-Z',
+                    nameDesc: 'Name Z-A',
+                    status: 'Status',
+                }[this.sort] || 'Sortierung';
+            },
+            sortOrder(el) {
+                return {
+                    default: el.dataset.orderDefault,
+                    nameAsc: el.dataset.orderNameAsc,
+                    nameDesc: el.dataset.orderNameDesc,
+                    status: el.dataset.orderStatus,
+                }[this.sort] || el.dataset.orderDefault;
             },
         }"
         class="flex max-h-[85vh] flex-col overflow-hidden"
@@ -54,7 +94,7 @@
 
         <div class="overflow-y-auto p-4 sm:p-5">
             @if($scan)
-                <div class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <div class="mb-4 flex gap-2">
                     <input
                         type="search"
                         x-model.debounce.150ms="search"
@@ -66,22 +106,68 @@
                         width="auto"
                         :offset="8"
                         dropdown-classes=""
+                        content-classes="w-56 rounded-xl border border-slate-200 bg-white p-2"
+                    >
+                        <x-slot name="trigger">
+                            <button
+                                type="button"
+                                x-bind:aria-expanded="open"
+                                x-bind:title="'Sortierung: ' + sortLabel()"
+                                x-bind:aria-label="'Sortierung: ' + sortLabel()"
+                                class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                            >
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <path d="M7 4v16M7 20l-3-3M7 20l3-3M17 4l3 3M17 4l-3 3M17 4v16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                        </x-slot>
+
+                        <x-slot name="content">
+                            <div class="space-y-1">
+                                <button type="button" x-on:click="sort = 'default'; open = false" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold transition" x-bind:class="sort === 'default' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50'">
+                                    <span>Standard</span>
+                                    <svg x-show="sort === 'default'" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                                <button type="button" x-on:click="sort = 'nameAsc'; open = false" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold transition" x-bind:class="sort === 'nameAsc' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50'">
+                                    <span>Name A-Z</span>
+                                    <svg x-show="sort === 'nameAsc'" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                                <button type="button" x-on:click="sort = 'nameDesc'; open = false" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold transition" x-bind:class="sort === 'nameDesc' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50'">
+                                    <span>Name Z-A</span>
+                                    <svg x-show="sort === 'nameDesc'" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                                <button type="button" x-on:click="sort = 'status'; open = false" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold transition" x-bind:class="sort === 'status' ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50'">
+                                    <span>Status</span>
+                                    <svg x-show="sort === 'status'" class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </x-slot>
+                    </x-ui.dropdown.anchor-dropdown>
+                    <x-ui.dropdown.anchor-dropdown
+                        align="right"
+                        width="auto"
+                        :offset="8"
+                        dropdown-classes=""
                         content-classes="w-64 rounded-xl border border-slate-200 bg-white p-2"
                     >
                         <x-slot name="trigger">
                             <button
                                 type="button"
                                 x-bind:aria-expanded="open"
-                                class="inline-flex w-full items-center justify-between gap-2 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 sm:w-44"
+                                x-bind:title="'Filter: ' + filterLabel()"
+                                x-bind:aria-label="'Filter: ' + filterLabel()"
+                                class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                             >
-                                <span class="inline-flex min-w-0 items-center gap-2">
-                                    <svg class="h-4 w-4 shrink-0 text-slate-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                        <path d="M4 6h16M7 12h10M10 18h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                                    </svg>
-                                    <span class="truncate" x-text="filterLabel()"></span>
-                                </span>
-                                <svg class="h-4 w-4 shrink-0 text-slate-400" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                    <path d="m6 9 6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <path d="M4 6h16M7 12h10M10 18h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                                 </svg>
                             </button>
                         </x-slot>
@@ -105,9 +191,10 @@
                     </x-ui.dropdown.anchor-dropdown>
                 </div>
 
-                <div class="space-y-2">
+                <div class="flex flex-col gap-2">
                     @forelse($visibleItems as $item)
                         @php
+                            $defaultOrder = $loop->index;
                             $searchText = strtolower(trim($item->username_snapshot.' '.$item->display_name_snapshot));
                             $active = in_array($item->item_status, ['observed', 'added'], true);
                             $statusTone = match ($item->item_status) {
@@ -122,6 +209,11 @@
                             :status-tone="$statusTone"
                             data-search="{{ e($searchText) }}"
                             data-status="{{ $active ? 'active' : $item->item_status }}"
+                            data-order-default="{{ $defaultOrder }}"
+                            data-order-name-asc="{{ $nameAscRanks[$defaultOrder] ?? $defaultOrder }}"
+                            data-order-name-desc="{{ $nameDescRanks[$defaultOrder] ?? $defaultOrder }}"
+                            data-order-status="{{ $statusRanks[$defaultOrder] ?? $defaultOrder }}"
+                            x-bind:style="'order: ' + sortOrder($el)"
                             x-show="(search === '' || $el.dataset.search.includes(search.toLowerCase())) && (filter === $el.dataset.status || (filter === 'added' && $el.dataset.status === 'active' && {{ $item->item_status === 'added' ? 'true' : 'false' }}))"
                         />
                     @empty
