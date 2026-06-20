@@ -11,12 +11,28 @@
             $controls = $listData['controls'];
             $visibilityCounts = $controls['visibilityCounts'];
             $profileCounts = $controls['profileCounts'];
-            $visibilityButtonClass = fn (string $filter): string => $controls['visibilityFilter'] === $filter
-                ? 'border-slate-900 bg-slate-900 text-white'
-                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50';
-            $profileButtonClass = fn (string $filter): string => $controls['profileFilter'] === $filter
-                ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
-                : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50';
+            $visibilityOptions = [
+                'all' => ['Alle', $visibilityCounts['all']],
+                'public' => ['Oeffentlich', $visibilityCounts['public']],
+                'private' => ['Privat', $visibilityCounts['private']],
+                'unknown' => ['Unbekannt', $visibilityCounts['unknown']],
+            ];
+            $profileOptions = [
+                'all' => ['Alle Profile', $profileCounts['all']],
+                'tracked' => ['Beobachtet', $profileCounts['tracked']],
+                'untracked' => ['Nicht beobachtet', $profileCounts['untracked']],
+                'reconstructed' => ['Rekonstruiert', $profileCounts['reconstructed']],
+                'passive' => ['Passiv', $profileCounts['passive']],
+            ];
+            $sortOptions = [
+                'default' => 'Standard',
+                'newest' => 'Neueste zuerst',
+                'username' => 'Username A-Z',
+                'visibility' => 'Oeffentlich zuerst',
+                'followers' => 'Follower absteigend',
+                'following' => 'Gefolgt absteigend',
+                'posts' => 'Beitraege absteigend',
+            ];
         @endphp
 
         <x-modal wire:model="{{ $modalModel }}" maxWidth="3xl">
@@ -59,65 +75,191 @@
                 </div>
 
                 <div class="overflow-y-auto p-4 sm:p-5">
-                    <div class="mb-4 flex flex-col gap-2 lg:flex-row">
-                        <div class="min-w-0 flex-1">
-                            <label class="sr-only" for="{{ $listType }}-search">{{ $listData['title'] }} durchsuchen</label>
-                            <input
-                                id="{{ $listType }}-search"
-                                type="search"
-                                x-model.debounce.150ms="search"
-                                class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500"
-                                placeholder="{{ $listData['searchPlaceholder'] }}"
+                    <div class="mb-4">
+                        <div class="flex gap-2">
+                            <div class="min-w-0 flex-1">
+                                <label class="sr-only" for="{{ $listType }}-search">{{ $listData['title'] }} durchsuchen</label>
+                                <input
+                                    id="{{ $listType }}-search"
+                                    type="search"
+                                    x-model.debounce.150ms="search"
+                                    class="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                                    placeholder="{{ $listData['searchPlaceholder'] }}"
+                                >
+                            </div>
+
+                            <x-ui.dropdown.anchor-dropdown
+                                align="right"
+                                width="auto"
+                                :offset="8"
+                                dropdown-classes=""
+                                content-classes="w-56 rounded-xl border border-slate-200 bg-white p-2"
                             >
-                        </div>
-                        <div class="flex flex-wrap gap-2">
-                            <div class="flex flex-wrap gap-1.5">
-                                @foreach([
-                                    'all' => ['Alle', $visibilityCounts['all']],
-                                    'public' => ['Oeffentlich', $visibilityCounts['public']],
-                                    'private' => ['Privat', $visibilityCounts['private']],
-                                    'unknown' => ['Unbekannt', $visibilityCounts['unknown']],
-                                ] as $filter => [$label, $count])
+                                <x-slot name="trigger">
                                     <button
                                         type="button"
-                                        wire:click="setRelationshipVisibilityFilter('{{ $listType }}', '{{ $filter }}')"
-                                        class="rounded-lg border px-3 py-2 text-xs font-semibold {{ $visibilityButtonClass($filter) }}"
+                                        x-bind:aria-expanded="open"
+                                        title="Sortierung"
+                                        aria-label="Sortierung"
+                                        class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
                                     >
-                                        {{ $label }} {{ number_format($count, 0, ',', '.') }}
+                                        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                            <path d="M7 4v16M7 20l-3-3M7 20l3-3M17 4l3 3M17 4l-3 3M17 4v16" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                        </svg>
                                     </button>
-                                @endforeach
-                            </div>
-                            <div class="flex flex-wrap gap-1.5">
-                                @foreach([
-                                    'all' => ['Alle Profile', $profileCounts['all']],
-                                    'tracked' => ['Beobachtet', $profileCounts['tracked']],
-                                    'untracked' => ['Nicht beobachtet', $profileCounts['untracked']],
-                                    'reconstructed' => ['Rekonstruiert', $profileCounts['reconstructed']],
-                                    'passive' => ['Passiv', $profileCounts['passive']],
-                                ] as $filter => [$label, $count])
-                                    <button
-                                        type="button"
-                                        wire:click="setRelationshipProfileFilter('{{ $listType }}', '{{ $filter }}')"
-                                        class="rounded-lg border px-3 py-2 text-xs font-semibold {{ $profileButtonClass($filter) }}"
-                                    >
-                                        {{ $label }} {{ number_format($count, 0, ',', '.') }}
-                                    </button>
-                                @endforeach
-                            </div>
-                            <label class="sr-only" for="{{ $listType }}-sort">Sortierung</label>
-                            <select
-                                id="{{ $listType }}-sort"
-                                wire:change="setRelationshipSort('{{ $listType }}', $event.target.value)"
-                                class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 focus:border-pink-500 focus:outline-none focus:ring-1 focus:ring-pink-500"
-                            >
-                                <option value="default" @selected($controls['sort'] === 'default')>Standard</option>
-                                <option value="newest" @selected($controls['sort'] === 'newest')>Neueste zuerst</option>
-                                <option value="username" @selected($controls['sort'] === 'username')>Username A-Z</option>
-                                <option value="visibility" @selected($controls['sort'] === 'visibility')>Oeffentlich zuerst</option>
-                                <option value="followers" @selected($controls['sort'] === 'followers')>Follower absteigend</option>
-                                <option value="following" @selected($controls['sort'] === 'following')>Gefolgt absteigend</option>
-                                <option value="posts" @selected($controls['sort'] === 'posts')>Beitraege absteigend</option>
-                            </select>
+                                </x-slot>
+
+                            <x-slot name="content">
+                                <div class="space-y-1">
+                                    @foreach($sortOptions as $sort => $label)
+                                        <button
+                                            type="button"
+                                            wire:click="setRelationshipSort('{{ $listType }}', '{{ $sort }}')"
+                                            x-on:click="open = false"
+                                            class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold transition {{ $controls['sort'] === $sort ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50' }}"
+                                        >
+                                            <span>{{ $label }}</span>
+                                            @if($controls['sort'] === $sort)
+                                                <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                                    <path d="m5 12 4 4L19 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                                </svg>
+                                            @endif
+                                        </button>
+                                    @endforeach
+                                </div>
+                            </x-slot>
+                        </x-ui.dropdown.anchor-dropdown>
+
+                        <x-ui.dropdown.anchor-dropdown
+                            align="right"
+                            width="auto"
+                            :offset="8"
+                            dropdown-classes=""
+                            content-classes="w-64 rounded-xl border border-slate-200 bg-white p-2"
+                        >
+                            <x-slot name="trigger">
+                                <button
+                                    type="button"
+                                    x-bind:aria-expanded="open"
+                                    title="Sichtbarkeit filtern"
+                                    aria-label="Sichtbarkeit filtern"
+                                    class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                                >
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+                                        <circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+                                    </svg>
+                                </button>
+                            </x-slot>
+
+                            <x-slot name="content">
+                                <div class="space-y-1">
+                                    @foreach($visibilityOptions as $filter => [$label, $count])
+                                        <button
+                                            type="button"
+                                            wire:click="setRelationshipVisibilityFilter('{{ $listType }}', '{{ $filter }}')"
+                                            x-on:click="open = false"
+                                            class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold transition {{ $controls['visibilityFilter'] === $filter ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-50' }}"
+                                        >
+                                            <span>{{ $label }}</span>
+                                            <span class="rounded-md px-2 py-0.5 text-xs {{ $controls['visibilityFilter'] === $filter ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-600' }}">{{ number_format($count, 0, ',', '.') }}</span>
+                                        </button>
+                                    @endforeach
+                                </div>
+                            </x-slot>
+                        </x-ui.dropdown.anchor-dropdown>
+
+                        <x-ui.dropdown.anchor-dropdown
+                            align="right"
+                            width="auto"
+                            :offset="8"
+                            dropdown-classes=""
+                            content-classes="w-64 rounded-xl border border-slate-200 bg-white p-2"
+                        >
+                            <x-slot name="trigger">
+                                <button
+                                    type="button"
+                                    x-bind:aria-expanded="open"
+                                    title="Profile filtern"
+                                    aria-label="Profile filtern"
+                                    class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                                >
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M16 19c0-2.2-1.8-4-4-4s-4 1.8-4 4M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM19 19c0-1.6-.9-3-2.2-3.6M17 5.2a3 3 0 0 1 0 5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                                    </svg>
+                                </button>
+                            </x-slot>
+
+                            <x-slot name="content">
+                                <div class="space-y-1">
+                                    @foreach($profileOptions as $filter => [$label, $count])
+                                        <button
+                                            type="button"
+                                            wire:click="setRelationshipProfileFilter('{{ $listType }}', '{{ $filter }}')"
+                                            x-on:click="open = false"
+                                            class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold transition {{ $controls['profileFilter'] === $filter ? 'bg-indigo-600 text-white' : 'text-slate-700 hover:bg-slate-50' }}"
+                                        >
+                                            <span>{{ $label }}</span>
+                                            <span class="rounded-md px-2 py-0.5 text-xs {{ $controls['profileFilter'] === $filter ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-600' }}">{{ number_format($count, 0, ',', '.') }}</span>
+                                        </button>
+                                    @endforeach
+                                </div>
+                            </x-slot>
+                        </x-ui.dropdown.anchor-dropdown>
+
+                        <x-ui.dropdown.anchor-dropdown
+                            align="right"
+                            width="auto"
+                            :offset="8"
+                            dropdown-classes=""
+                            content-classes="w-64 rounded-xl border border-slate-200 bg-white p-2"
+                        >
+                            <x-slot name="trigger">
+                                <button
+                                    type="button"
+                                    x-bind:aria-expanded="open"
+                                    title="Listenabschnitte"
+                                    aria-label="Listenabschnitte"
+                                    class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                                >
+                                    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                </button>
+                            </x-slot>
+
+                            <x-slot name="content">
+                                <div class="space-y-1">
+                                    @if($listData['addedItems']->isNotEmpty())
+                                        <button type="button" x-on:click="showAdded = ! showAdded" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold text-emerald-800 transition hover:bg-emerald-50">
+                                            <span>Neu</span>
+                                            <span class="rounded-md bg-emerald-50 px-2 py-0.5 text-xs text-emerald-700">{{ number_format($listData['addedItems']->count()) }}</span>
+                                        </button>
+                                    @endif
+                                    @if($listData['scanRemovedItems']->isNotEmpty())
+                                        <button type="button" x-on:click="showScanRemoved = ! showScanRemoved" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold text-rose-800 transition hover:bg-rose-50">
+                                            <span>Entfernt</span>
+                                            <span class="rounded-md bg-rose-50 px-2 py-0.5 text-xs text-rose-700">{{ number_format($listData['scanRemovedItems']->count()) }}</span>
+                                        </button>
+                                    @endif
+                                    @if($listData['removedItems']->isNotEmpty())
+                                        <button type="button" x-on:click="showCurrentRemoved = ! showCurrentRemoved" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold text-rose-800 transition hover:bg-rose-50">
+                                            <span>Aktuell entfernt</span>
+                                            <span class="rounded-md bg-rose-50 px-2 py-0.5 text-xs text-rose-700">{{ number_format($listData['removedItems']->count()) }}</span>
+                                        </button>
+                                    @endif
+                                    @if($listData['removedHistoryItems']->isNotEmpty())
+                                        <button type="button" x-on:click="showHistory = ! showHistory" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                                            <span>Historie</span>
+                                            <span class="rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{{ number_format($listData['removedHistoryItems']->count()) }}</span>
+                                        </button>
+                                    @endif
+                                    @if($listData['addedItems']->isEmpty() && $listData['scanRemovedItems']->isEmpty() && $listData['removedItems']->isEmpty() && $listData['removedHistoryItems']->isEmpty())
+                                        <div class="px-3 py-2 text-sm font-semibold text-slate-500">Keine weiteren Abschnitte</div>
+                                    @endif
+                                </div>
+                            </x-slot>
+                        </x-ui.dropdown.anchor-dropdown>
                         </div>
 
                         <div class="mt-2 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
@@ -126,32 +268,13 @@
                                 <button
                                     type="button"
                                     wire:click="resetRelationshipControls('{{ $listType }}')"
-                                    class="font-bold text-pink-700 hover:text-pink-800"
+                                    title="Filter und Sortierung zuruecksetzen"
+                                    aria-label="Filter und Sortierung zuruecksetzen"
+                                    class="inline-flex h-6 w-6 items-center justify-center rounded-md text-pink-700 hover:bg-pink-50 hover:text-pink-800"
                                 >
-                                    Zuruecksetzen
-                                </button>
-                            @endif
-                        </div>
-
-                        <div class="mt-3 flex flex-wrap gap-2">
-                            @if($listData['addedItems']->isNotEmpty())
-                                <button type="button" x-on:click="showAdded = ! showAdded" class="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 hover:bg-emerald-100">
-                                    Neu {{ number_format($listData['addedItems']->count()) }}
-                                </button>
-                            @endif
-                            @if($listData['scanRemovedItems']->isNotEmpty())
-                                <button type="button" x-on:click="showScanRemoved = ! showScanRemoved" class="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800 hover:bg-rose-100">
-                                    Entfernt {{ number_format($listData['scanRemovedItems']->count()) }}
-                                </button>
-                            @endif
-                            @if($listData['removedItems']->isNotEmpty())
-                                <button type="button" x-on:click="showCurrentRemoved = ! showCurrentRemoved" class="rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-semibold text-rose-800 hover:bg-rose-50">
-                                    Aktuell entfernt {{ number_format($listData['removedItems']->count()) }}
-                                </button>
-                            @endif
-                            @if($listData['removedHistoryItems']->isNotEmpty())
-                                <button type="button" x-on:click="showHistory = ! showHistory" class="rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                                    Historie {{ number_format($listData['removedHistoryItems']->count()) }}
+                                    <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                        <path d="M3 12a9 9 0 1 0 3-6.7M3 4v6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
                                 </button>
                             @endif
                         </div>
