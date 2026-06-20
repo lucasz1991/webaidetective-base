@@ -151,17 +151,17 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-3 gap-1.5 text-center sm:w-52">
-            <div class="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
-                <div class="text-sm font-black text-slate-950">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-' }}</div>
+        <div class="grid w-full grid-cols-3 gap-1.5 text-center sm:w-[16.5rem] sm:grid-cols-[repeat(3,minmax(0,5rem))] sm:justify-end">
+            <div class="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
+                <div class="truncate text-sm font-black tabular-nums text-slate-950">{{ $trackedPerson->instagram_posts_count !== null ? number_format($trackedPerson->instagram_posts_count) : '-' }}</div>
                 <div class="text-[10px] font-medium text-slate-500">Posts</div>
             </div>
-            <div class="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
-                <div class="text-sm font-black text-slate-950">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
+            <div class="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
+                <div class="truncate text-sm font-black tabular-nums text-slate-950">{{ $trackedPerson->instagram_followers_count !== null ? number_format($trackedPerson->instagram_followers_count) : '-' }}</div>
                 <div class="text-[10px] font-medium text-slate-500">Follower</div>
             </div>
-            <div class="rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
-                <div class="text-sm font-black text-slate-950">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
+            <div class="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5">
+                <div class="truncate text-sm font-black tabular-nums text-slate-950">{{ $trackedPerson->instagram_following_count !== null ? number_format($trackedPerson->instagram_following_count) : '-' }}</div>
                 <div class="text-[10px] font-medium text-slate-500">Folgt</div>
             </div>
         </div>
