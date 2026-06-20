@@ -186,12 +186,6 @@
                     </x-profile.detail-metric>
                 </div>
 
-                @if($trackedPersonId)
-                    <div class="mt-3 rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-800">
-                        Follower- und Gefolgt-Zahlen oeffnen die gemeinsamen Listenmodale mit den einheitlichen Profilzeilen.
-                    </div>
-                @endif
-
                 @if(! $trackedPersonId && data_get($profile, 'list_scans'))
                     <div class="mt-5 rounded-lg border border-slate-200 bg-white p-3">
                         <div class="text-sm font-bold text-slate-950">Letzte Listenscans</div>
