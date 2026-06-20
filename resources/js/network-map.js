@@ -107,6 +107,59 @@ function avatarElement(data, large = false, imagesEnabled = true) {
     return element;
 }
 
+function profileMetricValue(data, keys) {
+    for (const key of keys) {
+        const value = data?.[key];
+
+        if (value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))) {
+            return Number(value);
+        }
+    }
+
+    return null;
+}
+
+function formatProfileMetric(value) {
+    return value === null ? '-' : value.toLocaleString('de-DE');
+}
+
+function iconElement(name, className = 'h-3.5 w-3.5') {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const icons = {
+        posts: '<rect x="4" y="5" width="16" height="14" rx="2" stroke="currentColor" stroke-width="2"/><path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+        followers: '<path d="M16 19c0-2.2-1.8-4-4-4s-4 1.8-4 4M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM19 19c0-1.6-.9-3-2.2-3.6M17 5.2a3 3 0 0 1 0 5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+        following: '<path d="M10 19c0-2.2-1.8-4-4-4m0 0a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM14 7h6M17 4v6M14 19h6M17 16l3 3-3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+        focus: '<path d="M12 5v3M12 16v3M5 12h3M16 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="7" stroke="currentColor" stroke-width="2"/>',
+        known: '<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>',
+        unknown: '<path d="M3 3l18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M10.6 6.2A10.5 10.5 0 0 1 12 6c6 0 9.5 6 9.5 6a17.5 17.5 0 0 1-2.8 3.4M6.2 6.8A17 17 0 0 0 2.5 12s3.5 6 9.5 6c1.3 0 2.5-.3 3.5-.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+        profile: '<path d="M16 19c0-2.2-1.8-4-4-4s-4 1.8-4 4M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+        scan: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M6.6 6.6l2.1 2.1M15.3 15.3l2.1 2.1M17.4 6.6l-2.1 2.1M8.7 15.3l-2.1 2.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="2"/>',
+        external: '<path d="M14 4h6v6M20 4l-9 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    };
+
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('class', className);
+    svg.innerHTML = icons[name] || icons.unknown;
+
+    return svg;
+}
+
+function metricCell(title, iconName, iconClass, value, cellClass = 'border border-slate-200 bg-white/70 text-slate-600') {
+    const cell = document.createElement('span');
+    const number = document.createElement('span');
+    const icon = iconElement(iconName, `${iconClass} h-3.5 w-3.5 shrink-0`);
+
+    cell.title = title;
+    cell.className = `inline-flex min-w-0 items-center justify-center gap-1 rounded-md px-1.5 py-1 ${cellClass}`;
+    number.className = 'min-w-0 truncate tabular-nums';
+    number.textContent = formatProfileMetric(value);
+    cell.append(icon, number);
+
+    return cell;
+}
+
 function readGraph(root) {
     const payload = root.querySelector('[data-network-map-payload]');
 
@@ -3483,27 +3536,39 @@ function renderProfileList(root, cy) {
 
     const fragment = document.createDocumentFragment();
 
-    items.forEach((item, index) => {
+    items.forEach((item) => {
         const { node, distance, degree } = item;
         const isPerson = node.data('type') === 'person';
+        const data = node.data();
         const row = document.createElement('div');
-        const rank = document.createElement('div');
-        const avatar = avatarElement(node.data(), false, state.imagesEnabled);
+        const avatar = avatarElement(data, false, state.imagesEnabled);
         const content = document.createElement('div');
         const titleLine = document.createElement('div');
-        const title = document.createElement('button');
-        const handle = document.createElement('div');
+        const title = document.createElement('div');
+        const subtitle = document.createElement('div');
         const meta = document.createElement('div');
+        const status = document.createElement('div');
+        const focus = document.createElement('button');
+        const known = document.createElement('span');
+        const metrics = document.createElement('div');
         const actions = document.createElement('div');
         const instagramUrl = instagramProfileUrl(node);
         const isSelected = selectedId === node.id();
+        const label = data.fullLabel || data.label || node.id();
+        const handle = data.handle || (data.username ? `@${data.username}` : '');
+        const postsCount = profileMetricValue(data, ['postsCount', 'posts_count']);
+        const followersCount = profileMetricValue(data, ['followersCount', 'followers_count']);
+        const followingCount = profileMetricValue(data, ['followingCount', 'following_count']);
 
         row.dataset.networkProfileListNodeId = node.id();
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
+        row.setAttribute('aria-label', `${label} in der Karte fokussieren`);
         row.className = [
-            'relative grid grid-cols-[2.25rem_2.25rem_minmax(0,1fr)] gap-3 overflow-hidden rounded-lg border px-3 py-2 text-sm shadow-sm transition',
+            'flex items-center gap-3 rounded-xl border px-3 py-2 text-sm shadow-sm transition focus:outline-none focus:ring-2',
             isSelected
-                ? 'border-amber-300 bg-amber-50 ring-2 ring-amber-300/60'
-                : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50',
+                ? 'border-amber-300 bg-amber-50 ring-2 ring-amber-300/60 focus:ring-amber-300'
+                : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white focus:ring-slate-200',
         ].join(' ');
         row.addEventListener('click', (event) => {
             if (event.target.closest('button,a')) {
@@ -3512,27 +3577,31 @@ function renderProfileList(root, cy) {
 
             setSelected(root, cy, node.id());
         });
+        row.addEventListener('keydown', (event) => {
+            if (!['Enter', ' '].includes(event.key)) {
+                return;
+            }
 
-        const accent = document.createElement('span');
-        accent.className = `absolute bottom-2 left-0 top-2 w-1 rounded-r-full ${isSelected ? 'bg-amber-400' : 'bg-slate-200'}`;
-        rank.className = `pt-1 text-right text-xs font-black tabular-nums ${isSelected ? 'text-amber-700' : 'text-slate-400'}`;
-        rank.textContent = String(index + 1);
-        content.className = 'min-w-0';
+            event.preventDefault();
+            setSelected(root, cy, node.id());
+        });
+
+        content.className = 'min-w-0 flex-1';
         titleLine.className = 'flex min-w-0 items-center gap-2';
-        title.type = 'button';
-        title.className = `truncate text-left font-bold hover:text-pink-700 ${isSelected ? 'text-amber-950' : 'text-slate-950'}`;
-        title.textContent = node.data('fullLabel') || node.data('label') || node.id();
-        title.addEventListener('click', () => setSelected(root, cy, node.id()));
+        title.className = `truncate font-semibold ${isSelected ? 'text-amber-950' : 'text-slate-900'}`;
+        title.textContent = handle || label;
 
-        handle.className = 'mt-0.5 truncate text-xs font-semibold text-slate-500';
-        handle.textContent = [node.data('handle'), node.data('role')].filter(Boolean).join(' · ') || node.id();
+        subtitle.className = 'mt-0.5 truncate text-xs font-semibold text-slate-500';
+        subtitle.textContent = [
+            handle && label !== handle ? label : null,
+            data.role,
+        ].filter(Boolean).join(' · ') || node.id();
 
         meta.className = 'mt-1 flex flex-wrap gap-1.5 text-[11px] font-semibold text-slate-500';
         [
             hierarchyLabel(distance),
             `${degree} Kanten`,
-            visibilityLabel(node.data()),
-            node.data('isKnownProfile') ? 'Bekannt' : null,
+            visibilityLabel(data),
         ].filter(Boolean).forEach((label) => {
             const badge = document.createElement('span');
             badge.className = isSelected
@@ -3544,32 +3613,67 @@ function renderProfileList(root, cy) {
 
         if (isSelected) {
             const selectedBadge = document.createElement('span');
-            selectedBadge.className = 'shrink-0 rounded-full bg-amber-400 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-950';
+            selectedBadge.className = 'shrink-0 rounded-md bg-amber-400 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-950';
             selectedBadge.textContent = 'Fokus';
             titleLine.append(selectedBadge);
         }
 
-        actions.className = 'mt-2 flex flex-wrap gap-1.5';
+        status.className = 'flex shrink-0 items-center gap-1';
+        focus.type = 'button';
+        focus.title = 'In Karte fokussieren';
+        focus.setAttribute('aria-label', `${label} in Karte fokussieren`);
+        focus.className = `inline-flex h-6 w-6 items-center justify-center rounded-md ring-1 ${
+            isSelected
+                ? 'bg-amber-100 text-amber-800 ring-amber-300'
+                : 'bg-slate-100 text-slate-600 ring-slate-200 hover:bg-slate-200'
+        }`;
+        focus.append(iconElement('focus'));
+        focus.addEventListener('click', () => setSelected(root, cy, node.id()));
+
+        known.title = data.isKnownProfile || isPerson ? 'Bekanntes Profil' : 'Nicht beobachtet';
+        known.setAttribute('aria-label', known.title);
+        known.className = `inline-flex h-6 w-6 items-center justify-center rounded-md ring-1 ${
+            data.isKnownProfile || isPerson
+                ? 'bg-sky-50 text-sky-700 ring-sky-200'
+                : 'bg-slate-100 text-slate-500 ring-slate-200'
+        }`;
+        known.append(iconElement(data.isKnownProfile || isPerson ? 'known' : 'unknown'));
+        status.append(focus, known);
+
+        metrics.className = 'hidden w-[16.5rem] shrink-0 grid-cols-[repeat(3,minmax(0,5rem))] justify-end gap-1.5 whitespace-nowrap text-center text-[11px] font-semibold text-slate-600 md:grid';
+        metrics.append(
+            metricCell('Beitraege', 'posts', 'text-violet-500', postsCount),
+            metricCell('Follower', 'followers', '', followersCount, 'bg-slate-50 text-slate-500 ring-1 ring-slate-200'),
+            metricCell('Gefolgt', 'following', '', followingCount, 'bg-slate-50 text-slate-500 ring-1 ring-slate-200'),
+        );
+
+        actions.className = 'flex shrink-0 items-center gap-1';
 
         if (isPerson && node.data('detailUrl')) {
             const detail = document.createElement('button');
             detail.type = 'button';
-            detail.className = 'rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50';
-            detail.textContent = 'Person';
+            detail.className = 'inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50';
+            detail.title = 'Person oeffnen';
+            detail.setAttribute('aria-label', 'Person oeffnen');
+            detail.append(iconElement('profile', 'h-4 w-4'));
             detail.addEventListener('click', () => dispatchProfileListAction(root, node, 'detail'));
             actions.append(detail);
         } else if (!isPerson) {
             const preview = document.createElement('button');
             preview.type = 'button';
-            preview.className = 'rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50';
-            preview.textContent = 'Profil';
+            preview.className = 'inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50';
+            preview.title = 'Profilvorschau';
+            preview.setAttribute('aria-label', 'Profilvorschau');
+            preview.append(iconElement('profile', 'h-4 w-4'));
             preview.addEventListener('click', () => dispatchProfileListAction(root, node, 'open'));
             actions.append(preview);
 
             const scan = document.createElement('button');
             scan.type = 'button';
-            scan.className = 'rounded-lg border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-bold text-sky-700 hover:bg-sky-100';
-            scan.textContent = 'Scan';
+            scan.className = 'inline-flex h-8 w-8 items-center justify-center rounded-lg border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100';
+            scan.title = 'Scan starten';
+            scan.setAttribute('aria-label', 'Scan starten');
+            scan.append(iconElement('scan', 'h-4 w-4'));
             scan.addEventListener('click', () => dispatchProfileListAction(root, node, 'scan'));
             actions.append(scan);
         }
@@ -3579,14 +3683,16 @@ function renderProfileList(root, cy) {
             external.href = instagramUrl;
             external.target = '_blank';
             external.rel = 'noopener noreferrer';
-            external.className = 'rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-700 hover:bg-slate-50';
-            external.textContent = 'Instagram';
+            external.className = 'inline-flex h-8 w-8 items-center justify-center rounded-lg border border-slate-200 bg-white text-xs font-black text-slate-700 hover:bg-slate-50';
+            external.title = 'Instagram oeffnen';
+            external.setAttribute('aria-label', 'Instagram oeffnen');
+            external.append(iconElement('external', 'h-4 w-4'));
             actions.append(external);
         }
 
         titleLine.prepend(title);
-        content.append(titleLine, handle, meta, actions);
-        row.append(accent, rank, avatar, content);
+        content.append(titleLine, subtitle, meta);
+        row.append(avatar, content, status, metrics, actions);
         fragment.append(row);
     });
 

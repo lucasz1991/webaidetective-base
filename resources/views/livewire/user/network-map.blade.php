@@ -508,7 +508,7 @@
                             x-show="profileListOpen"
                             x-transition.opacity
                             x-on:click.outside="closeProfileList()"
-                            class="mb-2 flex max-h-[min(72vh,44rem)] w-[min(36rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-white/45 bg-white/95 shadow-2xl backdrop-blur-xl"
+                            class="mb-2 flex max-h-[min(72vh,44rem)] w-[min(56rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-lg border border-white/45 bg-white/95 shadow-2xl backdrop-blur-xl"
                             data-network-profile-list-panel
                         >
                             <div class="flex items-start justify-between gap-3 border-b border-slate-200 px-4 py-3">

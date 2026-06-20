@@ -761,6 +761,9 @@ class NetworkMap extends Component
             'detail' => $person->last_instagram_status_message ?: null,
             'isKnownProfile' => false,
             'detailUrl' => route('tracked-people.show', ['trackedPersonId' => $person->id]),
+            'postsCount' => $person->instagram_posts_count,
+            'followersCount' => $person->instagram_followers_count,
+            'followingCount' => $person->instagram_following_count,
         ];
 
         return $nodeId;
@@ -1786,6 +1789,9 @@ class NetworkMap extends Component
             'profileVisibility' => $this->profileStatusForInstagramProfile($profile),
             'detail' => $this->profileDetailForInstagramProfile($profile),
             'isKnownProfile' => false,
+            'postsCount' => $profile->posts_count,
+            'followersCount' => $profile->followers_count,
+            'followingCount' => $profile->following_count,
         ];
 
         $nodes[$node['id']] = $node;
@@ -1900,6 +1906,9 @@ class NetworkMap extends Component
             'profileVisibility' => $this->profileStatusForRelationshipItem($item),
             'detail' => 'Aus einer gespeicherten Instagram-Liste. '.($profileUrl ? 'Profil: '.$profileUrl : ''),
             'isKnownProfile' => false,
+            'postsCount' => $item['postsCount'] ?? $item['posts_count'] ?? null,
+            'followersCount' => $item['followersCount'] ?? $item['followers_count'] ?? null,
+            'followingCount' => $item['followingCount'] ?? $item['following_count'] ?? null,
         ];
 
         $nodes[$node['id']] = $node;
