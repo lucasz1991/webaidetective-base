@@ -1433,7 +1433,7 @@
             <div class="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <h3 class="text-lg font-bold text-slate-900">Profilbild-Historie</h3>
                 <p class="mt-1 text-sm text-slate-600">
-                    Zeigt gespeicherte Profilbilder dieses Instagram-Profils aus allen Scans, auch wenn ein anderer User das Bild zuerst gespeichert hat. Vorschlagsbilder und Bilder des eingeloggten Such-Profils werden nicht angezeigt.
+                    Zeigt alle systemweit gespeicherten, eindeutigen Profilbilder dieses Instagram-Profils aus Profil-, Listen- und Vorschlags-Scans, unabhaengig davon, welcher User das Bild zuerst gespeichert hat.
                 </p>
 
                 @if($profileImageHistory->isNotEmpty())
@@ -1443,7 +1443,7 @@
                                 <a href="{{ $profileImage->storage_url }}" target="_blank" class="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 shadow-sm">
                                     <img src="{{ $profileImage->storage_url }}" alt="Gespeichertes Profilbild" class="h-32 w-full object-cover">
                                     <div class="border-t border-slate-200 px-3 py-2 text-xs text-slate-600">
-                                        {{ optional($profileImage->snapshot?->analyzed_at)->format('d.m.Y H:i') ?: 'Unbekanntes Datum' }}
+                                        {{ optional($profileImage->analyzed_at)->format('d.m.Y H:i') ?: 'Unbekanntes Datum' }}
                                     </div>
                                 </a>
                             @endforeach

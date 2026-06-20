@@ -3,6 +3,7 @@
 namespace App\Livewire\User;
 
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
+use App\Models\InstagramMediaAsset;
 use App\Models\InstagramPost;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScan;
@@ -28,6 +29,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Livewire\Component;
@@ -2193,9 +2195,15 @@ class TrackedPersonDetail extends Component
             ?: $trackedPerson->latestInstagramSnapshot?->instagram_profile_id;
 
         if (! $instagramProfileId && $instagramUsername) {
-            $instagramProfileId = InstagramProfile::query()
+            $instagramProfileId = InstagramProfile::withTrashed()
                 ->where('username', $instagramUsername)
                 ->value('id');
+        }
+
+        if (! $instagramUsername && $instagramProfileId) {
+            $instagramUsername = InstagramProfile::withTrashed()
+                ->whereKey($instagramProfileId)
+                ->value('username');
         }
 
         $applySnapshotIdentity = function ($query) use ($instagramProfileId, $instagramUsername, $trackedPerson) {
@@ -2227,7 +2235,6 @@ class TrackedPersonDetail extends Component
             ->where('is_profile_image', true)
             ->whereNotNull('storage_path')
             ->latest('id')
-            ->limit(75)
             ->get()
             ->map(fn (TrackedPersonInstagramMedia $media): object => (object) [
                 'storage_url' => $media->storage_url,
@@ -2243,7 +2250,6 @@ class TrackedPersonDetail extends Component
         $snapshotRows = $snapshotQuery
             ->whereNotNull('profile_image_path')
             ->latest('analyzed_at')
-            ->limit(75)
             ->get(['id', 'tracked_person_id', 'instagram_profile_id', 'instagram_username', 'profile_image_path', 'profile_image_hash', 'analyzed_at'])
             ->map(fn (TrackedPersonInstagramSnapshot $snapshot): object => (object) [
                 'storage_url' => Storage::disk('public')->url($snapshot->profile_image_path),
@@ -2253,12 +2259,91 @@ class TrackedPersonDetail extends Component
                 'analyzed_at' => $snapshot->analyzed_at,
             ]);
 
+        $assetRows = collect();
+
+        if ($instagramUsername && Schema::hasTable('instagram_media_assets')) {
+            $assetRows = InstagramMediaAsset::query()
+                ->where('instagram_username', $instagramUsername)
+                ->where('media_role', 'profile_image')
+                ->where('media_type', 'image')
+                ->whereNotNull('storage_path')
+                ->latest('last_seen_at')
+                ->latest('id')
+                ->get()
+                ->map(fn (InstagramMediaAsset $asset): object => (object) [
+                    'storage_url' => Storage::disk('public')->url($asset->storage_path),
+                    'storage_path' => $asset->storage_path,
+                    'content_hash' => $asset->content_hash,
+                    'snapshot' => null,
+                    'analyzed_at' => $asset->last_seen_at ?: $asset->first_seen_at ?: $asset->created_at,
+                ]);
+        }
+
+        $profileRows = collect();
+
+        if ($instagramProfileId || $instagramUsername) {
+            $profileRows = InstagramProfile::withTrashed()
+                ->where(function ($query) use ($instagramProfileId, $instagramUsername): void {
+                    if ($instagramProfileId) {
+                        $query->whereKey($instagramProfileId);
+                    }
+
+                    if ($instagramUsername) {
+                        $method = $instagramProfileId ? 'orWhere' : 'where';
+                        $query->{$method}('username', $instagramUsername);
+                    }
+                })
+                ->whereNotNull('profile_image_path')
+                ->get()
+                ->map(fn (InstagramProfile $profile): object => (object) [
+                    'storage_url' => Storage::disk('public')->url($profile->profile_image_path),
+                    'storage_path' => $profile->profile_image_path,
+                    'content_hash' => $profile->profile_image_hash,
+                    'snapshot' => null,
+                    'analyzed_at' => $profile->last_scanned_at ?: $profile->updated_at,
+                ]);
+        }
+
+        $trackedPersonRows = TrackedPerson::query()
+            ->where(function ($query) use ($instagramProfileId, $instagramUsername, $trackedPerson): void {
+                if ($instagramProfileId) {
+                    $query->where('current_instagram_profile_id', $instagramProfileId);
+                }
+
+                if ($instagramUsername) {
+                    $method = $instagramProfileId ? 'orWhereRaw' : 'whereRaw';
+                    $query->{$method}("LOWER(TRIM(LEADING '@' FROM instagram_username)) = ?", [$instagramUsername]);
+                }
+
+                if (! $instagramProfileId && ! $instagramUsername) {
+                    $query->whereKey($trackedPerson->id);
+                }
+            })
+            ->where(function ($query): void {
+                $query->whereNotNull('instagram_profile_image_path')
+                    ->orWhereNotNull('profile_image_path');
+            })
+            ->get()
+            ->map(function (TrackedPerson $person): object {
+                $storagePath = $person->instagram_profile_image_path ?: $person->profile_image_path;
+
+                return (object) [
+                    'storage_url' => Storage::disk('public')->url($storagePath),
+                    'storage_path' => $storagePath,
+                    'content_hash' => $person->instagram_profile_image_hash ?: $person->profile_image_hash,
+                    'snapshot' => null,
+                    'analyzed_at' => $person->last_instagram_analyzed_at ?: $person->updated_at,
+                ];
+            });
+
         return $mediaRows
             ->concat($snapshotRows)
+            ->concat($assetRows)
+            ->concat($profileRows)
+            ->concat($trackedPersonRows)
             ->filter(fn (object $item): bool => filled($item->storage_url) && filled($item->storage_path))
             ->sortByDesc(fn (object $item): int => $item->analyzed_at?->getTimestamp() ?? 0)
             ->unique(fn (object $item): string => (string) ($item->content_hash ?: $item->storage_path))
-            ->take(12)
             ->values();
     }
 
