@@ -11,8 +11,8 @@ use App\Models\Setting;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use App\Models\TrackedPersonInstagramMedia;
-use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\TrackedPersonInstagramPublicProfileScan;
+use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\TrackedPersonInstagramSuggestionScan;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\InstagramProfileScanService;
@@ -25,7 +25,6 @@ use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
 use App\Services\TrackedPeople\TrackedPersonScanDispatcher;
 use App\Support\InstagramRelationshipListData;
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -1497,8 +1496,8 @@ class TrackedPersonDetail extends Component
                     ->with('media')
                     ->withCount([
                         'metrics',
-                        'likes as stored_likes_count' => fn ($likes) => $likes->where('is_active', true),
-                        'comments as stored_comments_count' => fn ($comments) => $comments->where('is_active', true),
+                        'likes as stored_likes_count',
+                        'comments as stored_comments_count',
                     ])
                     ->latest('published_at')
                     ->latest('last_seen_at')
@@ -1587,11 +1586,12 @@ class TrackedPersonDetail extends Component
                 ->with([
                     'media',
                     'likes' => fn ($query) => $query
-                        ->where('is_active', true)
+                        ->orderByDesc('is_active')
                         ->orderBy('username'),
                     'comments' => fn ($query) => $query
-                        ->where('is_active', true)
-                        ->orderByDesc('published_at'),
+                        ->orderByDesc('is_active')
+                        ->orderByDesc('published_at')
+                        ->orderByDesc('first_seen_at'),
                 ])
                 ->first();
         }

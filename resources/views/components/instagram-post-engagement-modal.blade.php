@@ -107,7 +107,10 @@
                                 @php($likeSearch = strtolower(trim(($like->username ?? '').' '.($like->full_name ?? ''))))
                                 <div
                                     x-show="search === '' || @js($likeSearch).includes(search.toLowerCase())"
-                                    class="flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3"
+                                    @class([
+                                        'flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-3',
+                                        'opacity-70' => ! $like->is_active,
+                                    ])
                                 >
                                     @if($like->profile_image_url)
                                         <img src="{{ $like->profile_image_url }}" alt="" class="h-10 w-10 rounded-full object-cover">
@@ -129,7 +132,14 @@
                                             <div class="truncate text-sm text-slate-500">{{ $like->full_name }}</div>
                                         @endif
                                     </div>
-                                    <span class="text-xs text-slate-400">{{ $like->last_seen_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') }}</span>
+                                    <div class="shrink-0 text-right">
+                                        @unless($like->is_active)
+                                            <div class="mb-1 rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200">
+                                                entfernt
+                                            </div>
+                                        @endunless
+                                        <span class="text-xs text-slate-400">{{ ($like->removed_at ?: $like->last_seen_at)?->timezone(config('app.timezone'))->format('d.m.Y H:i') }}</span>
+                                    </div>
                                 </div>
                             @empty
                                 <p class="text-sm text-slate-500">Noch keine einzelnen Likes gespeichert.</p>
@@ -144,6 +154,7 @@
                                     @class([
                                         'rounded-xl border border-slate-200 bg-white p-3',
                                         'ml-6 border-l-4 border-l-violet-300' => $comment->parent_comment_id,
+                                        'opacity-70' => ! $comment->is_active,
                                     ])
                                 >
                                     <div class="flex items-start gap-3">
@@ -167,6 +178,11 @@
                                                 @if($comment->published_at)
                                                     <span class="text-xs text-slate-400">{{ $comment->published_at->timezone(config('app.timezone'))->format('d.m.Y H:i') }}</span>
                                                 @endif
+                                                @unless($comment->is_active)
+                                                    <span class="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200">
+                                                        entfernt
+                                                    </span>
+                                                @endunless
                                             </div>
                                             <p class="mt-1 whitespace-pre-line text-sm leading-6 text-slate-700">{{ $comment->comment_text }}</p>
                                             @if($comment->likes_count !== null)
