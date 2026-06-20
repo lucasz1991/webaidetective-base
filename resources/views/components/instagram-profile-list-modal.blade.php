@@ -2,30 +2,117 @@
     'model',
     'title',
     'scan' => null,
+    'items' => null,
+    'stats' => [],
+    'hasData' => null,
     'listType' => 'followers',
     'visibleLimit' => 50,
     'itemsPerPage' => 50,
 ])
 
 @php
-    $items = $scan?->items ?? collect();
+    $sourceItems = $items !== null ? collect($items) : ($scan?->items ?? collect());
     $visibleLimit = max(1, (int) $visibleLimit);
     $itemsPerPage = max(1, (int) $itemsPerPage);
-    $visibleItems = $items->take($visibleLimit)->values();
-    $hasMoreItems = $items->count() > $visibleLimit;
-    $activeItems = $items->whereIn('item_status', ['observed', 'added'])->values();
-    $addedItems = $items->where('item_status', 'added')->values();
-    $removedItems = $items->where('item_status', 'removed')->values();
-    $sortRows = $visibleItems
-        ->map(fn ($item, int $index): array => [
+
+    $rows = $sourceItems
+        ->values()
+        ->map(function ($item) use ($listType): ?array {
+            $related = is_object($item) && method_exists($item, 'relationLoaded') && $item->relationLoaded('relatedInstagramProfile')
+                ? $item->relatedInstagramProfile
+                : null;
+            $raw = is_object($item) && isset($item->raw_item) && is_array($item->raw_item) ? $item->raw_item : [];
+            $username = ltrim(trim((string) (
+                data_get($raw, 'username')
+                ?? data_get($item, 'username')
+                ?? data_get($item, 'username_snapshot')
+                ?? $related?->username
+                ?? ''
+            )), '@');
+
+            if ($username === '') {
+                return null;
+            }
+
+            $displayName = trim((string) (
+                data_get($raw, 'displayName')
+                ?? data_get($item, 'displayName')
+                ?? data_get($item, 'display_name_snapshot')
+                ?? $related?->display_name
+                ?? $related?->full_name
+                ?? ''
+            ));
+            $itemStatus = (string) (data_get($item, 'itemStatus') ?? data_get($item, 'item_status') ?? 'observed');
+            $passive = (bool) data_get($item, 'passive', false);
+            $statusLabel = data_get($item, 'statusLabel') ?: match ($itemStatus) {
+                'added' => 'Neu',
+                'removed' => 'Entfernt',
+                default => ($passive ? ($listType === 'followers' ? 'Passiver Follower' : 'Passiv gefolgt') : null),
+            };
+            $statusTone = data_get($item, 'statusTone') ?: match ($itemStatus) {
+                'added' => 'emerald',
+                'removed' => 'rose',
+                default => ($passive ? 'sky' : 'slate'),
+            };
+            $dataStatus = $itemStatus === 'removed' ? 'removed' : 'active';
+            $rowItem = is_array($item) ? $item : [
+                ...$raw,
+                'username' => $username,
+                'displayName' => $displayName,
+                'profileUrl' => data_get($raw, 'profileUrl') ?? data_get($item, 'profile_url_snapshot') ?? $related?->profile_url,
+                'instagramProfileId' => $related?->id ?? data_get($item, 'related_instagram_profile_id'),
+                'profileImagePath' => $related?->profile_image_path,
+                'profileVisibility' => data_get($raw, 'profileVisibility') ?? $related?->profile_visibility,
+                'isPrivate' => data_get($raw, 'isPrivate', $related?->is_private),
+                'postsCount' => data_get($raw, 'postsCount') ?? $related?->posts_count,
+                'followersCount' => data_get($raw, 'followersCount') ?? $related?->followers_count,
+                'followingCount' => data_get($raw, 'followingCount') ?? $related?->following_count,
+                'itemStatus' => $itemStatus,
+                'statusLabel' => $statusLabel,
+                'statusTone' => $statusTone,
+            ];
+
+            return [
+                'item' => [
+                    ...$rowItem,
+                    'itemStatus' => $itemStatus,
+                    'statusLabel' => $statusLabel,
+                    'statusTone' => $statusTone,
+                    'passive' => $passive,
+                ],
+                'username' => $username,
+                'displayName' => $displayName,
+                'itemStatus' => $itemStatus,
+                'dataStatus' => $dataStatus,
+                'added' => $itemStatus === 'added',
+                'passive' => $passive,
+                'statusLabel' => $statusLabel,
+                'statusTone' => $statusTone,
+                'name' => strtolower(trim($displayName.' '.$username)),
+                'searchText' => strtolower(trim($username.' '.$displayName.' '.data_get($item, 'meta').' '.$statusLabel)),
+                'statusSort' => match (true) {
+                    $itemStatus === 'added' => 0,
+                    $passive => 1,
+                    $itemStatus === 'observed' => 2,
+                    $itemStatus === 'removed' => 3,
+                    default => 4,
+                },
+            ];
+        })
+        ->filter()
+        ->values();
+    $visibleRows = $rows->take($visibleLimit)->values();
+    $hasMoreItems = $rows->count() > $visibleLimit;
+    $activeItems = $rows->where('dataStatus', 'active')->values();
+    $addedItems = $rows->where('itemStatus', 'added')->values();
+    $passiveItems = $rows->where('passive', true)->values();
+    $removedItems = $rows->where('dataStatus', 'removed')->values();
+    $hasData = $hasData ?? ($scan || $rows->isNotEmpty());
+    $sortRows = $visibleRows
+        ->map(fn (array $row, int $index): array => [
             'index' => $index,
-            'name' => strtolower(trim(($item->display_name_snapshot ?: $item->username_snapshot).' '.$item->username_snapshot)),
-            'status' => match ($item->item_status) {
-                'added' => 0,
-                'observed' => 1,
-                'removed' => 2,
-                default => 3,
-            },
+            'name' => $row['name'],
+            'status' => $row['statusSort'],
         ]);
     $nameAscRanks = $sortRows
         ->sortBy([['name', 'asc'], ['index', 'asc']])
@@ -51,6 +138,7 @@
             filterLabel() {
                 return {
                     active: 'Aktiv',
+                    passive: 'Passiv',
                     added: 'Neu',
                     removed: 'Entfernt',
                 }[this.filter] || 'Filter';
@@ -71,6 +159,17 @@
                     status: el.dataset.orderStatus,
                 }[this.sort] || el.dataset.orderDefault;
             },
+            filterMatches(el) {
+                if (this.filter === 'passive') {
+                    return el.dataset.passive === 'true';
+                }
+
+                if (this.filter === 'added') {
+                    return el.dataset.added === 'true';
+                }
+
+                return this.filter === el.dataset.status;
+            },
         }"
         class="flex max-h-[85vh] flex-col overflow-hidden"
     >
@@ -78,10 +177,15 @@
             <div>
                 <h3 class="text-lg font-bold text-slate-900">{{ $title }}</h3>
                 <p class="mt-1 text-sm text-slate-500">
-                    @if($scan)
-                        {{ number_format($scan->active_count) }} aktiv
-                        &middot; {{ number_format($scan->observed_count) }} beobachtet
-                        &middot; Scan {{ $scan->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+                    @if($hasData)
+                        {{ number_format((int) data_get($stats, 'activeCount', $activeItems->count())) }} bekannt
+                        &middot; {{ number_format((int) data_get($stats, 'observedCount', $activeItems->count())) }} beobachtet
+                        @if($passiveItems->isNotEmpty())
+                            &middot; {{ number_format($passiveItems->count()) }} passiv
+                        @endif
+                        @if($scan)
+                            &middot; Scan {{ $scan->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+                        @endif
                     @else
                         Noch keine Liste gespeichert.
                     @endif
@@ -93,7 +197,7 @@
         </div>
 
         <div class="overflow-y-auto p-4 sm:p-5">
-            @if($scan)
+            @if($hasData)
                 <div class="mb-4 flex gap-2">
                     <input
                         type="search"
@@ -178,6 +282,10 @@
                                     <span>Aktiv</span>
                                     <span class="rounded-md px-2 py-0.5 text-xs" x-bind:class="filter === 'active' ? 'bg-white/15 text-white' : 'bg-slate-100 text-slate-600'">{{ number_format($activeItems->count()) }}</span>
                                 </button>
+                                <button type="button" x-on:click="filter = 'passive'; open = false" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold transition" x-bind:class="filter === 'passive' ? 'bg-sky-600 text-white' : 'text-sky-800 hover:bg-sky-50'">
+                                    <span>Passiv</span>
+                                    <span class="rounded-md px-2 py-0.5 text-xs" x-bind:class="filter === 'passive' ? 'bg-white/15 text-white' : 'bg-sky-50 text-sky-700'">{{ number_format($passiveItems->count()) }}</span>
+                                </button>
                                 <button type="button" x-on:click="filter = 'added'; open = false" class="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm font-semibold transition" x-bind:class="filter === 'added' ? 'bg-emerald-600 text-white' : 'text-emerald-800 hover:bg-emerald-50'">
                                     <span>Neu</span>
                                     <span class="rounded-md px-2 py-0.5 text-xs" x-bind:class="filter === 'added' ? 'bg-white/15 text-white' : 'bg-emerald-50 text-emerald-700'">{{ number_format($addedItems->count()) }}</span>
@@ -192,29 +300,24 @@
                 </div>
 
                 <div class="flex flex-col gap-2">
-                    @forelse($visibleItems as $item)
+                    @forelse($visibleRows as $row)
                         @php
                             $defaultOrder = $loop->index;
-                            $searchText = strtolower(trim($item->username_snapshot.' '.$item->display_name_snapshot));
-                            $active = in_array($item->item_status, ['observed', 'added'], true);
-                            $statusTone = match ($item->item_status) {
-                                'added' => 'emerald',
-                                'removed' => 'rose',
-                                default => 'slate',
-                            };
                         @endphp
                         <x-instagram.profile-list-item
-                            :item="$item"
-                            :status-label="$item->item_status"
-                            :status-tone="$statusTone"
-                            data-search="{{ e($searchText) }}"
-                            data-status="{{ $active ? 'active' : $item->item_status }}"
+                            :item="$row['item']"
+                            :status-label="$row['statusLabel']"
+                            :status-tone="$row['statusTone']"
+                            data-search="{{ e($row['searchText']) }}"
+                            data-status="{{ $row['dataStatus'] }}"
+                            data-passive="{{ $row['passive'] ? 'true' : 'false' }}"
+                            data-added="{{ $row['added'] ? 'true' : 'false' }}"
                             data-order-default="{{ $defaultOrder }}"
                             data-order-name-asc="{{ $nameAscRanks[$defaultOrder] ?? $defaultOrder }}"
                             data-order-name-desc="{{ $nameDescRanks[$defaultOrder] ?? $defaultOrder }}"
                             data-order-status="{{ $statusRanks[$defaultOrder] ?? $defaultOrder }}"
                             x-bind:style="'order: ' + sortOrder($el)"
-                            x-show="(search === '' || $el.dataset.search.includes(search.toLowerCase())) && (filter === $el.dataset.status || (filter === 'added' && $el.dataset.status === 'active' && {{ $item->item_status === 'added' ? 'true' : 'false' }}))"
+                            x-show="(search === '' || $el.dataset.search.includes(search.toLowerCase())) && filterMatches($el)"
                         />
                     @empty
                         <p class="rounded-lg border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">Der Scan enthaelt keine gespeicherten Eintraege.</p>

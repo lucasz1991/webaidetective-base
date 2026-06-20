@@ -387,18 +387,27 @@
             <x-ui.accordion.tab-panel for="connections" panel-class="pt-4">
                 <div class="grid gap-3 md:grid-cols-2">
                     @foreach([
-                        'followers' => ['Followerliste', $latestFollowersScan, 'pink'],
-                        'following' => ['Gefolgt-Liste', $latestFollowingScan, 'sky'],
-                    ] as $listType => [$listTitle, $scan, $tone])
+                        'followers' => ['Followerliste', $followersListData, $latestFollowersScan, 'pink'],
+                        'following' => ['Gefolgt-Liste', $followingListData, $latestFollowingScan, 'sky'],
+                    ] as $listType => [$listTitle, $listData, $scan, $tone])
+                        @php
+                            $stats = $listData['stats'];
+                            $passiveCount = $listData['passiveItems']->count();
+                        @endphp
                         <div class="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                             <div class="flex items-start justify-between gap-3">
                                 <div>
                                     <h3 class="text-sm font-bold text-slate-950">{{ $listTitle }}</h3>
                                     <p class="mt-1 text-xs leading-5 text-slate-500">
-                                        @if($scan)
-                                            {{ number_format((int) $scan->active_count, 0, ',', '.') }} aktiv
-                                            &middot; {{ number_format((int) $scan->observed_count, 0, ',', '.') }} beobachtet
-                                            &middot; {{ $scan->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+                                        @if($listData['available'] || $scan)
+                                            {{ number_format((int) $stats['activeCount'], 0, ',', '.') }} bekannt
+                                            &middot; {{ number_format((int) $stats['observedCount'], 0, ',', '.') }} beobachtet
+                                            @if($passiveCount > 0)
+                                                &middot; {{ number_format($passiveCount, 0, ',', '.') }} passiv
+                                            @endif
+                                            @if($scan)
+                                                &middot; {{ $scan->scanned_at?->timezone(config('app.timezone'))->format('d.m.Y H:i') ?: '-' }}
+                                            @endif
                                         @else
                                             Noch keine Liste gespeichert.
                                         @endif
@@ -480,6 +489,9 @@
         model="showListModal"
         :title="$activeListType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste'"
         :scan="$activeListType === 'followers' ? $latestFollowersScan : $latestFollowingScan"
+        :items="$activeListType === 'followers' ? $followersListData['modalItems'] : $followingListData['modalItems']"
+        :stats="$activeListType === 'followers' ? $followersListData['stats'] : $followingListData['stats']"
+        :has-data="$activeListType === 'followers' ? ($followersListData['available'] || (bool) $latestFollowersScan) : ($followingListData['available'] || (bool) $latestFollowingScan)"
         :list-type="$activeListType"
         :visible-limit="$listModalVisibleLimit"
         :items-per-page="$listModalItemsPerPage"

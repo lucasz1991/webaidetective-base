@@ -6,13 +6,14 @@ use App\Models\InstagramPost;
 use App\Models\InstagramProfile;
 use App\Models\Setting;
 use App\Models\TrackedPerson;
-use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
 use App\Services\TrackedPeople\InstagramProfileScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramPostScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
 use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
 use App\Services\TrackedPeople\TrackedPersonQuotaService;
+use App\Support\InstagramRelationshipListData;
 use Illuminate\Support\Facades\Auth;
 use Livewire\Component;
 
@@ -83,26 +84,6 @@ class InstagramProfileDetail extends Component
                 ->latest('last_seen_at')
                 ->limit(24),
         ]);
-        $latestFollowersScan = $profile->listScans()
-            ->where('user_id', $userId)
-            ->where('list_type', 'followers')
-            ->latest('scanned_at')
-            ->with([
-                'items.relatedInstagramProfile.trackedPersonLinks' => fn ($links) => $links
-                    ->where('user_id', $userId)
-                    ->whereNull('unlinked_at'),
-            ])
-            ->first();
-        $latestFollowingScan = $profile->listScans()
-            ->where('user_id', $userId)
-            ->where('list_type', 'following')
-            ->latest('scanned_at')
-            ->with([
-                'items.relatedInstagramProfile.trackedPersonLinks' => fn ($links) => $links
-                    ->where('user_id', $userId)
-                    ->whereNull('unlinked_at'),
-            ])
-            ->first();
         $selectedPost = null;
 
         if ($this->showPostEngagementModal && $this->selectedPostId) {
@@ -121,6 +102,11 @@ class InstagramProfileDetail extends Component
         }
 
         $trackedPerson = $this->findTrackedPerson($profile);
+        $relationshipListData = app(InstagramRelationshipListData::class);
+        $followersListData = $relationshipListData->forInstagramProfile($profile, $userId, 'followers', $trackedPerson);
+        $followingListData = $relationshipListData->forInstagramProfile($profile, $userId, 'following', $trackedPerson);
+        $latestFollowersScan = $followersListData['scan'];
+        $latestFollowingScan = $followingListData['scan'];
         $latestSuggestionScan = $profile->suggestionScans->first();
         $latestTrackedSuggestionScan = $trackedPerson?->instagramSuggestionScans()
             ->latest('analyzed_at')
@@ -179,6 +165,8 @@ class InstagramProfileDetail extends Component
             'trackedPerson' => $trackedPerson,
             'latestFollowersScan' => $latestFollowersScan,
             'latestFollowingScan' => $latestFollowingScan,
+            'followersListData' => $followersListData,
+            'followingListData' => $followingListData,
             'lastScanStatus' => $lastScanStatus,
             'scanCostSummary' => $this->scanCostSummary(),
             'listModalVisibleLimit' => $this->listModalVisibleLimit($this->activeListType),

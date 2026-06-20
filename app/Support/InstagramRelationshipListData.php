@@ -9,6 +9,7 @@ use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
@@ -22,12 +23,16 @@ class InstagramRelationshipListData
 
         $addedItems = $this->sortNewest($this->loadItems($relationshipList, 'addedItems'));
         $activeItems = $this->sortActive($this->loadItems($relationshipList), $addedItems);
-        $liveItems = $this->liveProfileListItems($trackedPerson, $listType);
+        $profileListData = $this->profileListScanDataForTrackedPerson($trackedPerson, $listType);
         $reconstructedItems = $this->reconstructedSuggestionItems($trackedPerson, $listType);
         $passiveItems = $this->passiveRelationshipItems($trackedPerson, $listType);
 
-        if ($liveItems->isNotEmpty()) {
-            $activeItems = $this->sortActive($this->mergeItemsByUsername($activeItems, $liveItems), $addedItems);
+        if ($profileListData['addedItems']->isNotEmpty()) {
+            $addedItems = $this->sortNewest($this->mergeItemsByUsername($addedItems, $profileListData['addedItems']));
+        }
+
+        if ($profileListData['activeItems']->isNotEmpty()) {
+            $activeItems = $this->sortActive($this->mergeItemsByUsername($activeItems, $profileListData['activeItems']), $addedItems);
         }
 
         if ($reconstructedItems->isNotEmpty()) {
@@ -38,7 +43,10 @@ class InstagramRelationshipListData
             $activeItems = $this->sortActive($this->mergeItemsByUsername($activeItems, $passiveItems), $addedItems);
         }
 
-        $scanRemovedItems = $this->sortNewest($this->loadItems($relationshipList, 'removedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
+        $scanRemovedItems = $this->sortNewest(
+            $this->mergeItemsByUsername($this->loadItems($relationshipList, 'removedItems'), $profileListData['scanRemovedItems']),
+            ['removedAt', 'lastSeenAt', 'firstSeenAt', 'observedAt'],
+        );
         $removedItems = $this->sortNewest($this->loadItems($relationshipList, 'currentlyRemovedItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
         $removedHistoryItems = $this->sortNewest($this->loadItems($relationshipList, 'removedHistoryItems'), ['removedAt', 'lastSeenAt', 'firstSeenAt']);
         $profileIndex = $this->profileIndex(
@@ -49,7 +57,7 @@ class InstagramRelationshipListData
                 ->merge($scanRemovedItems)
                 ->merge($removedItems)
                 ->merge($removedHistoryItems),
-            $trackedPerson,
+            (int) $trackedPerson->user_id,
         );
 
         $addedItems = $this->enrichItems($addedItems, $profileIndex);
@@ -62,6 +70,7 @@ class InstagramRelationshipListData
         $stats = $this->stats($relationshipList, $activeItems);
         $stats['activeCount'] = max($stats['activeCount'], $activeItems->count());
         $stats['observedCount'] = max($stats['observedCount'], $activeItems->count());
+        $stats['allKnownCount'] = max($stats['allKnownCount'], $activeItems->count());
 
         return [
             'listType' => $listType,
@@ -77,12 +86,82 @@ class InstagramRelationshipListData
             'removedHistoryItems' => $removedHistoryItems,
             'reconstructedItems' => $reconstructedItems,
             'passiveItems' => $passiveItems,
+            'modalItems' => $this->modalItems($activeItems, $scanRemovedItems, $removedItems, $removedHistoryItems),
+            'scan' => $profileListData['scan'],
             'stats' => $stats,
             'available' => $activeItems->isNotEmpty()
                 || $addedItems->isNotEmpty()
                 || $scanRemovedItems->isNotEmpty()
                 || $removedItems->isNotEmpty()
                 || $removedHistoryItems->isNotEmpty(),
+        ];
+    }
+
+    public function forInstagramProfile(InstagramProfile $profile, int $userId, string $listType, ?TrackedPerson $trackedPerson = null): array
+    {
+        $listType = $listType === 'following' ? 'following' : 'followers';
+        $profileListData = $this->profileListScanData($profile, $userId, $listType, $trackedPerson?->id);
+        $addedItems = $profileListData['addedItems'];
+        $activeItems = $profileListData['activeItems'];
+        $scanRemovedItems = $profileListData['scanRemovedItems'];
+        $removedItems = collect();
+        $removedHistoryItems = collect();
+        $reconstructedItems = $trackedPerson
+            ? $this->reconstructedSuggestionItems($trackedPerson, $listType)
+            : collect();
+        $passiveItems = $this->passiveRelationshipItemsForTarget(
+            $this->targetProfileIdsForProfile($profile),
+            $this->normalizeUsername($profile->username),
+            $userId,
+            $trackedPerson?->id,
+            $listType,
+        );
+
+        if ($reconstructedItems->isNotEmpty()) {
+            $activeItems = $this->sortActive($this->mergeItemsByUsername($activeItems, $reconstructedItems), $addedItems);
+        }
+
+        if ($passiveItems->isNotEmpty()) {
+            $activeItems = $this->sortActive($this->mergeItemsByUsername($activeItems, $passiveItems), $addedItems);
+        }
+
+        $relationshipList = $profileListData['relationshipList'];
+        $profileIndex = $this->profileIndex(
+            collect()
+                ->merge($addedItems)
+                ->merge($activeItems)
+                ->merge($passiveItems)
+                ->merge($scanRemovedItems),
+            $userId,
+        );
+
+        $addedItems = $this->enrichItems($addedItems, $profileIndex);
+        $activeItems = $this->enrichItems($activeItems, $profileIndex);
+        $reconstructedItems = $this->enrichItems($reconstructedItems, $profileIndex);
+        $passiveItems = $this->enrichItems($passiveItems, $profileIndex);
+        $scanRemovedItems = $this->enrichItems($scanRemovedItems, $profileIndex);
+        $stats = $this->stats($relationshipList, $activeItems);
+        $stats['activeCount'] = max($stats['activeCount'], $activeItems->count());
+        $stats['observedCount'] = max($stats['observedCount'], $activeItems->count());
+        $stats['allKnownCount'] = max($stats['allKnownCount'], $activeItems->count());
+
+        return [
+            'listType' => $listType,
+            'title' => $listType === 'followers' ? 'Followerliste' : 'Gefolgt-Liste',
+            'relationshipList' => $relationshipList,
+            'addedItems' => $addedItems,
+            'activeItems' => $activeItems,
+            'scanRemovedItems' => $scanRemovedItems,
+            'removedItems' => $removedItems,
+            'removedHistoryItems' => $removedHistoryItems,
+            'reconstructedItems' => $reconstructedItems,
+            'passiveItems' => $passiveItems,
+            'modalItems' => $this->modalItems($activeItems, $scanRemovedItems, $removedItems, $removedHistoryItems),
+            'scan' => $profileListData['scan'],
+            'stats' => $stats,
+            'available' => $activeItems->isNotEmpty()
+                || $addedItems->isNotEmpty()
+                || $scanRemovedItems->isNotEmpty(),
         ];
     }
 
@@ -112,40 +191,88 @@ class InstagramRelationshipListData
         }
     }
 
-    private function liveProfileListItems(TrackedPerson $trackedPerson, string $listType): Collection
+    private function profileListScanDataForTrackedPerson(TrackedPerson $trackedPerson, string $listType): array
     {
-        if (! $trackedPerson->current_instagram_profile_id || ! in_array($listType, ['followers', 'following'], true)) {
-            return collect();
+        $profile = $this->targetProfileForTrackedPerson($trackedPerson);
+
+        if (! $profile) {
+            return $this->emptyProfileListScanData();
         }
 
-        $scan = InstagramProfileListScan::query()
-            ->where('instagram_profile_id', $trackedPerson->current_instagram_profile_id)
-            ->where('list_type', $listType)
-            ->where('scan_mode', 'profile_list_live')
-            ->where(function ($query) use ($trackedPerson): void {
-                $query->where('tracked_person_id', $trackedPerson->id)
-                    ->orWhere('user_id', $trackedPerson->user_id);
-            })
-            ->latest('scanned_at')
-            ->with(['items.relatedInstagramProfile'])
-            ->first();
+        return $this->profileListScanData($profile, (int) $trackedPerson->user_id, $listType, (int) $trackedPerson->id);
+    }
+
+    private function profileListScanData(InstagramProfile $profile, int $userId, string $listType, ?int $trackedPersonId = null): array
+    {
+        $scan = $this->latestProfileListScan($profile, $userId, $listType, $trackedPersonId);
 
         if (! $scan) {
-            return collect();
+            return $this->emptyProfileListScanData();
         }
 
+        $items = $this->profileListScanItems($scan);
+        $addedItems = $this->sortNewest(
+            $items->where('itemStatus', 'added')->values(),
+            ['firstSeenAt', 'lastSeenAt', 'observedAt'],
+        );
+        $activeItems = $this->sortActive(
+            $items->filter(fn (array $item): bool => in_array($item['itemStatus'] ?? null, ['observed', 'added'], true))->values(),
+            $addedItems,
+        );
+        $scanRemovedItems = $this->sortNewest(
+            $items->where('itemStatus', 'removed')->values(),
+            ['removedAt', 'lastSeenAt', 'firstSeenAt', 'observedAt'],
+        );
+
+        return [
+            'scan' => $scan,
+            'relationshipList' => $this->relationshipListFromScan($scan),
+            'addedItems' => $addedItems,
+            'activeItems' => $activeItems,
+            'scanRemovedItems' => $scanRemovedItems,
+        ];
+    }
+
+    private function latestProfileListScan(InstagramProfile $profile, int $userId, string $listType, ?int $trackedPersonId = null): ?InstagramProfileListScan
+    {
+        $username = $this->normalizeUsername($profile->username);
+
+        return InstagramProfileListScan::query()
+            ->where(function ($query) use ($profile, $username): void {
+                $query->where('instagram_profile_id', $profile->id);
+
+                if ($username !== null && Schema::hasColumn('instagram_profile_list_scans', 'instagram_username')) {
+                    $query->orWhere('instagram_username', $username);
+                }
+            })
+            ->where('list_type', $listType)
+            ->where(function ($query) use ($userId, $trackedPersonId): void {
+                $query->where('user_id', $userId);
+
+                if ($trackedPersonId) {
+                    $query->orWhere('tracked_person_id', $trackedPersonId);
+                }
+            })
+            ->with(['items.relatedInstagramProfile'])
+            ->orderByDesc('scanned_at')
+            ->orderByDesc('id')
+            ->first();
+    }
+
+    private function profileListScanItems(InstagramProfileListScan $scan): Collection
+    {
         return $scan->items
-            ->whereIn('item_status', ['observed', 'added'])
             ->map(function ($item): array {
                 $raw = is_array($item->raw_item) ? $item->raw_item : [];
                 $related = $item->relatedInstagramProfile;
+                $itemStatus = (string) ($item->item_status ?: 'observed');
 
                 return [
                     ...$raw,
                     'username' => $raw['username'] ?? $item->username_snapshot,
                     'displayName' => $raw['displayName'] ?? $item->display_name_snapshot,
                     'profileUrl' => $raw['profileUrl'] ?? $item->profile_url_snapshot,
-                    'instagramProfileId' => $related?->id,
+                    'instagramProfileId' => $related?->id ?: $item->related_instagram_profile_id,
                     'profileImagePath' => $related?->profile_image_path,
                     'profileVisibility' => $raw['profileVisibility'] ?? $related?->profile_visibility,
                     'isPrivate' => array_key_exists('isPrivate', $raw) ? $raw['isPrivate'] : $related?->is_private,
@@ -154,10 +281,55 @@ class InstagramRelationshipListData
                     'followingCount' => $raw['followingCount'] ?? $related?->following_count,
                     'firstSeenAt' => $raw['firstSeenAt'] ?? $item->observed_at?->toIso8601String(),
                     'lastSeenAt' => $raw['lastSeenAt'] ?? $item->observed_at?->toIso8601String(),
+                    'observedAt' => $item->observed_at?->toIso8601String(),
+                    'itemStatus' => $itemStatus,
+                    'statusLabel' => match ($itemStatus) {
+                        'added' => 'Neu',
+                        'removed' => 'Entfernt',
+                        default => null,
+                    },
+                    'statusTone' => match ($itemStatus) {
+                        'added' => 'emerald',
+                        'removed' => 'rose',
+                        default => 'slate',
+                    },
                 ];
             })
             ->filter(fn (array $item): bool => filled($item['username'] ?? null))
             ->values();
+    }
+
+    private function relationshipListFromScan(InstagramProfileListScan $scan): array
+    {
+        $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
+
+        return [
+            ...$payload,
+            'attempted' => (bool) $scan->attempted,
+            'available' => (bool) $scan->available,
+            'complete' => (bool) $scan->complete,
+            'rateLimited' => (bool) $scan->rate_limited,
+            'gracefullyStopped' => (bool) $scan->gracefully_stopped,
+            'expectedCount' => $scan->expected_count,
+            'observedCount' => (int) $scan->observed_count,
+            'activeCount' => (int) $scan->active_count,
+            'knownCount' => (int) $scan->known_count,
+            'addedCount' => (int) $scan->added_count,
+            'removedCount' => (int) $scan->removed_count,
+            'scanId' => $scan->id,
+            'scannedAt' => $scan->scanned_at?->toIso8601String(),
+        ];
+    }
+
+    private function emptyProfileListScanData(): array
+    {
+        return [
+            'scan' => null,
+            'relationshipList' => [],
+            'addedItems' => collect(),
+            'activeItems' => collect(),
+            'scanRemovedItems' => collect(),
+        ];
     }
 
     private function passiveRelationshipItems(TrackedPerson $trackedPerson, string $listType): Collection
@@ -168,11 +340,32 @@ class InstagramRelationshipListData
             return collect();
         }
 
-        $sourceListType = $listType === 'followers' ? 'following' : 'followers';
         $targetUsername = $this->normalizeUsername($trackedPerson->instagram_username)
             ?: $this->normalizeUsername(InstagramProfile::withTrashed()
                 ->whereKey($targetProfileIds->first())
                 ->value('username'));
+
+        return $this->passiveRelationshipItemsForTarget(
+            $targetProfileIds,
+            $targetUsername,
+            (int) $trackedPerson->user_id,
+            (int) $trackedPerson->id,
+            $listType,
+        );
+    }
+
+    private function passiveRelationshipItemsForTarget(
+        Collection $targetProfileIds,
+        ?string $targetUsername,
+        int $userId,
+        ?int $trackedPersonId,
+        string $listType,
+    ): Collection {
+        if ($targetProfileIds->isEmpty() || ! in_array($listType, ['followers', 'following'], true)) {
+            return collect();
+        }
+
+        $sourceListType = $listType === 'followers' ? 'following' : 'followers';
         $targetHandle = $targetUsername ? '@'.$targetUsername : 'Zielprofil';
 
         return InstagramProfileRelationship::query()
@@ -181,7 +374,7 @@ class InstagramRelationshipListData
             ->where('list_type', $sourceListType)
             ->where('status', 'active')
             ->whereNull('removed_at')
-            ->where(fn ($query) => $this->scopeRelationshipToUser($query, $trackedPerson))
+            ->where(fn ($query) => $this->scopeRelationshipToUser($query, $userId, $trackedPersonId))
             ->with('sourceInstagramProfile')
             ->latest('last_seen_at')
             ->get()
@@ -214,6 +407,7 @@ class InstagramRelationshipListData
                     'meta' => $meta,
                     'statusLabel' => $listType === 'followers' ? 'Passiver Follower' : 'Passiv gefolgt',
                     'statusTone' => 'sky',
+                    'itemStatus' => 'observed',
                     'passive' => true,
                     'passiveSourceListType' => $sourceListType,
                     'passiveRelationshipId' => $relationship->id,
@@ -222,6 +416,19 @@ class InstagramRelationshipListData
             ->filter()
             ->unique(fn (array $item): string => Str::lower((string) $item['username']))
             ->values();
+    }
+
+    private function targetProfileForTrackedPerson(TrackedPerson $trackedPerson): ?InstagramProfile
+    {
+        $targetProfileIds = $this->targetProfileIds($trackedPerson);
+
+        if ($targetProfileIds->isEmpty()) {
+            return null;
+        }
+
+        return InstagramProfile::withTrashed()
+            ->whereKey($targetProfileIds->first())
+            ->first();
     }
 
     private function targetProfileIds(TrackedPerson $trackedPerson): Collection
@@ -245,17 +452,38 @@ class InstagramRelationshipListData
             ->values();
     }
 
-    private function scopeRelationshipToUser($query, TrackedPerson $trackedPerson): void
+    private function targetProfileIdsForProfile(InstagramProfile $profile): Collection
     {
-        $userId = (int) $trackedPerson->user_id;
-        $trackedPersonId = (int) $trackedPerson->id;
+        $ids = collect([(int) $profile->id])
+            ->filter(fn (int $id): bool => $id > 0);
+        $username = $this->normalizeUsername($profile->username);
 
+        if ($username !== null) {
+            $ids = $ids->merge(
+                InstagramProfile::withTrashed()
+                    ->where('username', $username)
+                    ->pluck('id'),
+            );
+        }
+
+        return $ids
+            ->map(fn ($id): int => (int) $id)
+            ->filter(fn (int $id): bool => $id > 0)
+            ->unique()
+            ->values();
+    }
+
+    private function scopeRelationshipToUser($query, int $userId, ?int $trackedPersonId = null): void
+    {
         $query
             ->whereHas('lastSeenScan', fn ($scan) => $scan->where('user_id', $userId))
             ->orWhereHas('firstSeenScan', fn ($scan) => $scan->where('user_id', $userId))
             ->orWhereHas('scanItems.listScan', fn ($scan) => $scan->where('user_id', $userId))
-            ->orWhere('evidence->user_id', $userId)
-            ->orWhere('evidence->tracked_person_id', $trackedPersonId);
+            ->orWhere('evidence->user_id', $userId);
+
+        if ($trackedPersonId) {
+            $query->orWhere('evidence->tracked_person_id', $trackedPersonId);
+        }
     }
 
     private function reconstructedSuggestionItems(TrackedPerson $trackedPerson, string $listType): Collection
@@ -308,7 +536,7 @@ class InstagramRelationshipListData
             ->values();
     }
 
-    private function profileIndex(Collection $items, TrackedPerson $trackedPerson): Collection
+    private function profileIndex(Collection $items, int $userId): Collection
     {
         $usernames = $items
             ->map(fn ($item): string => Str::lower(ltrim(trim((string) data_get($item, 'username', data_get($item, 'username_snapshot', ''))), '@')))
@@ -338,14 +566,14 @@ class InstagramRelationshipListData
             ->keyBy(fn (InstagramProfile $profile): string => Str::lower((string) $profile->username));
 
         $profileIds = $profiles->pluck('id')->filter()->values();
-        $listScanStatuses = InstagramListScanStatus::forProfileIds($profileIds, (int) $trackedPerson->user_id);
-        $trackedByProfileId = $trackedPerson->newQuery()
-            ->where('user_id', $trackedPerson->user_id)
+        $listScanStatuses = InstagramListScanStatus::forProfileIds($profileIds, $userId);
+        $trackedByProfileId = TrackedPerson::query()
+            ->where('user_id', $userId)
             ->whereIn('current_instagram_profile_id', $profileIds->all())
             ->get(['id', 'current_instagram_profile_id', 'instagram_username'])
             ->keyBy('current_instagram_profile_id');
-        $trackedByUsername = $trackedPerson->newQuery()
-            ->where('user_id', $trackedPerson->user_id)
+        $trackedByUsername = TrackedPerson::query()
+            ->where('user_id', $userId)
             ->whereIn('instagram_username', $usernames->all())
             ->get(['id', 'current_instagram_profile_id', 'instagram_username'])
             ->keyBy(fn (TrackedPerson $person): string => Str::lower(ltrim((string) $person->instagram_username, '@')));
@@ -437,6 +665,17 @@ class InstagramRelationshipListData
         }
 
         return collect(array_values($merged));
+    }
+
+    private function modalItems(Collection $activeItems, Collection ...$otherItemGroups): Collection
+    {
+        $items = collect()->merge($activeItems);
+
+        foreach ($otherItemGroups as $itemGroup) {
+            $items = $items->merge($itemGroup);
+        }
+
+        return $items->values();
     }
 
     private function stats(mixed $relationshipList, Collection $items): array
