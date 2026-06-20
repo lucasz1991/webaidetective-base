@@ -279,25 +279,25 @@
         @endif
     </div>
 
-    <div class="hidden shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-slate-200 bg-white/70 px-2 py-1 text-[11px] font-semibold text-slate-600 md:flex">
-        <span title="Beitraege" class="inline-flex items-center gap-1 rounded px-1 py-0.5">
-            <svg class="h-3.5 w-3.5 text-violet-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <div class="hidden w-[16.5rem] shrink-0 grid-cols-[repeat(3,minmax(0,5rem))] justify-end gap-1.5 whitespace-nowrap text-center text-[11px] font-semibold text-slate-600 md:grid">
+        <span title="Beitraege" class="inline-flex min-w-0 items-center justify-center gap-1 rounded-md border border-slate-200 bg-white/70 px-1.5 py-1">
+            <svg class="h-3.5 w-3.5 shrink-0 text-violet-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <rect x="4" y="5" width="16" height="14" rx="2" stroke="currentColor" stroke-width="2"/>
                 <path d="M8 9h8M8 13h5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
             </svg>
-            {{ $formatMetric($postsCount) }}
+            <span class="min-w-0 truncate tabular-nums">{{ $formatMetric($postsCount) }}</span>
         </span>
-        <span title="{{ $followersListScanTitle }}" aria-label="{{ $followersListScanTitle }}" class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 ring-1 {{ $followersMetricClass }}">
-            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <span title="{{ $followersListScanTitle }}" aria-label="{{ $followersListScanTitle }}" class="inline-flex min-w-0 items-center justify-center gap-1 rounded-md px-1.5 py-1 ring-1 {{ $followersMetricClass }}">
+            <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M16 19c0-2.2-1.8-4-4-4s-4 1.8-4 4M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM19 19c0-1.6-.9-3-2.2-3.6M17 5.2a3 3 0 0 1 0 5.6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
             </svg>
-            {{ $formatMetric($followersCount) }}
+            <span class="min-w-0 truncate tabular-nums">{{ $formatMetric($followersCount) }}</span>
         </span>
-        <span title="{{ $followingListScanTitle }}" aria-label="{{ $followingListScanTitle }}" class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 ring-1 {{ $followingMetricClass }}">
-            <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <span title="{{ $followingListScanTitle }}" aria-label="{{ $followingListScanTitle }}" class="inline-flex min-w-0 items-center justify-center gap-1 rounded-md px-1.5 py-1 ring-1 {{ $followingMetricClass }}">
+            <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                 <path d="M10 19c0-2.2-1.8-4-4-4m0 0a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM14 7h6M17 4v6M14 19h6M17 16l3 3-3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
-            {{ $formatMetric($followingCount) }}
+            <span class="min-w-0 truncate tabular-nums">{{ $formatMetric($followingCount) }}</span>
         </span>
     </div>
 
