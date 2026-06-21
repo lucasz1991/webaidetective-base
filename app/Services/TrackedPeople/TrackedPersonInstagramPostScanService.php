@@ -49,11 +49,36 @@ class TrackedPersonInstagramPostScanService
             throw new \RuntimeException('Das Instagram-Profil konnte fuer den Beitragsscan nicht gespeichert werden.');
         }
 
-        $scanControl = $this->scanCoordinator->begin($trackedPerson->id, 'Instagram-Beitragsscan');
+        $scanControl = $this->scanCoordinator->begin(
+            $trackedPerson->id,
+            'Instagram-Beitragsscan',
+            [
+                'scan_type' => 'posts',
+                'target_username' => $username,
+                'instagram_profile_id' => $profile->id,
+                'user_id' => $trackedPerson->user_id,
+            ],
+        );
         $this->activeScanControl = $scanControl;
 
         try {
-            return $this->scanProfileWithLock($profile, (int) $trackedPerson->user_id, $trackedPerson, $snapshot, $progress);
+            $scan = $this->scanProfileWithLock($profile, (int) $trackedPerson->user_id, $trackedPerson, $snapshot, $progress);
+            $this->scanCoordinator->completeFromResult(
+                $trackedPerson->id,
+                (int) $scanControl['generation'],
+                $scan,
+                'Instagram-Beitragsscan abgeschlossen.',
+            );
+
+            return $scan;
+        } catch (\Throwable $exception) {
+            $this->scanCoordinator->failForRetry(
+                $trackedPerson->id,
+                (int) $scanControl['generation'],
+                $exception->getMessage(),
+            );
+
+            throw $exception;
         } finally {
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
             $this->activeScanControl = null;
@@ -65,7 +90,48 @@ class TrackedPersonInstagramPostScanService
         int $userId,
         ?callable $progress = null,
     ): InstagramPostScan {
-        return $this->scanProfileWithLock($profile, $userId, null, null, $progress);
+        $username = $this->scraper->normalizeInstagramUsername($profile->username);
+
+        if ($username === null || $userId <= 0) {
+            throw new \RuntimeException('Fuer dieses Profil ist kein gueltiger Instagram-Name hinterlegt.');
+        }
+
+        $scanContextId = -2000000000 - (int) $profile->id;
+        $scanControl = $this->scanCoordinator->begin(
+            $scanContextId,
+            'Instagram-Profil-Beitragsscan @'.$username,
+            [
+                'scan_type' => 'profile_posts',
+                'scan_context_key' => 'instagram-profile:'.$profile->id,
+                'target_username' => $username,
+                'instagram_profile_id' => $profile->id,
+                'user_id' => $userId,
+            ],
+        );
+        $this->activeScanControl = $scanControl;
+
+        try {
+            $scan = $this->scanProfileWithLock($profile, $userId, null, null, $progress);
+            $this->scanCoordinator->completeFromResult(
+                $scanContextId,
+                (int) $scanControl['generation'],
+                $scan,
+                'Instagram-Profil-Beitragsscan abgeschlossen.',
+            );
+
+            return $scan;
+        } catch (\Throwable $exception) {
+            $this->scanCoordinator->failForRetry(
+                $scanContextId,
+                (int) $scanControl['generation'],
+                $exception->getMessage(),
+            );
+
+            throw $exception;
+        } finally {
+            $this->scanCoordinator->finish($scanContextId, (int) $scanControl['generation']);
+            $this->activeScanControl = null;
+        }
     }
 
     private function scanProfileWithLock(

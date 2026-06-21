@@ -21,7 +21,10 @@ class InstagramProfileScanService
         private readonly TrackedPersonInstagramProfileListScanService $listScanService,
         private readonly TrackedPersonInstagramPostScanService $postScanService,
         private readonly ScanCreditService $scanCreditService,
+        private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
     ) {}
+
+    private ?array $activeScanControl = null;
 
     public function scan(
         InstagramProfile $profile,
@@ -35,11 +38,26 @@ class InstagramProfileScanService
             throw new \RuntimeException('Das Instagram-Profil kann nicht gescannt werden.');
         }
 
+        $scanContextId = -1 * (int) $profile->id;
+        $scanControl = $this->scanCoordinator->begin(
+            $scanContextId,
+            ($fullScan ? 'Instagram-Profil-Vollanalyse' : 'Instagram-Profil-Mini-Scan').' @'.$username,
+            [
+                'scan_type' => $fullScan ? 'profile_full' : 'profile_mini',
+                'scan_context_key' => 'instagram-profile:'.$profile->id,
+                'target_username' => $username,
+                'instagram_profile_id' => $profile->id,
+                'user_id' => $userId,
+            ],
+        );
         $lock = Cache::lock('instagram-profile-scan:'.$profile->id, 3600);
 
         if (! $lock->get()) {
+            $this->scanCoordinator->finish($scanContextId, (int) $scanControl['generation']);
             throw new \RuntimeException('Fuer dieses Profil laeuft bereits ein Instagram-Scan.');
         }
+
+        $this->activeScanControl = $scanControl;
 
         try {
             $previousMetrics = [
@@ -51,6 +69,7 @@ class InstagramProfileScanService
                 $username,
                 $fullScan ? 'profile' : 'mini',
                 $progress,
+                $this->withActiveScanControl(),
             );
             $extracted = $this->extractor->extract($payload);
             DatabaseKeepAlive::ping(0);
@@ -161,6 +180,13 @@ class InstagramProfileScanService
                 ($fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' @'.$username,
             );
 
+            $this->scanCoordinator->completeFromResult(
+                $scanContextId,
+                (int) $scanControl['generation'],
+                $profileScan,
+                ($fullScan ? 'Profil-Vollanalyse' : 'Profil-Mini-Scan').' fuer @'.$username.' abgeschlossen.',
+            );
+
             return [
                 'profile' => $freshProfile,
                 'scan' => $profileScan,
@@ -170,9 +196,31 @@ class InstagramProfileScanService
                 'statusLevel' => $statusLevel,
                 'statusMessage' => $statusMessage,
             ];
+        } catch (\Throwable $exception) {
+            $this->scanCoordinator->failForRetry(
+                $scanContextId,
+                (int) $scanControl['generation'],
+                $exception->getMessage(),
+            );
+
+            throw $exception;
         } finally {
             $lock->release();
+            $this->scanCoordinator->finish($scanContextId, (int) $scanControl['generation']);
+            $this->activeScanControl = null;
         }
+    }
+
+    private function withActiveScanControl(array $runtimeConfigOverrides = []): array
+    {
+        if (! $this->activeScanControl) {
+            return $runtimeConfigOverrides;
+        }
+
+        return [
+            ...$runtimeConfigOverrides,
+            '_scanControl' => $this->activeScanControl,
+        ];
     }
 
     private function payloadCanUpdateProfileCounts(array $payload): bool

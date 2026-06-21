@@ -78,6 +78,11 @@ class TrackedPersonInstagramSuggestionScanService
         $scanControl = $this->scanCoordinator->begin(
             $trackedPerson->id,
             $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan',
+            [
+                'scan_type' => $deepSearch ? 'suggestion_deepsearch' : 'suggestions',
+                'target_username' => $targetUsername,
+                'user_id' => $trackedPerson->user_id,
+            ],
         );
 
         Cache::lock('tracked-person-instagram-suggestion-scan:'.$trackedPerson->id, 3600)->forceRelease();
@@ -91,7 +96,7 @@ class TrackedPersonInstagramSuggestionScanService
         $this->activeScanControl = $scanControl;
 
         try {
-            return $this->scanWithLock(
+            $scan = $this->scanWithLock(
                 $trackedPerson,
                 $this->profileRelationshipStore->syncTrackedPersonProfile($trackedPerson),
                 (int) $trackedPerson->user_id,
@@ -99,6 +104,22 @@ class TrackedPersonInstagramSuggestionScanService
                 $progress,
                 $deepSearch,
             );
+            $this->scanCoordinator->completeFromResult(
+                $trackedPerson->id,
+                (int) $scanControl['generation'],
+                $scan,
+                ($deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan').' abgeschlossen.',
+            );
+
+            return $scan;
+        } catch (\Throwable $exception) {
+            $this->scanCoordinator->failForRetry(
+                $trackedPerson->id,
+                (int) $scanControl['generation'],
+                $exception->getMessage(),
+            );
+
+            throw $exception;
         } finally {
             $lock->release();
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
@@ -118,10 +139,17 @@ class TrackedPersonInstagramSuggestionScanService
             throw new \RuntimeException('Das Instagram-Profil kann nicht gescannt werden.');
         }
 
-        $scanContextId = -1 * (int) $profile->id;
+        $scanContextId = -3000000000 - (int) $profile->id;
         $scanControl = $this->scanCoordinator->begin(
             $scanContextId,
             $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan',
+            [
+                'scan_type' => $deepSearch ? 'profile_suggestion_deepsearch' : 'profile_suggestions',
+                'scan_context_key' => 'instagram-profile:'.$profile->id,
+                'target_username' => $targetUsername,
+                'instagram_profile_id' => $profile->id,
+                'user_id' => $userId,
+            ],
         );
         $lockKey = 'instagram-profile-suggestion-scan:'.$targetUsername;
         Cache::lock($lockKey, 3600)->forceRelease();
@@ -135,7 +163,7 @@ class TrackedPersonInstagramSuggestionScanService
         $this->activeScanControl = $scanControl;
 
         try {
-            return $this->scanWithLock(
+            $scan = $this->scanWithLock(
                 null,
                 $profile,
                 $userId,
@@ -143,6 +171,22 @@ class TrackedPersonInstagramSuggestionScanService
                 $progress,
                 $deepSearch,
             );
+            $this->scanCoordinator->completeFromResult(
+                $scanContextId,
+                (int) $scanControl['generation'],
+                $scan,
+                ($deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan').' abgeschlossen.',
+            );
+
+            return $scan;
+        } catch (\Throwable $exception) {
+            $this->scanCoordinator->failForRetry(
+                $scanContextId,
+                (int) $scanControl['generation'],
+                $exception->getMessage(),
+            );
+
+            throw $exception;
         } finally {
             $lock->release();
             $this->scanCoordinator->finish($scanContextId, (int) $scanControl['generation']);

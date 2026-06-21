@@ -47,20 +47,25 @@ class TrackedPersonInstagramProfileListScanService
             throw new \RuntimeException('Fuer den Profil-Listen-Scan fehlt der Benutzerkontext.');
         }
 
-        $scanControl = $contextPerson
-            ? $this->scanCoordinator->begin(
-                $contextPerson->id,
-                'Instagram-Profil-Listen-Scan @'.$username,
-            )
-            : null;
+        $scanContextId = $contextPerson?->id ?: -1000000000 - (int) $profile->id;
+        $scanControl = $this->scanCoordinator->begin(
+            $scanContextId,
+            'Instagram-Profil-Listen-Scan @'.$username,
+            [
+                'scan_type' => 'profile_list',
+                'scan_context_key' => $contextPerson ? 'tracked-person:'.$contextPerson->id : 'instagram-profile:'.$profile->id,
+                'target_username' => $username,
+                'tracked_person_id' => $contextPerson?->id,
+                'instagram_profile_id' => $profile->id,
+                'user_id' => $userId,
+            ],
+        );
 
         Cache::lock($this->lockKey($profile), 3600)->forceRelease();
         $lock = Cache::lock($this->lockKey($profile), 3600);
 
         if (! $lock->get()) {
-            if ($contextPerson && $scanControl) {
-                $this->scanCoordinator->finish($contextPerson->id, (int) $scanControl['generation']);
-            }
+            $this->scanCoordinator->finish($scanContextId, (int) $scanControl['generation']);
 
             throw new \RuntimeException('Fuer dieses Profil laeuft bereits ein Listen-Scan.');
         }
@@ -68,13 +73,27 @@ class TrackedPersonInstagramProfileListScanService
         $this->activeScanControl = $scanControl;
 
         try {
-            return $this->scanWithLock($contextPerson, $profile, $username, $progress, $relationships, (int) $userId);
+            $scans = $this->scanWithLock($contextPerson, $profile, $username, $progress, $relationships, (int) $userId);
+
+            $this->scanCoordinator->completeFromResult(
+                $scanContextId,
+                (int) $scanControl['generation'],
+                $scans,
+                'Instagram-Profil-Listen-Scan abgeschlossen.',
+            );
+
+            return $scans;
+        } catch (\Throwable $exception) {
+            $this->scanCoordinator->failForRetry(
+                $scanContextId,
+                (int) $scanControl['generation'],
+                $exception->getMessage(),
+            );
+
+            throw $exception;
         } finally {
             $lock->release();
-
-            if ($contextPerson && $scanControl) {
-                $this->scanCoordinator->finish($contextPerson->id, (int) $scanControl['generation']);
-            }
+            $this->scanCoordinator->finish($scanContextId, (int) $scanControl['generation']);
 
             $this->activeScanControl = null;
         }
