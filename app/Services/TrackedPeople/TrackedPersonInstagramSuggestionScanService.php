@@ -192,19 +192,6 @@ class TrackedPersonInstagramSuggestionScanService
             'observedSuggestions' => [],
         ]);
 
-        // Determine whether to elevate a normal scan to a full checked run every 3rd scan
-        $recheckEvery = 3;
-        $previousScanCount = 0;
-        if ($trackedPerson) {
-            $previousScanCount = TrackedPersonInstagramSuggestionScan::query()
-                ->where('tracked_person_id', $trackedPerson->id)
-                ->count();
-        } elseif ($profile) {
-            $previousScanCount = TrackedPersonInstagramSuggestionScan::query()
-                ->where('instagram_profile_id', $profile->id)
-                ->count();
-        }
-        $elevateToDeepSearch = (!$deepSearch) && ($previousScanCount % $recheckEvery === $recheckEvery - 1);
         $deepSearchSeedProfiles = $deepSearch
             ? $this->buildDeepSearchSeedProfiles($trackedPerson, $profile, $targetUsername)
             : [];
@@ -212,7 +199,7 @@ class TrackedPersonInstagramSuggestionScanService
         // Resume support: detect last incomplete scan and build a pending list
         $lastScan = $deepSearch
             ? $this->lastIncompleteSuggestionDeepSearchScanForContext($trackedPerson, $profile)
-            : $this->lastSuggestionScanForContext($trackedPerson, $profile);
+            : null;
         $resumePendingOnly = false;
         $pendingCandidates = [];
         if ($lastScan) {
@@ -230,8 +217,7 @@ class TrackedPersonInstagramSuggestionScanService
         try {
             $payload = $this->scraper->scrape(
                 $targetUsername,
-                // On every 3rd normal scan, run the checked scan under the hood
-                $deepSearch || $elevateToDeepSearch ? 'suggestion-connections' : 'suggestions',
+                $deepSearch ? 'suggestion-connections' : 'suggestions',
                 function (array $state) use (
                     $trackedPerson,
                     $progressScan,
@@ -462,8 +448,6 @@ class TrackedPersonInstagramSuggestionScanService
                         ? ['suggestionCandidateHistory' => $this->buildSuggestionCandidateHistory($trackedPerson, $profile, $noMatchSkipAfter, $candidateRecheckHours)]
                         : []),
                     'suggestionCandidateRecheckHours' => $candidateRecheckHours,
-                    // Auch der automatische vertiefte Lauf respektiert die 48h-Recheck-Grenze.
-                    ...($elevateToDeepSearch ? ['suggestionSkipPreviouslyChecked' => true] : []),
                     ...($deepSearch ? ['suggestionDeepSearchSeedProfiles' => $deepSearchSeedProfiles] : []),
                     // Resume-only: if last scan incomplete, pass pending list and a hint to prefer resume
                     ...($pendingCandidates !== [] ? [
@@ -474,26 +458,37 @@ class TrackedPersonInstagramSuggestionScanService
             );
         } catch (\Throwable $exception) {
             $scanLabel = $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan';
-            $message = $scanLabel.' fehlgeschlagen: '.$exception->getMessage();
+            $errorMessage = $exception->getMessage();
+            $observedCount = max(
+                count($liveObservedSuggestions),
+                $this->countBranchedSuggestionItems($liveBranchedConnections),
+            );
+            $hasPartialData = $observedCount > 0 || count($liveConnections) > 0;
+            $rateLimited = str_contains($errorMessage, '429');
+            $statusLevel = ($hasPartialData || $rateLimited) ? 'partial' : 'error';
+            $message = $statusLevel === 'partial'
+                ? $scanLabel.' wurde unterbrochen; bereits erkannte Vorschlaege wurden gespeichert.'
+                    .($observedCount > 0 ? ' Sichtbar erkannt: '.number_format($observedCount, 0, ',', '.').'.' : '')
+                : $scanLabel.' fehlgeschlagen: '.$errorMessage;
             $payload = [
                 'ok' => false,
                 'operationMode' => $deepSearch ? 'suggestion-connections' : 'suggestions',
-                'statusLevel' => 'error',
+                'statusLevel' => $statusLevel,
                 'statusMessage' => $message,
-                'error' => $exception->getMessage(),
+                'error' => $errorMessage,
                 'suggestionConnections' => $liveConnections,
                 'suggestionScan' => [
                     'ok' => false,
-                    'statusLevel' => 'error',
+                    'statusLevel' => $statusLevel,
                     'statusMessage' => $message,
                     'targetUsername' => $targetUsername,
                     'attempted' => true,
-                    'available' => count($liveObservedSuggestions) > 0,
-                    'observedCount' => max(count($liveObservedSuggestions), $this->countBranchedSuggestionItems($liveBranchedConnections)),
+                    'available' => $observedCount > 0,
+                    'observedCount' => $observedCount,
                     'checkedCount' => 0,
                     'matchCount' => count($liveConnections),
-                    'rateLimited' => str_contains($exception->getMessage(), '429'),
-                    'rateLimitText' => str_contains($exception->getMessage(), '429') ? $exception->getMessage() : null,
+                    'rateLimited' => $rateLimited,
+                    'rateLimitText' => $rateLimited ? $errorMessage : null,
                     'observedSuggestions' => $liveObservedSuggestions,
                     'matches' => $liveConnections,
                     'inferredFollowers' => $liveInferredFollowers,
@@ -501,7 +496,8 @@ class TrackedPersonInstagramSuggestionScanService
                     'suggestionBranchedConnections' => $liveBranchedConnections,
                     'targetCollectionDebug' => [
                         ...$liveSuggestionDebug,
-                        'error' => $exception->getMessage(),
+                        'error' => $errorMessage,
+                        'interruptedWithPartialData' => $hasPartialData,
                     ],
                 ],
             ];
@@ -519,7 +515,9 @@ class TrackedPersonInstagramSuggestionScanService
                 'suggestionBranchedConnections' => $liveBranchedConnections,
             ]);
 
-            $this->markProgressScanFailed($progressScan, $targetUsername, $trackedPerson?->id, $userId, $message, $exception);
+            if ($statusLevel === 'error') {
+                $this->markProgressScanFailed($progressScan, $targetUsername, $trackedPerson?->id, $userId, $message, $exception);
+            }
         }
 
         return $this->storeScan(
@@ -1359,22 +1357,6 @@ class TrackedPersonInstagramSuggestionScanService
         $suggestionPayload = $payload['suggestionScan'] ?? data_get($payload, 'profile.suggestionScan', []);
 
         return is_array($suggestionPayload) ? $suggestionPayload : [];
-    }
-
-    private function lastSuggestionScanForContext(?TrackedPerson $trackedPerson, ?InstagramProfile $profile): ?TrackedPersonInstagramSuggestionScan
-    {
-        if ($trackedPerson) {
-            return $trackedPerson->instagramSuggestionScans()->latest('analyzed_at')->first();
-        }
-
-        if ($profile) {
-            return TrackedPersonInstagramSuggestionScan::query()
-                ->where('instagram_profile_id', $profile->id)
-                ->latest('analyzed_at')
-                ->first();
-        }
-
-        return null;
     }
 
     private function lastIncompleteSuggestionDeepSearchScanForContext(?TrackedPerson $trackedPerson, ?InstagramProfile $profile): ?TrackedPersonInstagramSuggestionScan
