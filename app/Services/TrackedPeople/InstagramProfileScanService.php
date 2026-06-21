@@ -55,6 +55,7 @@ class InstagramProfileScanService
             $extracted = $this->extractor->extract($payload);
             DatabaseKeepAlive::ping(0);
 
+            $countsCanBeUpdated = $this->payloadCanUpdateProfileCounts($payload);
             $profile = $this->profileRelationshipStore->ensureProfile($username, [
                 'display_name' => $extracted['full_name'] ?? $profile->display_name,
                 'full_name' => $extracted['full_name'] ?? $profile->full_name,
@@ -62,15 +63,22 @@ class InstagramProfileScanService
                 'profile_image_url' => $extracted['profile_image_url'] ?? $profile->profile_image_url,
                 'is_private' => $extracted['is_private'] ?? $profile->is_private,
                 'profile_visibility' => $extracted['profile_visibility'] ?? $profile->profile_visibility,
-                'followers_count' => $extracted['followers_count'] ?? $profile->followers_count,
-                'following_count' => $extracted['following_count'] ?? $profile->following_count,
-                'posts_count' => $extracted['posts_count'] ?? $profile->posts_count,
+                'followers_count' => $countsCanBeUpdated
+                    ? ($extracted['followers_count'] ?? $profile->followers_count)
+                    : $profile->followers_count,
+                'following_count' => $countsCanBeUpdated
+                    ? ($extracted['following_count'] ?? $profile->following_count)
+                    : $profile->following_count,
+                'posts_count' => $countsCanBeUpdated
+                    ? ($extracted['posts_count'] ?? $profile->posts_count)
+                    : $profile->posts_count,
                 'last_status_level' => $payload['statusLevel'] ?? 'unknown',
                 'last_status_message' => $payload['statusMessage'] ?? 'Instagram-Profilscan abgeschlossen.',
                 'last_scanned_at' => now('UTC'),
                 'raw_profile' => [
                     'operation_mode' => $payload['operationMode'] ?? ($fullScan ? 'profile' : 'mini'),
                     'tracked_person_created' => false,
+                    'counts_updated' => $countsCanBeUpdated,
                 ],
             ]) ?: $profile;
             $this->profileRelationshipStore->propagateProfileDataToLinkedTrackedPeople($profile);
@@ -165,6 +173,17 @@ class InstagramProfileScanService
         } finally {
             $lock->release();
         }
+    }
+
+    private function payloadCanUpdateProfileCounts(array $payload): bool
+    {
+        $statusLevel = strtolower(trim((string) ($payload['statusLevel'] ?? '')));
+
+        if ($statusLevel === 'error' || (array_key_exists('ok', $payload) && ! (bool) $payload['ok'])) {
+            return false;
+        }
+
+        return ! (bool) ($payload['gracefullyStopped'] ?? false);
     }
 
     private function profileMetricChanges(array $previousMetrics, InstagramProfile $profile): array

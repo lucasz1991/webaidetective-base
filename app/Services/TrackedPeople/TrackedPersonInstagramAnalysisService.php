@@ -136,6 +136,13 @@ class TrackedPersonInstagramAnalysisService
         $miniScanWithoutCounts = ($attemptInfo['scan_mode'] ?? null) === 'mini'
             && ! (bool) ($attemptInfo['counts_found'] ?? false);
         $preservedProfileFields = [];
+        $extracted = $this->preserveUnreliableProfileCounts(
+            $extracted,
+            $previousSnapshot,
+            $payload,
+            $attemptInfo,
+            $preservedProfileFields,
+        );
         $extracted = $this->preserveMissingProfileValues(
             $extracted,
             $previousSnapshot,
@@ -151,7 +158,7 @@ class TrackedPersonInstagramAnalysisService
 
         if ($preservedProfileFields !== []) {
             $attemptInfo['preserved_profile_fields'] = $preservedProfileFields;
-            $persistedWarnings[] = 'Fehlende Profilwerte wurden aus dem letzten gueltigen Instagram-Snapshot fortgefuehrt, damit ein fehlerhafter Scan den Vergleichsstand nicht leert.';
+            $persistedWarnings[] = 'Profilwerte wurden wegen eines unzuverlaessigen Instagram-Scans nicht mit neuen Null- oder Leerwerten ueberschrieben.';
         }
 
         $this->reportProgress($progress, [
@@ -405,6 +412,13 @@ class TrackedPersonInstagramAnalysisService
             'phases' => [$phaseResult],
         ];
         $preservedProfileFields = [];
+        $extracted = $this->preserveUnreliableProfileCounts(
+            $extracted,
+            $previousSnapshot,
+            $payload,
+            $attemptInfo,
+            $preservedProfileFields,
+        );
         $extracted = $this->preserveMissingProfileValues(
             $extracted,
             $previousSnapshot,
@@ -420,7 +434,7 @@ class TrackedPersonInstagramAnalysisService
 
         if ($preservedProfileFields !== []) {
             $attemptInfo['preserved_profile_fields'] = $preservedProfileFields;
-            $persistedWarnings[] = 'Fehlende Profilwerte wurden aus dem letzten gueltigen Instagram-Snapshot fortgefuehrt, damit ein fehlerhafter Listen-Scan den Vergleichsstand nicht leert.';
+            $persistedWarnings[] = 'Profilwerte wurden wegen eines unzuverlaessigen Instagram-Listen-Scans nicht mit neuen Null- oder Leerwerten ueberschrieben.';
         }
 
         $this->reportProgress($progress, [
@@ -1598,8 +1612,6 @@ class TrackedPersonInstagramAnalysisService
         ?TrackedPersonInstagramSnapshot $previousSnapshot,
         array &$preservedFields,
     ): array {
-        $preservedFields = [];
-
         if (! $previousSnapshot) {
             return $extracted;
         }
@@ -1614,6 +1626,37 @@ class TrackedPersonInstagramAnalysisService
 
             $extracted[$field] = $previousValue;
             $preservedFields[] = $field;
+        }
+
+        return $extracted;
+    }
+
+    private function preserveUnreliableProfileCounts(
+        array $extracted,
+        ?TrackedPersonInstagramSnapshot $previousSnapshot,
+        array $payload,
+        array $attemptInfo,
+        array &$preservedFields,
+    ): array {
+        if ($this->scanCanUpdateProfileCounts($payload, $attemptInfo)) {
+            return $extracted;
+        }
+
+        foreach (['posts_count', 'followers_count', 'following_count'] as $field) {
+            $previousValue = $previousSnapshot?->{$field};
+            $replacementValue = ($previousValue !== null && $previousValue !== '')
+                ? $previousValue
+                : null;
+
+            if (($extracted[$field] ?? null) === $replacementValue) {
+                continue;
+            }
+
+            $extracted[$field] = $replacementValue;
+
+            if (! in_array($field, $preservedFields, true)) {
+                $preservedFields[] = $field;
+            }
         }
 
         return $extracted;
@@ -1646,6 +1689,32 @@ class TrackedPersonInstagramAnalysisService
         }
 
         return $extracted;
+    }
+
+    private function scanCanUpdateProfileCounts(array $payload, array $attemptInfo): bool
+    {
+        $statusLevel = Str::lower(trim((string) ($payload['statusLevel'] ?? '')));
+
+        if ($statusLevel === 'error' || (array_key_exists('ok', $payload) && ! (bool) $payload['ok'])) {
+            return false;
+        }
+
+        if ((bool) ($payload['gracefullyStopped'] ?? false) || (bool) ($attemptInfo['gracefully_stopped'] ?? false)) {
+            return false;
+        }
+
+        $profilePhase = collect($attemptInfo['phases'] ?? [])
+            ->first(fn ($phase): bool => is_array($phase) && ($phase['phase'] ?? null) === 'profile');
+
+        if (is_array($profilePhase)) {
+            $phaseStatus = Str::lower(trim((string) ($profilePhase['statusLevel'] ?? '')));
+
+            if ($phaseStatus === 'error' || (array_key_exists('ok', $profilePhase) && ! (bool) $profilePhase['ok'])) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private function scanCanUpdateProfileVisibility(array $payload, array $attemptInfo): bool
