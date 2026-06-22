@@ -7,11 +7,14 @@ use App\Models\InstagramProfile;
 use App\Models\InstagramScanRun;
 use App\Models\TrackedPerson;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class InstagramScanRunManager
 {
+    private const RESUME_LOCK_SECONDS = 21600;
+
     public function __construct(
         private readonly TrackedPersonInstagramScanCoordinator $scanCoordinator,
         private readonly TrackedPersonInstagramWorkflowService $workflowService,
@@ -74,6 +77,10 @@ class InstagramScanRunManager
             ->limit(max(1, $limit))
             ->get()
             ->each(function (InstagramScanRun $run) use (&$dispatched): void {
+                if (! $this->reserveDueRetry($run)) {
+                    return;
+                }
+
                 try {
                     if (config('queue.default') === 'sync') {
                         $this->resume((int) $run->id);
@@ -87,6 +94,8 @@ class InstagramScanRunManager
                         'scan_run_id' => $run->id,
                         'error' => $exception->getMessage(),
                     ]);
+
+                    $this->releaseReservedRetry($run, $exception->getMessage());
                 }
             });
 
@@ -94,6 +103,21 @@ class InstagramScanRunManager
     }
 
     public function resume(int $scanRunId): void
+    {
+        $lock = Cache::lock($this->resumeLockKey($scanRunId), self::RESUME_LOCK_SECONDS);
+
+        if (! $lock->get()) {
+            return;
+        }
+
+        try {
+            $this->resumeLocked($scanRunId);
+        } finally {
+            $lock->release();
+        }
+    }
+
+    private function resumeLocked(int $scanRunId): void
     {
         $run = InstagramScanRun::query()->whereKey($scanRunId)->first();
 
@@ -166,6 +190,47 @@ class InstagramScanRunManager
                 ]);
             }
         }
+    }
+
+    private function reserveDueRetry(InstagramScanRun $run): bool
+    {
+        $now = now('UTC');
+
+        return InstagramScanRun::query()
+            ->whereKey($run->id)
+            ->where('status', InstagramScanRun::STATUS_RETRY_SCHEDULED)
+            ->whereNotNull('next_retry_at')
+            ->where('next_retry_at', '<=', $now)
+            ->update([
+                'status' => InstagramScanRun::STATUS_QUEUED,
+                'finished_at' => null,
+                'last_heartbeat_at' => $now,
+                'next_retry_at' => null,
+                'updated_at' => $now,
+            ]) === 1;
+    }
+
+    private function releaseReservedRetry(InstagramScanRun $run, string $reason): void
+    {
+        $now = now('UTC');
+        $nextRetryAt = $now->copy()->addMinute();
+
+        InstagramScanRun::query()
+            ->whereKey($run->id)
+            ->where('status', InstagramScanRun::STATUS_QUEUED)
+            ->update([
+                'status' => InstagramScanRun::STATUS_RETRY_SCHEDULED,
+                'finished_at' => $now,
+                'last_heartbeat_at' => $now,
+                'next_retry_at' => $nextRetryAt,
+                'last_error' => Str::limit('Resume-Job konnte nicht gestartet werden: '.$reason, 4000, ''),
+                'updated_at' => $now,
+            ]);
+    }
+
+    private function resumeLockKey(int $scanRunId): string
+    {
+        return 'instagram-scan-run-resume:'.$scanRunId;
     }
 
     private function executeRun(InstagramScanRun $run): void
