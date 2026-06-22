@@ -48,4 +48,14 @@ class DatabaseKeepAliveTest extends TestCase
         $this->assertSame('recovered', $value);
         $this->assertTrue(DatabaseKeepAlive::ping(0));
     }
+
+    public function test_reconnect_keeps_the_existing_laravel_connection_instance(): void
+    {
+        $connection = DB::connection();
+        $connectionObjectId = spl_object_id($connection);
+
+        $this->assertTrue(DatabaseKeepAlive::reconnect());
+        $this->assertSame($connectionObjectId, spl_object_id(DB::connection()));
+        $this->assertNotNull($connection->getPdo());
+    }
 }

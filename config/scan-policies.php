@@ -17,6 +17,7 @@ return [
             'live_preview_enabled' => true,
             'skip_debug_artifacts' => false,
             'block_heavy_resources' => false,
+            'php_memory_limit' => env('INSTAGRAM_SCAN_PHP_MEMORY_LIMIT', '512M'),
         ],
         'mini' => [
             'error_attempts' => 1,

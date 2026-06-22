@@ -38,8 +38,9 @@ class DatabaseKeepAlive
 
         for ($attempt = 1; $attempt <= $attempts; $attempt += 1) {
             try {
-                DB::disconnect();
-                DB::purge();
+                // Das bestehende Connection-Objekt behalten. Laravels
+                // DatabaseSessionHandler referenziert genau diese Instanz.
+                // DB::purge() wuerde sie mit PDO=null zuruecklassen.
                 DB::reconnect();
                 DB::connection()->getPdo();
                 DB::select('select 1');

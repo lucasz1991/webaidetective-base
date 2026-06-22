@@ -89,12 +89,7 @@ const RELATIONSHIP_SEARCH_LETTERS = [
 ];
 const RELATIONSHIP_SEARCH_DIGITS = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
 const RELATIONSHIP_SEARCH_SPECIAL_CHARACTERS = ['.', '_'];
-const RELATIONSHIP_SEARCH_PARTITION_CHARACTERS = [
-  ...RELATIONSHIP_SEARCH_LETTERS,
-  ...RELATIONSHIP_SEARCH_DIGITS,
-  ...RELATIONSHIP_SEARCH_SPECIAL_CHARACTERS,
-];
-const RELATIONSHIP_SEARCH_PARTITION_QUERIES = RELATIONSHIP_SEARCH_PARTITION_CHARACTERS;
+const RELATIONSHIP_SEARCH_FALLBACK_EXPANSION_BASE_LIMIT = 8;
 const sharedScraperHelpers = {
   normalizeText,
   normalizeInstagramUsername,
@@ -5256,17 +5251,14 @@ function addRelationshipEntriesToMap(entries, usersByUsername, targetUsername, d
   return added;
 }
 
-function getRelationshipSearchPartitionQueries(runtimeConfig = {}) {
+function getConfiguredRelationshipSearchPartitionQueries(runtimeConfig = {}) {
   const configuredQueries = Array.isArray(runtimeConfig.relationshipSearchPartitionQueries)
     ? runtimeConfig.relationshipSearchPartitionQueries
     : [];
-  const normalizedQueries = configuredQueries
-    .map((query) => normalizeText(String(query || '')).toLowerCase())
-    .filter((query) => query !== '');
 
-  return normalizedQueries.length > 0
-    ? [...new Set(normalizedQueries)]
-    : RELATIONSHIP_SEARCH_PARTITION_QUERIES;
+  return [...new Set(configuredQueries
+    .map((query) => normalizeText(String(query || '')).toLowerCase())
+    .filter((query) => query !== ''))];
 }
 
 function scoreRelationshipSearchQuery(query, usersByUsername) {
@@ -5289,17 +5281,31 @@ function buildNextLevelRelationshipSearchQueries(
   alreadyQueuedQueries,
   currentDepth,
 ) {
-  const productiveBaseQueries = queryStats
+  const depthStats = queryStats
     .filter((stat) => (
       stat.depth === currentDepth
-      && stat.stopReason === 'search-partition-item-limit'
-    ))
-    .map((stat) => stat.query)
-    .filter((query) => query.length === currentDepth);
+      && stat.query.length === currentDepth
+      && /^[a-z]+$/.test(stat.query)
+    ));
+  const saturatedStats = depthStats
+    .filter((stat) => stat.stopReason === 'search-partition-item-limit');
+  const productiveStats = saturatedStats.length > 0
+    ? saturatedStats
+    : (currentDepth === 1
+      ? depthStats
+        .filter((stat) => stat.visibleCount > 0 || stat.addedCount > 0)
+        .sort((left, right) => (
+          right.visibleCount - left.visibleCount
+          || right.addedCount - left.addedCount
+          || left.query.localeCompare(right.query)
+        ))
+        .slice(0, RELATIONSHIP_SEARCH_FALLBACK_EXPANSION_BASE_LIMIT)
+      : []);
+  const productiveBaseQueries = productiveStats.map((stat) => stat.query);
   const candidates = new Set();
 
   for (const baseQuery of productiveBaseQueries) {
-    for (const character of RELATIONSHIP_SEARCH_PARTITION_CHARACTERS) {
+    for (const character of RELATIONSHIP_SEARCH_LETTERS) {
       candidates.add(`${baseQuery}${character}`);
       candidates.add(`${character}${baseQuery}`);
     }
@@ -5336,6 +5342,16 @@ function getMissingPrioritizedRelationshipSearchQueries(runtimeConfig = {}, rela
   return queries;
 }
 
+function isConclusiveKnownProfileSearchMiss(stopReason, queryRounds) {
+  return queryRounds > 0 && [
+    'search-empty',
+    'search-suggestions-section-reached',
+    'search-bottom-stale',
+    'search-scroll-stale',
+    'search-no-new-items',
+  ].includes(stopReason);
+}
+
 async function collectRelationshipSearchPartitions(page, username, relationship, options, usersByUsername) {
   const normalizedRelationship = relationship === 'following' ? 'following' : 'followers';
   const runtimeConfig = options.runtimeConfig || {};
@@ -5358,7 +5374,23 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     usersByUsername,
   );
   const verifyMissingOnly = Boolean(runtimeConfig.relationshipSearchVerifyMissingOnly);
-  const queries = verifyMissingOnly ? [] : getRelationshipSearchPartitionQueries(runtimeConfig);
+  const configuredQueries = verifyMissingOnly
+    ? []
+    : getConfiguredRelationshipSearchPartitionQueries(runtimeConfig);
+  const hasConfiguredQueries = configuredQueries.length > 0;
+  const alphabetQueries = verifyMissingOnly
+    ? []
+    : (hasConfiguredQueries ? configuredQueries : RELATIONSHIP_SEARCH_LETTERS);
+  const remainingSingleCharacterQueries = verifyMissingOnly || hasConfiguredQueries
+    ? []
+    : [
+      ...RELATIONSHIP_SEARCH_DIGITS,
+      ...RELATIONSHIP_SEARCH_SPECIAL_CHARACTERS,
+    ];
+  const queries = [
+    ...alphabetQueries,
+    ...remainingSingleCharacterQueries,
+  ];
   const maxSearchDepth = Math.min(
     4,
     Math.max(1, normalizeOptionalPositiveInteger(runtimeConfig.relationshipSearchMaxDepth, 3) || 3),
@@ -5385,9 +5417,36 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     25,
     normalizeOptionalPositiveInteger(runtimeConfig.relationshipSearchPartitionMaxItems, 250) || 250,
   );
-  const queryQueue = queries.length > 0
-    ? queries.map((query) => ({ query, depth: 1, source: 'alphabet-partition' }))
-    : prioritizedQueries.map((query) => ({ query, depth: 0, source: 'missing-known-profile' }));
+  const queryQueue = [];
+
+  for (const query of alphabetQueries) {
+    queryQueue.push({
+      query,
+      depth: 1,
+      source: hasConfiguredQueries ? 'configured-partition' : 'alphabet-partition',
+    });
+  }
+
+  if (!hasConfiguredQueries) {
+    for (const prioritizedQuery of prioritizedQueries) {
+      queryQueue.push({
+        query: prioritizedQuery,
+        depth: 0,
+        source: 'missing-known-profile',
+      });
+    }
+  }
+
+  for (const query of remainingSingleCharacterQueries) {
+    queryQueue.push({
+      query,
+      depth: 1,
+      source: RELATIONSHIP_SEARCH_DIGITS.includes(query)
+        ? 'numeric-partition'
+        : 'special-character-partition',
+    });
+  }
+
   const queuedQueries = new Set([...prioritizedQueries, ...queries]);
   const expandedDepths = new Set();
   const queryStats = [];
@@ -5399,6 +5458,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
   let addedCount = 0;
   let expandedQueryCount = 0;
   let stopReason = null;
+  let knownProfileVerificationStarted = false;
 
   const targetReached = () => {
     if (searchTargetUsername && usersByUsername.has(searchTargetUsername)) {
@@ -5411,6 +5471,14 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
 
     return expectedCount > 0 && usersByUsername.size >= expectedCount;
   };
+  const hasPendingKnownProfileVerification = (currentIndex = -1) => queryQueue
+    .slice(currentIndex + 1)
+    .some((entry) => (
+      entry.source === 'missing-known-profile'
+      && !usersByUsername.has(entry.query)
+      && !verifiedMissingUsernames.has(entry.query)
+      && !verifiedPresentUsernames.has(entry.query)
+    ));
 
   progressLog('relationship-search-opening', {
     relationship: normalizedRelationship,
@@ -5419,7 +5487,9 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     maxItems,
     maxScrollRounds,
     prioritizedQueryCount: prioritizedQueries.length,
-    queryCount: queries.length,
+    alphabetQueryCount: alphabetQueries.length,
+    remainingSingleCharacterQueryCount: remainingSingleCharacterQueries.length,
+    queryCount: queryQueue.length,
     targetUsername: searchTargetUsername || null,
   });
 
@@ -5529,14 +5599,45 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
 
   for (let queryIndex = 0; queryIndex < queryQueue.length; queryIndex++) {
     const { query, depth, source } = queryQueue[queryIndex];
+    const isKnownProfileVerification = source === 'missing-known-profile';
 
-    if (source === 'missing-known-profile' && usersByUsername.has(query)) {
+    if (isKnownProfileVerification && usersByUsername.has(query)) {
       verifiedPresentUsernames.add(query);
       continue;
     }
 
-    if (targetReached() || searchRounds >= maxScrollRounds) {
+    if (
+      (
+        targetReached()
+        || searchRounds >= maxScrollRounds
+      )
+      && !isKnownProfileVerification
+      && !hasPendingKnownProfileVerification(queryIndex - 1)
+    ) {
       break;
+    }
+
+    if (
+      searchRounds >= maxScrollRounds
+      && !isKnownProfileVerification
+      && hasPendingKnownProfileVerification(queryIndex - 1)
+    ) {
+      continue;
+    }
+
+    if (
+      isKnownProfileVerification
+      && !knownProfileVerificationStarted
+    ) {
+      knownProfileVerificationStarted = true;
+      progressLog('relationship-known-profiles-verification-start', {
+        relationship: normalizedRelationship,
+        loaded: usersByUsername.size,
+        expectedCount,
+        profilesToVerify: prioritizedQueries.length,
+        message: `${prioritizedQueries.length} aus vorherigen Scans bekannte, aktuell fehlende Profile werden jetzt einzeln gesucht.`,
+        ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+      });
     }
 
     if (markGracefulStopIfRequested(normalizedRelationship, {
@@ -5561,7 +5662,7 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
         queryCount: queryQueue.length,
         queriesPerDialog,
         itemsPreview: buildRelationshipProgressPreview(usersByUsername, checkpointSize),
-        message: `${queryIndex} alphabetische Suchsegmente abgeschlossen und zwischengespeichert.`,
+        message: `${queryIndex} Suchsegmente abgeschlossen und zwischengespeichert.`,
         ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
       });
 
@@ -5607,6 +5708,13 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
     const queryVisibleUsernames = new Set();
     let lastScrollState = null;
     let queryStopReason = null;
+    const currentQueryReached = () => (
+      isKnownProfileVerification
+        ? usersByUsername.has(query)
+        : source === 'alphabet-partition' && hasPendingKnownProfileVerification(queryIndex)
+        ? false
+        : targetReached()
+    );
 
     progressLog('relationship-search-query-start', {
       relationship: normalizedRelationship,
@@ -5622,7 +5730,10 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       queryCount: queryQueue.length,
     });
 
-    while (!targetReached() && searchRounds < maxScrollRounds) {
+    while (
+      !currentQueryReached()
+      && (isKnownProfileVerification || searchRounds < maxScrollRounds)
+    ) {
       const collection = await collectFollowerEntriesFromDialog(page);
       const rawEntries = Array.isArray(collection) ? collection : (collection.entries || []);
       const entries = await enrichProfileEntriesWithHoverCards(page, rawEntries, hoverCardUsernames, runtimeConfig);
@@ -5708,8 +5819,10 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
         break;
       }
 
-      if (targetReached()) {
-        queryStopReason = expectedCount > 0 && usersByUsername.size >= expectedCount
+      if (currentQueryReached()) {
+        queryStopReason = isKnownProfileVerification
+          ? 'known-profile-found'
+          : expectedCount > 0 && usersByUsername.size >= expectedCount
           ? 'expected-count-reached'
           : searchTargetUsername && usersByUsername.has(searchTargetUsername)
           ? 'target-found'
@@ -5723,7 +5836,11 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       }
 
       if (entries.length === 0) {
-        if ((searchTargetUsername || source === 'missing-known-profile') && queryRounds < 3 && searchRounds < maxScrollRounds) {
+        if (
+          (searchTargetUsername || isKnownProfileVerification)
+          && queryRounds < 3
+          && (isKnownProfileVerification || searchRounds < maxScrollRounds)
+        ) {
           await sleep(searchWaitMs);
           continue;
         }
@@ -5778,13 +5895,13 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       itemsPreview: buildRelationshipProgressPreview(usersByUsername, checkpointSize),
     });
 
-    if (source === 'missing-known-profile') {
+    if (isKnownProfileVerification) {
       if (usersByUsername.has(query) || queryVisibleUsernames.has(query)) {
         verifiedPresentUsernames.add(query);
       } else if (
-        queryStopReason !== 'ui-stop-requested'
+        queryApplied
         && stopReason !== 'instagram-rate-limit'
-        && queryApplied
+        && isConclusiveKnownProfileSearchMiss(queryStopReason, queryRounds)
       ) {
         verifiedMissingUsernames.add(query);
       }
@@ -5800,7 +5917,24 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       stopReason: queryStopReason,
     });
 
-    if (targetReached()) {
+    const knownProfileVerificationComplete = isKnownProfileVerification
+      && !hasPendingKnownProfileVerification(queryIndex);
+
+    if (knownProfileVerificationComplete) {
+      progressLog('relationship-known-profiles-verified', {
+        relationship: normalizedRelationship,
+        loaded: usersByUsername.size,
+        expectedCount,
+        verifiedPresentCount: verifiedPresentUsernames.size,
+        verifiedMissingCount: verifiedMissingUsernames.size,
+        verifiedPresentUsernames: Array.from(verifiedPresentUsernames),
+        verifiedMissingUsernames: Array.from(verifiedMissingUsernames),
+        message: `${prioritizedQueries.length} zuvor bekannte Profile wurden gezielt geprueft; ${verifiedMissingUsernames.size} davon wurden nicht mehr gefunden.`,
+        ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+      });
+    }
+
+    if (targetReached() && !hasPendingKnownProfileVerification(queryIndex)) {
       stopReason = queryStopReason;
       break;
     }
@@ -5809,7 +5943,10 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
       break;
     }
 
-    if (searchRounds >= maxScrollRounds) {
+    if (
+      searchRounds >= maxScrollRounds
+      && !hasPendingKnownProfileVerification(queryIndex)
+    ) {
       stopReason = 'search-max-scroll-rounds-reached';
       break;
     }
@@ -5855,16 +5992,6 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
         totalQueries: queryQueue.length,
         maxDepth: maxSearchDepth,
       });
-    }
-
-    if (queries.length > 0 && depth === 1 && queryIndex === queries.length - 1) {
-      for (const prioritizedQuery of prioritizedQueries) {
-        queryQueue.push({
-          query: prioritizedQuery,
-          depth: 0,
-          source: 'missing-known-profile',
-        });
-      }
     }
 
     await sleep(450);
@@ -6386,11 +6513,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
         ...options,
         maxScrollRounds,
         hoverCardUsernames,
-        runtimeConfig: {
-          ...runtimeConfig,
-          relationshipSearchVerifyMissingOnly: !usePartitionedCollection
-            && missingKnownRelationshipSearchQueries.length > 0,
-        },
+        runtimeConfig,
       },
       usersByUsername,
     );

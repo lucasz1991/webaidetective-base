@@ -82,8 +82,6 @@ class InstagramScraper
         }
         $runtimeConfigOverrides = $this->withScanControlRuntimeConfig($runtimeConfigOverrides, $scanControl);
         $runtimeConfigPath = $this->writeRuntimeConfig($runtimeConfigOverrides);
-        $stdout = '';
-        $stderr = '';
         $stderrBuffer = '';
 
         try {
@@ -98,8 +96,6 @@ class InstagramScraper
                 $scanControl,
                 $operationMode,
                 function (string $type, string $buffer) use (
-                    &$stdout,
-                    &$stderr,
                     &$stderrBuffer,
                     $progress,
                     $operationMode,
@@ -107,12 +103,9 @@ class InstagramScraper
                     $progressEnd,
                 ) {
                     if ($type === SymfonyProcess::OUT) {
-                        $stdout .= $buffer;
-
                         return;
                     }
 
-                    $stderr .= $buffer;
                     $this->handleProgressOutput(
                         $stderrBuffer,
                         $buffer,
@@ -130,8 +123,8 @@ class InstagramScraper
             }
         }
 
-        $output = trim($stdout !== '' ? $stdout : $result['output']);
-        $errorOutput = trim($stderr !== '' ? $stderr : $result['errorOutput']);
+        $output = trim($result['output']);
+        $errorOutput = trim($result['errorOutput']);
 
         if ($output === '') {
             throw new \RuntimeException(
@@ -205,8 +198,6 @@ class InstagramScraper
         }
         $runtimeConfigOverrides = $this->withScanControlRuntimeConfig($runtimeConfigOverrides, $scanControl);
         $runtimeConfigPath = $this->writeRuntimeConfig($runtimeConfigOverrides);
-        $stdout = '';
-        $stderr = '';
         $stderrBuffer = '';
         $lastProgressPercent = 0;
 
@@ -222,19 +213,13 @@ class InstagramScraper
                 $scanControl,
                 'public-profile-connections',
                 function (string $type, string $buffer) use (
-                    &$stdout,
-                    &$stderr,
                     &$stderrBuffer,
                     &$lastProgressPercent,
                     $progress,
                 ) {
                     if ($type === SymfonyProcess::OUT) {
-                        $stdout .= $buffer;
-
                         return;
                     }
-
-                    $stderr .= $buffer;
 
                     $stderrBuffer .= $buffer;
                     $lines = preg_split("/\r\n|\n|\r/", $stderrBuffer);
@@ -343,8 +328,8 @@ class InstagramScraper
             }
         }
 
-        $output = trim($stdout !== '' ? $stdout : $result['output']);
-        $errorOutput = trim($stderr !== '' ? $stderr : $result['errorOutput']);
+        $output = trim($result['output']);
+        $errorOutput = trim($result['errorOutput']);
 
         if ($output === '') {
             throw new \RuntimeException(
@@ -550,6 +535,7 @@ class InstagramScraper
         string $label,
         callable $onOutput,
     ): array {
+        $this->ensureLongRunningScanMemoryLimit();
         DatabaseKeepAlive::ensureConnected();
 
         $process = new SymfonyProcess($command, base_path());
@@ -585,7 +571,7 @@ class InstagramScraper
         }
 
         $stdout = '';
-        $stderr = '';
+        $stderrTail = '';
         $lastOutputAt = microtime(true);
         $processStallTimeoutSeconds = max(
             60,
@@ -607,13 +593,15 @@ class InstagramScraper
                     $coordinator?->recordProcessOutput($trackedPersonId, $generation);
                     $stdout .= $stdoutChunk;
                     $onOutput(SymfonyProcess::OUT, $stdoutChunk);
+                    $process->clearOutput();
                 }
 
                 if ($stderrChunk !== '') {
                     $lastOutputAt = microtime(true);
                     $coordinator?->recordProcessOutput($trackedPersonId, $generation);
-                    $stderr .= $stderrChunk;
+                    $stderrTail = $this->appendBoundedProcessOutput($stderrTail, $stderrChunk);
                     $onOutput(SymfonyProcess::ERR, $stderrChunk);
+                    $process->clearErrorOutput();
                 }
 
                 if ($coordinator && $coordinator->shouldCancel($trackedPersonId, $generation)) {
@@ -649,11 +637,13 @@ class InstagramScraper
             if ($stdoutChunk !== '') {
                 $stdout .= $stdoutChunk;
                 $onOutput(SymfonyProcess::OUT, $stdoutChunk);
+                $process->clearOutput();
             }
 
             if ($stderrChunk !== '') {
-                $stderr .= $stderrChunk;
+                $stderrTail = $this->appendBoundedProcessOutput($stderrTail, $stderrChunk);
                 $onOutput(SymfonyProcess::ERR, $stderrChunk);
+                $process->clearErrorOutput();
             }
 
             if ($coordinator) {
@@ -664,8 +654,8 @@ class InstagramScraper
 
             return [
                 'successful' => $process->isSuccessful(),
-                'output' => $stdout !== '' ? $stdout : $process->getOutput(),
-                'errorOutput' => $stderr !== '' ? $stderr : $process->getErrorOutput(),
+                'output' => $stdout,
+                'errorOutput' => $stderrTail,
             ];
         } finally {
             if ($coordinator && $pid > 0) {
@@ -682,6 +672,67 @@ class InstagramScraper
                 }
             }
         }
+    }
+
+    private function appendBoundedProcessOutput(string $current, string $chunk, int $maxBytes = 262144): string
+    {
+        $combined = $current.$chunk;
+
+        return strlen($combined) <= $maxBytes
+            ? $combined
+            : substr($combined, -$maxBytes);
+    }
+
+    private function ensureLongRunningScanMemoryLimit(): void
+    {
+        $configured = trim((string) config(
+            'scan-policies.defaults.global.php_memory_limit',
+            '512M',
+        ));
+
+        if ($configured === '' || $configured === '-1') {
+            return;
+        }
+
+        $current = trim((string) ini_get('memory_limit'));
+        $currentBytes = $this->phpIniBytes($current);
+        $configuredBytes = $this->phpIniBytes($configured);
+
+        if ($configuredBytes <= 0 || ($currentBytes < 0 || $currentBytes >= $configuredBytes)) {
+            return;
+        }
+
+        $changed = @ini_set('memory_limit', $configured);
+        $effectiveBytes = $this->phpIniBytes((string) ini_get('memory_limit'));
+
+        if ($changed === false || ($effectiveBytes > 0 && $effectiveBytes < $configuredBytes)) {
+            Log::warning('PHP-Speicherlimit fuer Instagram-Langzeitscan konnte nicht angehoben werden.', [
+                'requested' => $configured,
+                'effective' => ini_get('memory_limit'),
+            ]);
+        }
+    }
+
+    private function phpIniBytes(string $value): int
+    {
+        $value = trim($value);
+
+        if ($value === '-1') {
+            return -1;
+        }
+
+        if ($value === '' || ! is_numeric(substr($value, 0, -1))) {
+            return is_numeric($value) ? (int) $value : 0;
+        }
+
+        $number = (float) substr($value, 0, -1);
+
+        return match (strtolower(substr($value, -1))) {
+            'g' => (int) ($number * 1024 * 1024 * 1024),
+            'm' => (int) ($number * 1024 * 1024),
+            'k' => (int) ($number * 1024),
+            default => (int) $number,
+        };
     }
 
     private function handleProgressOutput(
@@ -1248,6 +1299,8 @@ class InstagramScraper
             'relationship-search-opening' => $expected > 0 ? min(98, max(5, (int) floor(($loaded / max(1, $expected)) * 100))) : 55,
             'relationship-search-query-start' => $expected > 0 ? min(98, max(5, (int) floor(($loaded / max(1, $expected)) * 100))) : 60,
             'relationship-search-batch-complete' => $expected > 0 ? min(98, max(5, (int) floor(($loaded / max(1, $expected)) * 100))) : 70,
+            'relationship-known-profiles-verification-start' => $expected > 0 ? min(98, max(72, (int) floor(($loaded / max(1, $expected)) * 100))) : 75,
+            'relationship-known-profiles-verified' => $expected > 0 ? min(98, max(75, (int) floor(($loaded / max(1, $expected)) * 100))) : 78,
             'relationship-search-complete' => $expected > 0 && $loaded < $expected ? 98 : 100,
             'relationship-dialog-missing' => 100,
             'relationship-complete' => 100,
