@@ -5,8 +5,11 @@ namespace Tests\Feature;
 use App\Models\CreditTransaction;
 use App\Models\CreditWallet;
 use App\Models\InstagramProfile;
+use App\Models\InstagramProfileListScan;
+use App\Models\InstagramProfileListScanItem;
 use App\Models\InstagramProfileRelationship;
 use App\Models\InstagramProfileScan;
+use App\Models\InstagramScanRun;
 use App\Models\Mail;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
@@ -17,9 +20,11 @@ use App\Models\User;
 use App\Services\Billing\ScanCreditService;
 use App\Services\TrackedPeople\InstagramProfileChangeNotificationService;
 use App\Services\TrackedPeople\InstagramProfileRelationshipStore;
+use App\Services\TrackedPeople\InstagramScanRunManager;
 use App\Services\TrackedPeople\TrackedPersonInstagramProfileListScanService;
-use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
+use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use App\Services\TrackedPeople\TrackedPersonInstagramSuggestionScanService;
+use App\Services\TrackedPeople\TrackedPersonInstagramWorkflowService;
 use Illuminate\Foundation\Testing\DatabaseTransactions;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
@@ -429,6 +434,116 @@ class InstagramProfileScanBillingTest extends TestCase
             'related_instagram_profile_id' => $verifiedMissing->id,
             'item_status' => 'removed',
         ]);
+    }
+
+    public function test_incomplete_list_resume_uses_observed_count_instead_of_preserved_active_count(): void
+    {
+        $scan = new InstagramProfileListScan;
+        $scan->forceFill([
+            'complete' => false,
+            'observed_count' => 291,
+            'active_count' => 294,
+            'raw_payload' => [],
+        ]);
+        $service = app(TrackedPersonInstagramProfileListScanService::class);
+        $method = new ReflectionMethod($service, 'lastScanSuggestsResume');
+        $method->setAccessible(true);
+
+        $this->assertTrue($method->invoke($service, $scan, 294, []));
+
+        $scan->forceFill(['complete' => true]);
+
+        $this->assertFalse($method->invoke($service, $scan, 294, []));
+    }
+
+    public function test_list_resume_seeds_only_observed_items_and_targets_preserved_differences(): void
+    {
+        $user = User::factory()->create();
+        $profile = InstagramProfile::create(['username' => 'resume_seed_source']);
+        $scan = InstagramProfileListScan::create([
+            'instagram_profile_id' => $profile->id,
+            'user_id' => $user->id,
+            'list_type' => 'following',
+            'scan_mode' => 'profile_list',
+            'status_level' => 'partial',
+            'attempted' => true,
+            'available' => true,
+            'complete' => false,
+            'expected_count' => 3,
+            'observed_count' => 2,
+            'active_count' => 3,
+            'known_count' => 3,
+            'raw_payload' => [],
+            'scanned_at' => now('UTC'),
+        ]);
+
+        foreach ([
+            ['username' => 'resume_seen_one', 'preserved' => false],
+            ['username' => 'resume_seen_two', 'preserved' => false],
+            ['username' => 'resume_missing', 'preserved' => true],
+        ] as $item) {
+            $relatedProfile = InstagramProfile::create(['username' => $item['username']]);
+
+            InstagramProfileListScanItem::create([
+                'list_scan_id' => $scan->id,
+                'source_instagram_profile_id' => $profile->id,
+                'related_instagram_profile_id' => $relatedProfile->id,
+                'list_type' => 'following',
+                'item_status' => 'observed',
+                'username_snapshot' => $item['username'],
+                'raw_item' => [
+                    'username' => $item['username'],
+                    'preservedWithoutCurrentObservation' => $item['preserved'],
+                ],
+                'observed_at' => now('UTC'),
+            ]);
+        }
+
+        $service = app(TrackedPersonInstagramProfileListScanService::class);
+        $observedMethod = new ReflectionMethod($service, 'observedItemsFromScan');
+        $observedMethod->setAccessible(true);
+        $missingMethod = new ReflectionMethod($service, 'missingPreviouslyKnownItems');
+        $missingMethod->setAccessible(true);
+        $observedItems = $observedMethod->invoke($service, $scan);
+        $missingItems = $missingMethod->invoke(
+            $service,
+            [
+                ['username' => 'resume_seen_one'],
+                ['username' => 'resume_seen_two'],
+                ['username' => 'resume_missing'],
+            ],
+            $observedItems,
+        );
+
+        $this->assertEqualsCanonicalizing(
+            ['resume_seen_one', 'resume_seen_two'],
+            collect($observedItems)->pluck('username')->all(),
+        );
+        $this->assertSame(['resume_missing'], collect($missingItems)->pluck('username')->all());
+    }
+
+    public function test_list_retry_restarts_only_the_incomplete_relationship(): void
+    {
+        $coordinator = app(TrackedPersonInstagramScanCoordinator::class);
+        $retryMethod = new ReflectionMethod($coordinator, 'retryRelationshipsFromResult');
+        $retryMethod->setAccessible(true);
+        $relationships = $retryMethod->invoke($coordinator, collect([
+            ['list_type' => 'followers', 'status_level' => 'success', 'complete' => true],
+            ['list_type' => 'following', 'status_level' => 'partial', 'complete' => false],
+        ]));
+
+        $this->assertSame(['following'], $relationships);
+
+        $run = new InstagramScanRun;
+        $run->resume_payload = [
+            'metadata' => ['relationships' => ['followers', 'following']],
+            'retryRelationships' => $relationships,
+        ];
+        $manager = app(InstagramScanRunManager::class);
+        $resumeMethod = new ReflectionMethod($manager, 'relationshipsForRun');
+        $resumeMethod->setAccessible(true);
+
+        $this->assertSame(['following'], $resumeMethod->invoke($manager, $run));
     }
 
     public function test_suggestion_scan_can_be_stored_without_tracked_person(): void

@@ -131,7 +131,13 @@ const runtimeConfigDefaults = {
     followers: [],
     following: [],
   },
+  relationshipResumeObservedItems: {
+    followers: [],
+    following: [],
+  },
   relationshipSearchOnly: false,
+  relationshipSearchPrioritizeMissingFirst: false,
+  relationshipSearchVerifyMissingOnly: false,
   relationshipSearchTargetUsername: '',
   relationshipSearchTargetMaxItems: 0,
   relationshipSearchTargetMaxScrollRounds: 60,
@@ -5419,21 +5425,34 @@ async function collectRelationshipSearchPartitions(page, username, relationship,
   );
   const queryQueue = [];
 
-  for (const query of alphabetQueries) {
-    queryQueue.push({
-      query,
-      depth: 1,
-      source: hasConfiguredQueries ? 'configured-partition' : 'alphabet-partition',
-    });
-  }
-
-  if (!hasConfiguredQueries) {
+  const prioritizeMissingFirst = Boolean(runtimeConfig.relationshipSearchPrioritizeMissingFirst);
+  const appendPrioritizedQueries = () => {
     for (const prioritizedQuery of prioritizedQueries) {
       queryQueue.push({
         query: prioritizedQuery,
         depth: 0,
         source: 'missing-known-profile',
       });
+    }
+  };
+  const appendAlphabetQueries = () => {
+    for (const query of alphabetQueries) {
+      queryQueue.push({
+        query,
+        depth: 1,
+        source: hasConfiguredQueries ? 'configured-partition' : 'alphabet-partition',
+      });
+    }
+  };
+
+  if (prioritizeMissingFirst && !hasConfiguredQueries) {
+    appendPrioritizedQueries();
+    appendAlphabetQueries();
+  } else {
+    appendAlphabetQueries();
+
+    if (!hasConfiguredQueries) {
+      appendPrioritizedQueries();
     }
   }
 
@@ -6213,11 +6232,19 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
   const usersByUsername = new Map();
   const hoverCardUsernames = new Set();
   const targetUsername = normalizeInstagramUsername(username);
+  const searchOnly = Boolean(runtimeConfig.relationshipSearchOnly || isRelationshipSearchOnlyMode);
+  const configuredResumeItems = runtimeConfig.relationshipResumeObservedItems || {};
+  const resumeItems = Array.isArray(configuredResumeItems[normalizedRelationship])
+    ? configuredResumeItems[normalizedRelationship]
+    : [];
+
+  addRelationshipEntriesToMap(resumeItems, usersByUsername, targetUsername);
+
   let lastScrollState = null;
   let totalScrollRounds = 0;
   let openAttempts = 0;
   let noProgressOpenAttempts = 0;
-  let stopReason = null;
+  let stopReason = searchOnly ? 'resume-search-only' : null;
 
   const targetReached = () => {
     if (hasItemLimit && usersByUsername.size >= maxItems) {
@@ -6227,7 +6254,17 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     return expectedCount > 0 && usersByUsername.size >= expectedCount;
   };
 
-  while (totalScrollRounds < maxScrollRounds && !targetReached()) {
+  if (searchOnly) {
+    progressLog('relationship-resume-search-only', {
+      relationship: normalizedRelationship,
+      loaded: usersByUsername.size,
+      expectedCount,
+      resumeItems: resumeItems.length,
+      message: `${normalizedRelationship}-Liste wird ohne erneutes Scrollen bei ${usersByUsername.size} gespeicherten Treffern fortgesetzt.`,
+    });
+  }
+
+  while (!searchOnly && totalScrollRounds < maxScrollRounds && !targetReached()) {
     if (markGracefulStopIfRequested(normalizedRelationship, {
       loaded: usersByUsername.size,
       expectedCount,
@@ -6579,7 +6616,8 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
     && stopReason !== 'ui-stop-requested'
     && stopReason !== 'relationship-list-temporarily-unavailable'
     && (
-      result.searchAttempted
+      targetReached()
+      || (result.searchAttempted
         ? result.searchInputAvailable && ![
           'search-dialog-not-found',
           'search-input-not-found',
@@ -6594,6 +6632,7 @@ async function collectPublicRelationshipList(page, username, profile, relationsh
           'pass-scroll-stale',
           'pass-no-new-items',
         ].includes(stopReason))
+      )
     );
   result.reason = stopReason === 'instagram-rate-limit'
     ? stopReason

@@ -172,7 +172,10 @@ class InstagramScanRunManager
     {
         $scanType = Str::lower((string) $run->scan_type);
 
-        if (Str::startsWith($scanType, 'profile_')) {
+        if (
+            Str::startsWith($scanType, 'profile_')
+            && ! ($scanType === 'profile_list' && $run->tracked_person_id)
+        ) {
             $this->executeProfileRun($run, $scanType);
 
             return;
@@ -219,7 +222,13 @@ class InstagramScanRunManager
 
         match ($scanType) {
             'profile_full' => $this->profileScanService->scan($profile, $userId, true),
-            'profile_list' => $this->profileListScanService->scan(null, $profile, null, ['followers', 'following'], $userId),
+            'profile_list' => $this->profileListScanService->scan(
+                null,
+                $profile,
+                null,
+                $this->relationshipsForRun($run),
+                $userId,
+            ),
             'profile_posts' => $this->postScanService->scanProfile($profile, $userId),
             'profile_suggestions' => $this->suggestionScanService->scanProfile($profile, $userId),
             'profile_suggestion_deepsearch' => $this->suggestionScanService->scanProfileDeepSearch($profile, $userId),
@@ -243,9 +252,27 @@ class InstagramScanRunManager
             $trackedPerson,
             $profile,
             null,
-            ['followers', 'following'],
+            $this->relationshipsForRun($run),
             (int) ($run->user_id ?: $trackedPerson->user_id),
         );
+    }
+
+    private function relationshipsForRun(InstagramScanRun $run): array
+    {
+        $relationships = data_get($run->resume_payload, 'retryRelationships');
+
+        if (! is_array($relationships) || $relationships === []) {
+            $relationships = data_get($run->resume_payload, 'metadata.relationships', []);
+        }
+
+        $relationships = collect(is_array($relationships) ? $relationships : [])
+            ->map(fn ($relationship): string => Str::lower(trim((string) $relationship)))
+            ->filter(fn (string $relationship): bool => in_array($relationship, ['followers', 'following'], true))
+            ->unique()
+            ->values()
+            ->all();
+
+        return $relationships !== [] ? $relationships : ['followers', 'following'];
     }
 
     private function interruptedReason(InstagramScanRun $run, int $staleAfterSeconds): ?string

@@ -89,7 +89,10 @@ class TrackedPersonInstagramScanCoordinator
                 $generation,
                 $this->resultStatusMessage($result) ?: $fallbackMessage,
                 300,
-                ['result' => $this->summarizeResultForPayload($result)],
+                [
+                    'result' => $this->summarizeResultForPayload($result),
+                    'retryRelationships' => $this->retryRelationshipsFromResult($result),
+                ],
             );
 
             return;
@@ -801,6 +804,35 @@ class TrackedPersonInstagramScanCoordinator
             'statusMessage' => $this->resultStatusMessage($result),
             'gracefullyStopped' => $this->resultWasGracefullyStopped($result),
         ];
+    }
+
+    private function retryRelationshipsFromResult(mixed $result): array
+    {
+        if (! $result instanceof Collection) {
+            return [];
+        }
+
+        return $result
+            ->filter(fn (mixed $item): bool => $this->resultNeedsRetry($item))
+            ->map(function (mixed $item): ?string {
+                $relationship = data_get($item, 'list_type')
+                    ?? data_get($item, 'relationship')
+                    ?? data_get($item, 'raw_payload.relationship');
+
+                if (! is_scalar($relationship)) {
+                    return null;
+                }
+
+                $relationship = Str::lower(trim((string) $relationship));
+
+                return in_array($relationship, ['followers', 'following'], true)
+                    ? $relationship
+                    : null;
+            })
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
     }
 
     private function scanRunsAvailable(): bool

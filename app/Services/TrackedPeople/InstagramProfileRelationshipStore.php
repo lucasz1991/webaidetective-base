@@ -1219,7 +1219,15 @@ class InstagramProfileRelationshipStore
         }
 
         if ((bool) ($relationshipList['available'] ?? false)) {
-            return $label.' gespeichert: '.number_format((int) ($relationshipList['observedCount'] ?? 0), 0, ',', '.').' direkt beobachtete Eintraege.';
+            $message = $label.' gespeichert: '
+                .number_format((int) ($relationshipList['observedCount'] ?? 0), 0, ',', '.')
+                .' direkt beobachtete Eintraege.';
+            $removedCount = (int) ($relationshipList['removedCount'] ?? 0);
+
+            return $removedCount > 0
+                ? $message.' '.number_format($removedCount, 0, ',', '.')
+                    .' zuvor bekannte Profile wurden einzeln geprueft und als entfernt markiert.'
+                : $message;
         }
 
         return $snapshot->status_message ?: $label.' konnte nicht geladen werden.';
@@ -1257,7 +1265,15 @@ class InstagramProfileRelationshipStore
         }
 
         if ((bool) ($relationshipList['available'] ?? false)) {
-            return $label.' gespeichert: '.number_format((int) ($relationshipList['observedCount'] ?? 0), 0, ',', '.').' direkt beobachtete Eintraege.';
+            $message = $label.' gespeichert: '
+                .number_format((int) ($relationshipList['observedCount'] ?? 0), 0, ',', '.')
+                .' direkt beobachtete Eintraege.';
+            $removedCount = (int) ($relationshipList['removedCount'] ?? 0);
+
+            return $removedCount > 0
+                ? $message.' '.number_format($removedCount, 0, ',', '.')
+                    .' zuvor bekannte Profile wurden einzeln geprueft und als entfernt markiert.'
+                : $message;
         }
 
         return $this->nullableTrim($payload['statusMessage'] ?? null) ?: $label.' konnte nicht geladen werden.';

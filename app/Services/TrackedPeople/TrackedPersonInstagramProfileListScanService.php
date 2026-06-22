@@ -38,9 +38,14 @@ class TrackedPersonInstagramProfileListScanService
         DatabaseKeepAlive::ensureConnected();
 
         $username = $this->scraper->normalizeInstagramUsername($profile->username);
+        $relationships = $this->normalizeRelationships($relationships);
 
         if ($username === null) {
             throw new \RuntimeException('Fuer dieses Profil ist kein gueltiger Instagram-Username hinterlegt.');
+        }
+
+        if ($relationships === []) {
+            throw new \InvalidArgumentException('Keine gueltigen Instagram-Listen fuer den Scan ausgewaehlt.');
         }
 
         $userId = $contextPerson?->user_id ?: $userId;
@@ -60,6 +65,7 @@ class TrackedPersonInstagramProfileListScanService
                 'tracked_person_id' => $contextPerson?->id,
                 'instagram_profile_id' => $profile->id,
                 'user_id' => $userId,
+                'relationships' => $relationships,
             ],
         );
 
@@ -110,11 +116,7 @@ class TrackedPersonInstagramProfileListScanService
         int $userId,
     ): Collection {
         $progress = $this->createLiveProgressCallback($contextPerson, $profile, $userId, $progress);
-        $relationships = collect($relationships)
-            ->map(fn ($relationship): string => Str::lower(trim((string) $relationship)))
-            ->filter(fn (string $relationship): bool => in_array($relationship, ['followers', 'following'], true))
-            ->unique()
-            ->values();
+        $relationships = collect($this->normalizeRelationships($relationships));
 
         if ($relationships->isEmpty()) {
             throw new \InvalidArgumentException('Keine gueltigen Instagram-Listen fuer den Scan ausgewaehlt.');
@@ -159,6 +161,22 @@ class TrackedPersonInstagramProfileListScanService
             $previousActiveItems = DatabaseKeepAlive::run(
                 fn (): array => $this->activeRelationshipItems($profile, $relationship),
             );
+            $lastListScan = DatabaseKeepAlive::run(
+                fn (): ?InstagramProfileListScan => $this->lastResumableListScanFor(
+                    $profile,
+                    $relationship,
+                    $userId,
+                ),
+            );
+            $resumeObservedItems = $lastListScan
+                ? DatabaseKeepAlive::run(fn (): array => $this->observedItemsFromScan($lastListScan))
+                : [];
+            $shouldResumeViaSearch = $lastListScan
+                ? $this->lastScanSuggestsResume($lastListScan, (int) $expectedCount, $resumeObservedItems)
+                : false;
+            $resumeMissingItems = $shouldResumeViaSearch
+                ? $this->missingPreviouslyKnownItems($previousActiveItems, $resumeObservedItems)
+                : [];
             $progressScan = DatabaseKeepAlive::run(
                 fn (): ?InstagramProfileListScan => $this->profileRelationshipStore->startDirectRelationshipListScan(
                     $profile,
@@ -194,32 +212,33 @@ class TrackedPersonInstagramProfileListScanService
                 );
             }
 
-            // Resume-Entscheidung: Fuer grosse Listen (>= 250) und unvollstaendigen letzten Lauf direkt die alphabetische Suche nutzen
-            $shouldResumeViaSearch = false;
-            if ((int) $expectedCount >= 250) {
-                $lastListScan = DatabaseKeepAlive::run(
-                    fn (): ?InstagramProfileListScan => $this->lastListScanFor($profile, $relationship),
-                );
-                if ($lastListScan) {
-                    $shouldResumeViaSearch = $this->lastScanSuggestsResume($lastListScan, (int) $expectedCount);
-                }
-            }
-
             // Modus pro Beziehung festlegen
             $operationMode = $relationship;
             $runtimeOverrides = [
                 $expectedOverride => max(0, (int) $expectedCount),
                 'relationshipPrioritizedSearchUsernames' => [
-                    $relationship => collect($previousActiveItems)->pluck('username')->values()->all(),
+                    $relationship => collect($shouldResumeViaSearch ? $resumeMissingItems : $previousActiveItems)
+                        ->pluck('username')
+                        ->values()
+                        ->all(),
                 ],
             ];
 
             if ($shouldResumeViaSearch) {
-                // Ueberspringe Scroll-Phase und nutze alphabetische Suche
+                $expectedGap = max(0, (int) $expectedCount - count($resumeObservedItems));
+
+                // Bereits beobachtete Eintraege werden in den Node-Lauf uebernommen.
+                // Dadurch wird nicht erneut gescrollt, sondern bei den noch offenen Profilen fortgesetzt.
                 $operationMode = $relationship === 'followers' ? 'followers-search' : 'following-search';
                 $runtimeOverrides = [
                     ...$runtimeOverrides,
                     'relationshipSearchOnly' => true,
+                    'relationshipSearchPrioritizeMissingFirst' => true,
+                    'relationshipSearchVerifyMissingOnly' => $resumeMissingItems !== []
+                        && count($resumeMissingItems) >= max(1, $expectedGap),
+                    'relationshipResumeObservedItems' => [
+                        $relationship => $resumeObservedItems,
+                    ],
                 ];
             }
 
@@ -227,7 +246,11 @@ class TrackedPersonInstagramProfileListScanService
                 'phase' => $relationship,
                 'percent' => $start,
                 'message' => ($shouldResumeViaSearch
-                    ? $label.' von @'.$username.' wird fortgesetzt (alphabetische Suche).'
+                    ? $label.' von @'.$username.' wird bei '
+                        .number_format(count($resumeObservedItems), 0, ',', '.')
+                        .' bereits gefundenen Profilen fortgesetzt; '
+                        .number_format(count($resumeMissingItems), 0, ',', '.')
+                        .' bekannte Differenzen werden einzeln geprueft.'
                     : $label.' von @'.$username.' wird vorbereitet.'),
             ]);
 
@@ -447,7 +470,11 @@ class TrackedPersonInstagramProfileListScanService
         });
     }
 
-    private function lastListScanFor(InstagramProfile $profile, string $relationship): ?InstagramProfileListScan
+    private function lastResumableListScanFor(
+        InstagramProfile $profile,
+        string $relationship,
+        int $userId,
+    ): ?InstagramProfileListScan
     {
         $username = $this->scraper->normalizeInstagramUsername($profile->username);
 
@@ -460,9 +487,60 @@ class TrackedPersonInstagramProfileListScanService
                 }
             })
             ->where('list_type', $relationship)
+            ->where('user_id', $userId)
+            ->where('complete', false)
+            ->where(function ($query): void {
+                $query->where('observed_count', '>', 0)
+                    ->orWhere('active_count', '>', 0)
+                    ->orWhere('rate_limited', true)
+                    ->orWhere('gracefully_stopped', true);
+            })
             ->orderByDesc('scanned_at')
             ->orderByDesc('id')
             ->first();
+    }
+
+    private function observedItemsFromScan(InstagramProfileListScan $scan): array
+    {
+        return $scan->items()
+            ->whereIn('item_status', ['observed', 'added'])
+            ->orderBy('id')
+            ->get()
+            ->map(function ($item): ?array {
+                $rawItem = is_array($item->raw_item) ? $item->raw_item : [];
+
+                if ((bool) ($rawItem['preservedWithoutCurrentObservation'] ?? false)) {
+                    return null;
+                }
+
+                return [
+                    ...$rawItem,
+                    'username' => $rawItem['username'] ?? $item->username_snapshot,
+                    'displayName' => $rawItem['displayName'] ?? $item->display_name_snapshot,
+                    'profileUrl' => $rawItem['profileUrl'] ?? $item->profile_url_snapshot,
+                ];
+            })
+            ->filter(fn (?array $item): bool => is_array($item) && filled($item['username'] ?? null))
+            ->unique(fn (array $item): string => $this->normalizeRelationshipUsername($item['username']))
+            ->values()
+            ->all();
+    }
+
+    private function missingPreviouslyKnownItems(array $previousActiveItems, array $observedItems): array
+    {
+        $observedUsernames = collect($observedItems)
+            ->pluck('username')
+            ->map(fn ($username): string => $this->normalizeRelationshipUsername($username))
+            ->filter()
+            ->flip();
+
+        return collect($previousActiveItems)
+            ->filter(fn ($item): bool => is_array($item) && filled($item['username'] ?? null))
+            ->reject(fn (array $item): bool => $observedUsernames->has(
+                $this->normalizeRelationshipUsername($item['username']),
+            ))
+            ->values()
+            ->all();
     }
 
     private function activeRelationshipItems(InstagramProfile $profile, string $relationship): array
@@ -546,9 +624,13 @@ class TrackedPersonInstagramProfileListScanService
         DatabaseKeepAlive::ensureConnected();
     }
 
-    private function lastScanSuggestsResume(InstagramProfileListScan $lastScan, int $expectedCount): bool
+    private function lastScanSuggestsResume(
+        InstagramProfileListScan $lastScan,
+        int $expectedCount,
+        array $resumeObservedItems = [],
+    ): bool
     {
-        if ($expectedCount <= 0) {
+        if ($expectedCount <= 0 || $lastScan->complete) {
             return false;
         }
 
@@ -558,15 +640,20 @@ class TrackedPersonInstagramProfileListScanService
             return false;
         }
 
-        // Versuche verschiedene Pfade fuer observedCount zu lesen
-        $observed = (int) (
-            data_get($payload, 'profile.followersList.observedCount')
-            ?? data_get($payload, 'profile.followingList.observedCount')
-            ?? data_get($payload, 'followers_list.observedCount')
-            ?? data_get($payload, 'following_list.observedCount')
-            ?? 0
+        $observed = max(
+            count($resumeObservedItems),
+            (int) $lastScan->observed_count,
+            (int) (
+                data_get($payload, 'profile.followersList.observedCount')
+                ?? data_get($payload, 'profile.followingList.observedCount')
+                ?? data_get($payload, 'followers_list.observedCount')
+                ?? data_get($payload, 'following_list.observedCount')
+                ?? data_get($payload, 'observed_count')
+                ?? data_get($payload, 'loaded')
+                ?? 0
+            ),
         );
-        $rateLimited = (bool) (
+        $rateLimited = (bool) $lastScan->rate_limited || (bool) (
             data_get($payload, 'profile.followersList.rateLimited')
             || data_get($payload, 'profile.followingList.rateLimited')
             || data_get($payload, 'followers_list.rateLimited')
@@ -574,7 +661,7 @@ class TrackedPersonInstagramProfileListScanService
             || data_get($payload, 'list.rateLimited')
             || data_get($payload, 'rateLimited')
         );
-        $graceful = (bool) (
+        $graceful = (bool) $lastScan->gracefully_stopped || (bool) (
             data_get($payload, 'profile.followersList.gracefullyStopped')
             || data_get($payload, 'profile.followingList.gracefullyStopped')
             || data_get($payload, 'followers_list.gracefullyStopped')
@@ -583,9 +670,22 @@ class TrackedPersonInstagramProfileListScanService
             || data_get($payload, 'gracefullyStopped')
         );
 
-        return ($observed > 0 && $observed < $expectedCount)
-            || $rateLimited
-            || $graceful;
+        return $observed > 0 || $rateLimited || $graceful;
+    }
+
+    private function normalizeRelationships(iterable $relationships): array
+    {
+        return collect($relationships)
+            ->map(fn ($relationship): string => Str::lower(trim((string) $relationship)))
+            ->filter(fn (string $relationship): bool => in_array($relationship, ['followers', 'following'], true))
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    private function normalizeRelationshipUsername(mixed $username): string
+    {
+        return Str::lower(ltrim(trim((string) $username), '@'));
     }
 
     private function reportProgress(?callable $progress, array $payload): void
