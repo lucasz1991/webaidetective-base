@@ -35,7 +35,7 @@ class InstagramScanPolicyService
         return match ($operationMode) {
             'mini', 'mini-scan', 'public', 'public-profile' => 'mini',
             'posts', 'post-scan' => 'posts',
-            'stories', 'story-scan' => 'profile',
+            'stories', 'story-scan', 'highlights', 'highlight-scan' => 'profile',
             'suggestions', 'profile-suggestions' => 'suggestions',
             'suggestion-connections' => 'suggestion_deep_search',
             'followers', 'following',

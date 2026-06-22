@@ -888,6 +888,8 @@ class TrackedPersonInstagramScanCoordinator
             Str::contains($label, ['deepsearch']) => 'suggestion_deepsearch',
             Str::contains($label, ['vorschlaege']) => 'suggestions',
             Str::contains($label, ['beitrag']) => 'posts',
+            Str::contains($label, ['highlight']) => 'highlights',
+            Str::contains($label, ['story']) => 'stories',
             Str::contains($label, ['public-profile']) => 'public_connections',
             Str::contains($label, ['profil-listen']) => 'profile_list',
             default => 'instagram_scan',

@@ -5,6 +5,7 @@ namespace App\Services\TrackedPeople;
 use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\InstagramProfileListScan;
 use App\Models\InstagramPostScan;
+use App\Models\InstagramStoryScan;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramSnapshot;
 use App\Models\TrackedPersonInstagramSuggestionScan;
@@ -17,6 +18,7 @@ class TrackedPersonInstagramWorkflowService
         private readonly TrackedPersonInstagramSuggestionScanService $suggestionScanService,
         private readonly TrackedPersonInstagramAnalysisService $analysisService,
         private readonly TrackedPersonInstagramPostScanService $postScanService,
+        private readonly TrackedPersonInstagramStoryScanService $storyScanService,
         private readonly InstagramProfileRelationshipStore $profileRelationshipStore,
     ) {}
 
@@ -232,6 +234,22 @@ class TrackedPersonInstagramWorkflowService
         ?callable $progress = null,
     ): InstagramPostScan {
         return $this->postScanService->scan($trackedPerson, $snapshot, $progress);
+    }
+
+    public function runStoryScan(
+        TrackedPerson $trackedPerson,
+        ?TrackedPersonInstagramSnapshot $snapshot = null,
+        ?callable $progress = null,
+    ): InstagramStoryScan {
+        return $this->storyScanService->scan($trackedPerson, 'stories', $snapshot, $progress);
+    }
+
+    public function runHighlightScan(
+        TrackedPerson $trackedPerson,
+        ?TrackedPersonInstagramSnapshot $snapshot = null,
+        ?callable $progress = null,
+    ): InstagramStoryScan {
+        return $this->storyScanService->scan($trackedPerson, 'highlights', $snapshot, $progress);
     }
 
     private function restoreBaseScanResult(

@@ -5,6 +5,7 @@ const { runInstagramFullScanFlow } = require('./scrape-instagram-full.cjs');
 const { runInstagramListScanFlow } = require('./scrape-instagram-list.cjs');
 const { runInstagramPostsScanFlow } = require('./scrape-instagram-posts.cjs');
 const { runInstagramStoriesScanFlow } = require('./scrape-instagram-stories.cjs');
+const { runInstagramHighlightsScanFlow } = require('./scrape-instagram-highlights.cjs');
 const { runProfileSuggestionConnectionScan: runProfileSuggestionConnectionScanFromModule } = require('./scrape-instagram-suggestions-router.cjs');
 const {
   configureRuntimeEnvironment,
@@ -65,6 +66,7 @@ const isFollowingSearchMode = ['following-search', 'search-following'].includes(
 const isSuggestionsMode = ['suggestions', 'profile-suggestions', 'suggestion-connections'].includes(operationMode);
 const isPostsMode = ['posts', 'post-scan'].includes(operationMode);
 const isStoriesMode = ['stories', 'story-scan'].includes(operationMode);
+const isHighlightsMode = ['highlights', 'highlight-scan'].includes(operationMode);
 const isFullScanMode = ['analyze', 'profile', 'basic', 'grunddaten'].includes(operationMode);
 const isListScanMode = [
   'followers',
@@ -161,6 +163,9 @@ const runtimeConfigDefaults = {
   postScanMaxLikesPerPost: 250,
   postScanMaxCommentsPerPost: 250,
   postScanOpenLikesDialogEnabled: true,
+  postScanOpenCommentsUiEnabled: true,
+  postScanUseDedicatedTabs: true,
+  postScanDetailReadyTimeoutMs: 15000,
   postScanLikeDialogMaxScrollRounds: 40,
   postScanCommentDialogMaxScrollRounds: 40,
   storyScanMaxItems: 50,
@@ -1546,7 +1551,13 @@ function normalizeInstagramComment(comment = {}, parentCommentId = null) {
     text,
     likesCount: hasFiniteNumericValue(comment.comment_like_count)
       ? Number(comment.comment_like_count)
-      : (hasFiniteNumericValue(comment.like_count) ? Number(comment.like_count) : null),
+      : (hasFiniteNumericValue(comment.like_count)
+        ? Number(comment.like_count)
+        : (hasFiniteNumericValue(comment.likes_count)
+          ? Number(comment.likes_count)
+          : (hasFiniteNumericValue(comment.edge_liked_by?.count)
+            ? Number(comment.edge_liked_by.count)
+            : null))),
     publishedAt: normalizeInstagramPostTimestamp(comment.created_at_utc || comment.created_at),
     rawComment: comment,
   };
@@ -1619,23 +1630,83 @@ function looksLikeNonCommentText(value = '') {
 function addCommentToMap(commentsById, comment = {}, maxComments = 250) {
   const normalizedText = normalizeCommentTextForComparison(comment?.text || '');
 
-  if (!comment?.instagramCommentId || !normalizedText || looksLikeNonCommentText(normalizedText) || commentsById.has(comment.instagramCommentId) || commentsById.size >= maxComments) {
+  if (!comment?.instagramCommentId || !normalizedText || looksLikeNonCommentText(normalizedText)) {
     return false;
   }
 
-  const duplicate = Array.from(commentsById.values()).some((existing) => {
+  const existingById = commentsById.get(comment.instagramCommentId);
+
+  if (existingById) {
+    const existingLikes = hasFiniteNumericValue(existingById.likesCount)
+      ? Number(existingById.likesCount)
+      : null;
+    const nextLikes = hasFiniteNumericValue(comment.likesCount)
+      ? Number(comment.likesCount)
+      : null;
+
+    commentsById.set(comment.instagramCommentId, {
+      ...existingById,
+      ...Object.fromEntries(
+        Object.entries(comment).filter(([, value]) => value !== null && value !== undefined && value !== ''),
+      ),
+      likesCount: existingLikes === null
+        ? nextLikes
+        : (nextLikes === null ? existingLikes : Math.max(existingLikes, nextLikes)),
+      rawComment: {
+        ...(existingById.rawComment && typeof existingById.rawComment === 'object'
+          ? existingById.rawComment
+          : {}),
+        ...(comment.rawComment && typeof comment.rawComment === 'object'
+          ? comment.rawComment
+          : {}),
+      },
+    });
+
+    return false;
+  }
+
+  if (commentsById.size >= maxComments) {
+    return false;
+  }
+
+  const duplicateEntry = Array.from(commentsById.entries()).find(([, existing]) => {
     if (normalizeCommentTextForComparison(existing?.text || '') !== normalizedText) {
       return false;
     }
 
     const existingUserKey = existing?.instagramUserId || existing?.username || '';
     const commentUserKey = comment?.instagramUserId || comment?.username || '';
+    const existingPublishedAt = existing?.publishedAt || null;
+    const commentPublishedAt = comment?.publishedAt || null;
 
     return existingUserKey === commentUserKey
-      && (existing?.publishedAt || '') === (comment?.publishedAt || '');
+      && (
+        !existingPublishedAt
+        || !commentPublishedAt
+        || existingPublishedAt === commentPublishedAt
+      );
   });
 
-  if (duplicate) {
+  if (duplicateEntry) {
+    const [existingId, existing] = duplicateEntry;
+    const existingLikes = hasFiniteNumericValue(existing.likesCount)
+      ? Number(existing.likesCount)
+      : null;
+    const nextLikes = hasFiniteNumericValue(comment.likesCount)
+      ? Number(comment.likesCount)
+      : null;
+
+    commentsById.set(existingId, {
+      ...existing,
+      ...Object.fromEntries(
+        Object.entries(comment).filter(([, value]) => value !== null && value !== undefined && value !== ''),
+      ),
+      instagramCommentId: existingId,
+      likesCount: existingLikes === null
+        ? nextLikes
+        : (nextLikes === null ? existingLikes : Math.max(existingLikes, nextLikes)),
+    });
+
     return false;
   }
 
@@ -1750,6 +1821,55 @@ async function expandVisibleInstagramPostReplies(page, maxRounds = 8) {
   return clickedTotal;
 }
 
+async function expandVisibleInstagramPostComments(page, maxRounds = 20) {
+  let clickedTotal = 0;
+
+  for (let round = 0; round < maxRounds; round += 1) {
+    const clicked = await page.evaluate(() => {
+      const normalizeElementText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+      const isVisible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+
+        return rect.width > 2
+          && rect.height > 2
+          && style.display !== 'none'
+          && style.visibility !== 'hidden'
+          && style.opacity !== '0';
+      };
+      const loadPattern = /weitere\s+(?:kommentare|antworten)|mehr\s+kommentare|alle\s+\d*\s*kommentare|load\s+more\s+comments|view\s+(?:all\s+)?\d*\s*comments|show\s+more\s+comments|view\s+(?:all\s+)?(?:\d+\s+)?repl/i;
+      const candidates = Array.from(document.querySelectorAll('button, [role="button"], a, span, div'))
+        .filter((element) => {
+          const text = normalizeElementText(element.innerText || element.textContent || '');
+
+          return isVisible(element)
+            && text.length > 0
+            && text.length <= 160
+            && loadPattern.test(text);
+        })
+        .map((element) => element.closest('button, [role="button"], a') || element);
+      const target = candidates[0] || null;
+
+      if (!target) {
+        return false;
+      }
+
+      target.click();
+
+      return true;
+    }).catch(() => false);
+
+    if (!clicked) {
+      break;
+    }
+
+    clickedTotal++;
+    await sleep(750);
+  }
+
+  return clickedTotal;
+}
+
 async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeConfig = {}) {
   const maxComments = Math.max(1, Number(runtimeConfig.postScanMaxCommentsPerPost || 250));
   const commentsById = new Map();
@@ -1759,7 +1879,8 @@ async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeCon
   let staleRounds = 0;
   const maxRounds = Math.max(1, Math.min(1000, Number(runtimeConfig.postScanCommentDialogMaxScrollRounds || 40)));
 
-  await expandVisibleInstagramPostReplies(page, 6);
+  await expandVisibleInstagramPostComments(page, 12);
+  await expandVisibleInstagramPostReplies(page, 12);
 
   for (let round = 0; round < maxRounds && commentsById.size < maxComments; round += 1) {
     const collected = await page.evaluate(({ limit, shortcode }) => {
@@ -1797,7 +1918,8 @@ async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeCon
       };
       const parseCount = (rawValue = '') => {
         const value = normalizeElementText(rawValue).toLowerCase();
-        const match = value.match(/([\d.,\s]+(?:k|m|mio|tsd)?)\s*(?:gef[aä]llt|likes?)/i);
+        const match = value.match(/([\d.,\s]+(?:k|m|mio|tsd)?)\s*(?:gef[aä]llt|likes?)/i)
+          || value.match(/(?:gef[aä]llt|likes?)\s*(?:von|by)?\s*([\d.,\s]+(?:k|m|mio|tsd)?)/i);
 
         if (!match) {
           return null;
@@ -1992,6 +2114,17 @@ async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeCon
         const instagramCommentId = row.getAttribute('data-comment-id')
           || row.getAttribute('data-id')
           || `ui:${shortcode || 'post'}:${username}:${simpleHash(stableIdentity)}`;
+        const commentLikeTexts = Array.from(row.querySelectorAll('button, [role="button"], a, span'))
+          .map((element) => normalizeElementText([
+            element.innerText || element.textContent || '',
+            element.getAttribute?.('aria-label') || '',
+            element.getAttribute?.('title') || '',
+          ].join(' ')))
+          .filter((value) => value.length > 0 && value.length <= 120);
+        const commentLikesCount = commentLikeTexts
+          .map(parseCount)
+          .find((value) => Number.isFinite(value))
+          ?? parseCount(rowText);
 
         rows.push({
           instagramCommentId,
@@ -2002,7 +2135,7 @@ async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeCon
           profileImageUrl: image ? (image.currentSrc || image.src || image.getAttribute('src') || null) : null,
           isVerified: /verified|verifiziert/i.test(ariaLabel) ? true : null,
           text,
-          likesCount: parseCount(rowText),
+          likesCount: commentLikesCount,
           publishedAt,
           rawComment: {
             source: 'ui-post-modal',
@@ -2049,7 +2182,8 @@ async function collectInstagramPostCommentsFromModal(page, post = {}, runtimeCon
       addCommentToMap(commentsById, comment, maxComments);
     }
 
-    await expandVisibleInstagramPostReplies(page, 3);
+    await expandVisibleInstagramPostComments(page, 3);
+    await expandVisibleInstagramPostReplies(page, 5);
 
     if (commentsById.size >= maxComments) {
       truncated = true;
@@ -2144,7 +2278,7 @@ async function openInstagramPostLikesDialog(page) {
   }).catch(() => false);
 }
 
-async function collectInstagramPostLikesFromDialog(page, runtimeConfig = {}) {
+async function collectInstagramPostLikesFromDialog(page, runtimeConfig = {}, expectedLikes = null) {
   const maxLikes = Math.max(1, Number(runtimeConfig.postScanMaxLikesPerPost || 250));
   const likesByKey = new Map();
   let complete = false;
@@ -2309,7 +2443,8 @@ async function collectInstagramPostLikesFromDialog(page, runtimeConfig = {}) {
     }
 
     if (collected.atBottom || (!collected.scrolled && staleRounds >= 2)) {
-      complete = true;
+      complete = !hasFiniteNumericValue(expectedLikes)
+        || likesByKey.size >= Math.min(Number(expectedLikes), maxLikes);
       break;
     }
 
@@ -2359,8 +2494,10 @@ async function openInstagramPostLikesDialogReliable(page) {
         return link;
       }
 
-      if (element.tagName?.toLowerCase() === 'button' || element.closest('button')) {
-        return null;
+      const button = element.closest('button');
+
+      if (button) {
+        return containsHeartControl(button) ? null : button;
       }
 
       const roleButton = element.closest('[role="button"]');
@@ -2371,7 +2508,35 @@ async function openInstagramPostLikesDialogReliable(page) {
 
       return element;
     };
-    const candidates = Array.from(surface.querySelectorAll('a[href], span, div, section'))
+    const isInsideCommentRow = (element) => {
+      for (let container = element; container && container !== surface; container = container.parentElement) {
+        const text = normalizeElementText(container.innerText || container.textContent || '');
+        const rect = container.getBoundingClientRect();
+        const hasTime = Boolean(container.querySelector('time'));
+        const hasProfileLink = Array.from(container.querySelectorAll('a[href]')).some((anchor) => {
+          try {
+            const parts = new URL(anchor.getAttribute('href'), window.location.origin).pathname
+              .split('/')
+              .filter(Boolean);
+
+            return parts.length === 1 && /^[a-z0-9._]+$/i.test(parts[0]);
+          } catch (error) {
+            return false;
+          }
+        });
+
+        if (hasTime && hasProfileLink && text.length <= 1000 && rect.height <= 420) {
+          return true;
+        }
+
+        if (text.length > 1400) {
+          break;
+        }
+      }
+
+      return false;
+    };
+    const candidates = Array.from(surface.querySelectorAll('a[href], button, [role="button"], span, div, section'))
       .filter((element) => {
         if (!isVisible(element)) {
           return false;
@@ -2385,13 +2550,18 @@ async function openInstagramPostLikesDialogReliable(page) {
           && !rejectPattern.test(text)
           && numericLikePattern.test(text)
           && clickable
-          && !containsHeartControl(clickable);
+          && !containsHeartControl(clickable)
+          && !isInsideCommentRow(clickable);
       })
       .map((element) => {
         const clickable = clickableFor(element);
         const text = normalizeElementText(element.innerText || element.textContent || '');
         const rect = clickable.getBoundingClientRect();
         let score = 0;
+
+        if (/\/liked_by\/?$/i.test(clickable.getAttribute?.('href') || '')) {
+          score += 200;
+        }
 
         if (numericLikePattern.test(text)) {
           score += 120;
@@ -2527,7 +2697,41 @@ async function openInstagramPostDetailPage(sourcePage, post = {}, runtimeConfig 
       };
     }
 
-    await sleep(1000);
+    const readyTimeoutMs = Math.max(
+      5000,
+      Number(runtimeConfig.postScanDetailReadyTimeoutMs || 15000),
+    );
+
+    try {
+      await detailPage.waitForFunction((shortcode) => {
+        const pathname = String(window.location.pathname || '');
+        const expectedPath = shortcode ? new RegExp(`/(?:p|reel|tv)/${shortcode}/?`, 'i') : null;
+        const hasPostSurface = Boolean(document.querySelector('article, main article, main'));
+        const hasEngagementSurface = Boolean(
+          document.querySelector('time, textarea, form, svg[aria-label*="Gefällt"], svg[aria-label*="Like"]'),
+        );
+
+        return (!expectedPath || expectedPath.test(pathname))
+          && hasPostSurface
+          && (hasEngagementSurface || document.readyState === 'complete');
+      }, { timeout: readyTimeoutMs }, post.shortcode || null);
+    } catch (error) {
+      const currentUrl = detailPage.url();
+
+      if (!currentUrl.includes(`/${post.shortcode || ''}`)) {
+        await detailPage.close().catch(() => {});
+
+        return {
+          page: null,
+          navigation: {
+            ok: false,
+            error: `post-detail-not-ready: ${normalizeText(error.message || String(error))}`,
+          },
+        };
+      }
+    }
+
+    await sleep(1400);
 
     return {
       page: detailPage,
@@ -2576,7 +2780,14 @@ async function collectInstagramPostPageDetails(page, profileUsername) {
   }));
 }
 
-async function collectInstagramPostEngagementFromUi(page, post = {}, runtimeConfig = {}) {
+async function collectInstagramPostEngagementFromUi(
+  page,
+  post = {},
+  runtimeConfig = {},
+  options = {},
+) {
+  const collectLikes = options.collectLikes !== false;
+  const collectComments = options.collectComments !== false;
   const result = {
     likes: [],
     comments: [],
@@ -2596,21 +2807,27 @@ async function collectInstagramPostEngagementFromUi(page, post = {}, runtimeConf
   }
 
   await sleep(900);
-  await expandVisibleInstagramPostReplies(page, 6);
 
-  const comments = await collectInstagramPostCommentsFromModal(page, post, runtimeConfig);
-  result.comments = comments.comments;
-  result.commentsComplete = comments.complete;
+  if (collectComments) {
+    await expandVisibleInstagramPostComments(page, 12);
+    await expandVisibleInstagramPostReplies(page, 12);
 
-  const likesDialogOpened = await openInstagramPostLikesDialogReliable(page);
+    const comments = await collectInstagramPostCommentsFromModal(page, post, runtimeConfig);
+    result.comments = comments.comments;
+    result.commentsComplete = comments.complete;
+  }
 
-  if (likesDialogOpened) {
-    const likes = await collectInstagramPostLikesFromDialog(page, runtimeConfig);
-    result.likes = likes.likes;
-    result.likesComplete = likes.complete;
-    await closeInstagramDialog(page);
-  } else {
-    result.errors.push('ui-likes-dialog-unavailable');
+  if (collectLikes) {
+    const likesDialogOpened = await openInstagramPostLikesDialogReliable(page);
+
+    if (likesDialogOpened) {
+      const likes = await collectInstagramPostLikesFromDialog(page, runtimeConfig, post.likesCount);
+      result.likes = likes.likes;
+      result.likesComplete = likes.complete;
+      await closeInstagramDialog(page);
+    } else {
+      result.errors.push('ui-likes-dialog-unavailable');
+    }
   }
 
   return result;
@@ -2638,7 +2855,7 @@ async function collectInstagramPostLikesFromUi(page, post = {}, runtimeConfig = 
   const likesDialogOpened = await openInstagramPostLikesDialogReliable(page);
 
   if (likesDialogOpened) {
-    const likes = await collectInstagramPostLikesFromDialog(page, runtimeConfig);
+    const likes = await collectInstagramPostLikesFromDialog(page, runtimeConfig, post.likesCount);
     result.likes = likes.likes;
     result.likesComplete = likes.complete;
     await closeInstagramDialog(page);
@@ -2677,16 +2894,34 @@ async function collectInstagramPostEngagementOnPage(page, post = {}, runtimeConf
     };
   }
 
-  const likesResponse = await fetchInstagramApiJson(
-    page,
-    `/api/v1/media/${encodeURIComponent(mediaPk)}/likers/`,
-  );
+  const expectedLikes = hasFiniteNumericValue(post.likesCount) ? Number(post.likesCount) : null;
+  let likesCursor = null;
 
-  if (likesResponse.ok) {
+  for (let likesPage = 0; likesPage < 50 && likesByKey.size < maxLikes; likesPage += 1) {
+    const query = new URLSearchParams({
+      count: String(Math.min(100, maxLikes - likesByKey.size)),
+    });
+
+    if (likesCursor) {
+      query.set('max_id', likesCursor);
+    }
+
+    const likesResponse = await fetchInstagramApiJson(
+      page,
+      `/api/v1/media/${encodeURIComponent(mediaPk)}/likers/?${query.toString()}`,
+    );
+
+    if (!likesResponse.ok) {
+      rateLimited = rateLimited || likesResponse.status === 429;
+      errors.push(`likes: ${likesResponse.error || 'unbekannter Fehler'}`);
+      break;
+    }
+
     const rawUsers = likesResponse.payload?.users || likesResponse.payload?.likers || [];
 
     for (const rawUser of Array.isArray(rawUsers) ? rawUsers : []) {
       const user = normalizeInstagramEngagementUser(rawUser);
+
       if (user) {
         addLikeToMap(likesByKey, {
           ...user,
@@ -2695,12 +2930,25 @@ async function collectInstagramPostEngagementOnPage(page, post = {}, runtimeConf
       }
     }
 
-    const expectedLikes = hasFiniteNumericValue(post.likesCount) ? Number(post.likesCount) : null;
-    likesComplete = rawUsers.length <= maxLikes
-      && (expectedLikes === null || rawUsers.length >= expectedLikes);
-  } else {
-    rateLimited = likesResponse.status === 429;
-    errors.push(`likes: ${likesResponse.error || 'unbekannter Fehler'}`);
+    const nextLikesCursor = normalizeText(String(
+      likesResponse.payload?.next_max_id
+        || likesResponse.payload?.next_min_id
+        || '',
+    )) || null;
+
+    if (
+      (expectedLikes !== null && likesByKey.size >= Math.min(expectedLikes, maxLikes))
+      || !nextLikesCursor
+      || nextLikesCursor === likesCursor
+    ) {
+      likesComplete = expectedLikes === null
+        ? !nextLikesCursor && likesByKey.size < maxLikes
+        : likesByKey.size >= Math.min(expectedLikes, maxLikes);
+      break;
+    }
+
+    likesCursor = nextLikesCursor;
+    await sleep(150);
   }
 
   let cursor = null;
@@ -2822,7 +3070,6 @@ async function collectInstagramPostEngagementOnPage(page, post = {}, runtimeConf
     await sleep(150);
   }
 
-  const expectedLikes = hasFiniteNumericValue(post.likesCount) ? Number(post.likesCount) : null;
   const openLikesDialogEnabled = runtimeConfig.postScanOpenLikesDialogEnabled !== false
     && runtimeConfig.post_scan_open_likes_dialog_enabled !== false;
   const shouldOpenLikesDialog = openLikesDialogEnabled
@@ -2847,17 +3094,28 @@ async function collectInstagramPostEngagementOnPage(page, post = {}, runtimeConf
 
   const uiFallbackEnabled = runtimeConfig.postScanUiFallbackEnabled !== false
     && runtimeConfig.post_scan_ui_fallback_enabled !== false;
+  const openCommentsUiEnabled = runtimeConfig.postScanOpenCommentsUiEnabled !== false
+    && runtimeConfig.post_scan_open_comments_ui_enabled !== false;
   const shouldUseUiFallback = uiFallbackEnabled
     && post.postUrl
     && (
-      (!shouldOpenLikesDialog && expectedLikes !== null && expectedLikes > 0 && likesByKey.size < Math.min(expectedLikes, maxLikes))
+      (openCommentsUiEnabled && expectedComments !== 0)
+      || (!shouldOpenLikesDialog && expectedLikes !== null && expectedLikes > 0 && likesByKey.size < Math.min(expectedLikes, maxLikes))
       || (!shouldOpenLikesDialog && expectedLikes === null && likesByKey.size === 0)
       || (expectedComments !== null && expectedComments > 0 && commentsById.size < Math.min(expectedComments, maxComments))
       || errors.length > 0
     );
 
   if (shouldUseUiFallback) {
-    const uiEngagement = await collectInstagramPostEngagementFromUi(page, post, runtimeConfig);
+    const uiEngagement = await collectInstagramPostEngagementFromUi(
+      page,
+      post,
+      runtimeConfig,
+      {
+        collectLikes: !shouldOpenLikesDialog,
+        collectComments: openCommentsUiEnabled,
+      },
+    );
 
     for (const like of uiEngagement.likes || []) {
       addLikeToMap(likesByKey, like, maxLikes);
@@ -4337,6 +4595,134 @@ async function collectInstagramStories(
     detection,
     viewerState,
     reason,
+    statusLevel,
+    statusMessage,
+  };
+}
+
+async function collectInstagramHighlights(page, profile, username, runtimeConfig = {}) {
+  progressLog('highlights-opening', {
+    relationship: 'highlights',
+    loaded: 0,
+    expectedCount: 0,
+    message: `Highlights von @${username} werden gesucht.`,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  const items = await page.evaluate(() => {
+    const cleanText = (value = '') => String(value || '').replace(/\s+/g, ' ').trim();
+    const visible = (element) => {
+      if (!element) {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+
+      return rect.width > 0
+        && rect.height > 0
+        && style.display !== 'none'
+        && style.visibility !== 'hidden';
+    };
+    const seen = new Set();
+
+    return Array.from(document.querySelectorAll('a[href*="/stories/highlights/"]'))
+      .filter(visible)
+      .map((anchor) => {
+        let highlightUrl = null;
+
+        try {
+          highlightUrl = new URL(anchor.getAttribute('href') || '', window.location.origin).href;
+        } catch (error) {
+          return null;
+        }
+
+        const match = highlightUrl.match(/\/stories\/highlights\/([^/?#]+)/i);
+        const highlightId = match?.[1] || null;
+
+        if (!highlightId || seen.has(highlightId)) {
+          return null;
+        }
+
+        seen.add(highlightId);
+        const image = anchor.querySelector('img');
+        const titleCandidates = [
+          anchor.getAttribute('aria-label'),
+          anchor.getAttribute('title'),
+          ...Array.from(anchor.querySelectorAll('span, div'))
+            .map((element) => cleanText(element.innerText || element.textContent || ''))
+            .filter((text) => text && text.length <= 120),
+          image?.getAttribute('alt'),
+        ].map(cleanText).filter(Boolean);
+        const title = titleCandidates.find((text) => (
+          !/^(?:highlight|story|stories)$/i.test(text)
+          && !text.includes('http')
+        )) || `Highlight ${seen.size}`;
+        const coverUrl = image
+          ? (image.currentSrc || image.src || image.getAttribute('src') || null)
+          : null;
+        const rect = image?.getBoundingClientRect?.() || null;
+
+        return {
+          highlightId,
+          title,
+          highlightUrl,
+          storyUrl: highlightUrl,
+          mediaType: 'image',
+          sourceUrl: coverUrl,
+          previewUrl: coverUrl,
+          coverUrl,
+          width: rect ? Math.round(rect.width) : null,
+          height: rect ? Math.round(rect.height) : null,
+          text: null,
+        };
+      })
+      .filter(Boolean);
+  }).catch(() => []);
+  const maxItems = Math.max(1, Math.min(200, Number(runtimeConfig.highlightScanMaxItems || 100)));
+  const limitedItems = items.slice(0, maxItems).map((item, index) => ({
+    ...item,
+    position: index,
+  }));
+
+  for (const item of limitedItems) {
+    progressLog('highlights-item-collected', {
+      relationship: 'highlights',
+      loaded: item.position + 1,
+      expectedCount: limitedItems.length,
+      highlightId: item.highlightId,
+      highlightTitle: item.title,
+      message: `Highlight „${item.title}“ von @${username} erfasst.`,
+      ...(await captureLivePreviewScreenshot(page, runtimeConfig)),
+    });
+  }
+
+  const blocked = Boolean(profile?.requiresLogin);
+  const limited = items.length > limitedItems.length;
+  const statusLevel = blocked ? 'partial' : 'success';
+  const statusMessage = blocked
+    ? `Highlights von @${username} sind ohne gueltige Instagram-Session nicht vollstaendig sichtbar.`
+    : (limitedItems.length > 0
+      ? `Instagram-Highlight-Scan abgeschlossen: ${limitedItems.length} Highlights gespeichert.`
+      : `Keine Instagram-Highlights fuer @${username} gefunden.`);
+
+  progressLog('highlights-complete', {
+    relationship: 'highlights',
+    loaded: limitedItems.length,
+    expectedCount: limitedItems.length,
+    complete: !blocked && !limited,
+    message: statusMessage,
+    ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
+  });
+
+  return {
+    attempted: !blocked,
+    available: limitedItems.length > 0,
+    complete: !blocked && !limited,
+    gracefullyStopped: false,
+    limited,
+    observedCount: limitedItems.length,
+    items: limitedItems,
     statusLevel,
     statusMessage,
   };
@@ -11058,6 +11444,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
   let suggestionScanResult = null;
   let postsScanResult = null;
   let storyScanResult = null;
+  let highlightScanResult = null;
   let terminationSignalHandled = false;
   let loginDiagnostics = {
     attempted: false,
@@ -11434,6 +11821,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       finalUrl,
       postsScanResult,
       storyScanResult,
+      highlightScanResult,
       suggestionScanResult,
       gracefullyStopped,
       batchPayload: null,
@@ -11454,6 +11842,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       },
       helpers: {
         captureLivePreviewScreenshot,
+        collectInstagramHighlights,
         collectInstagramPosts,
         collectInstagramStories,
         collectProfileInfo,
@@ -11514,6 +11903,8 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       await runInstagramPostsScanFlow(flowContext);
     } else if (isStoriesMode) {
       await runInstagramStoriesScanFlow(flowContext);
+    } else if (isHighlightsMode) {
+      await runInstagramHighlightsScanFlow(flowContext);
     } else {
       progressLog('profile-opening', {
         relationship: null,
@@ -11674,7 +12065,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       }
     }
 
-    if (!isFullScanMode && !isListScanMode && !isPostsMode && !isStoriesMode) {
+    if (!isFullScanMode && !isListScanMode && !isPostsMode && !isStoriesMode && !isHighlightsMode) {
       scanState.runtimeConfig = runtimeState.runtimeConfig;
       scanState.cookieFilePath = runtimeState.cookieFilePath;
       scanState.cookieDiagnostics = runtimeState.cookieDiagnostics;
@@ -11685,6 +12076,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       scanState.finalUrl = finalUrl;
       scanState.postsScanResult = postsScanResult;
       scanState.storyScanResult = storyScanResult;
+      scanState.highlightScanResult = highlightScanResult;
       scanState.suggestionScanResult = suggestionScanResult;
       scanState.gracefullyStopped = gracefullyStopped;
     }
@@ -11699,6 +12091,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
     finalUrl = scanState.finalUrl || page.url();
     postsScanResult = scanState.postsScanResult;
     storyScanResult = scanState.storyScanResult;
+    highlightScanResult = scanState.highlightScanResult;
     suggestionScanResult = scanState.suggestionScanResult;
     gracefullyStopped = Boolean(scanState.gracefullyStopped);
 
@@ -11723,7 +12116,13 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       ...(cookieDiagnostics.warnings || []),
       ...(loginDiagnostics.warnings || []),
     ]);
-    const outcome = isStoriesMode && storyScanResult
+    const outcome = isHighlightsMode && highlightScanResult
+      ? {
+        ok: highlightScanResult.statusLevel !== 'error',
+        statusLevel: highlightScanResult.statusLevel || 'unknown',
+        statusMessage: highlightScanResult.statusMessage || 'Instagram-Highlight-Scan abgeschlossen.',
+      }
+      : isStoriesMode && storyScanResult
       ? {
         ok: storyScanResult.statusLevel !== 'error',
         statusLevel: storyScanResult.statusLevel || 'unknown',
@@ -11799,6 +12198,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       profile: initialProfile,
       postsScan: postsScanResult,
       storyScan: storyScanResult,
+      highlightScan: highlightScanResult,
       suggestionScan: suggestionScanResult,
       suggestionConnections: Array.isArray(suggestionScanResult?.matches)
         ? suggestionScanResult.matches

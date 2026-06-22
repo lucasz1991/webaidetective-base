@@ -44,6 +44,8 @@ class InstagramScanPolicyServiceTest extends TestCase
         $this->assertSame('mini', $service->scanTypeForOperation('mini'));
         $this->assertSame('lists', $service->scanTypeForOperation('followers'));
         $this->assertSame('posts', $service->scanTypeForOperation('post-scan'));
+        $this->assertSame('profile', $service->scanTypeForOperation('stories'));
+        $this->assertSame('profile', $service->scanTypeForOperation('highlights'));
         $this->assertSame('suggestions', $service->scanTypeForOperation('suggestions'));
         $this->assertSame('suggestion_deep_search', $service->scanTypeForOperation('suggestion-connections'));
         $this->assertSame('public_connections', $service->scanTypeForOperation('public-profile-connections'));

@@ -77,6 +77,11 @@ class InstagramProfile extends Model
         return $this->hasMany(InstagramPostScan::class);
     }
 
+    public function storyScans(): HasMany
+    {
+        return $this->hasMany(InstagramStoryScan::class);
+    }
+
     public function posts(): HasMany
     {
         return $this->hasMany(InstagramPost::class);

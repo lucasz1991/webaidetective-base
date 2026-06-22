@@ -7,6 +7,7 @@ use App\Models\InstagramMediaAsset;
 use App\Models\InstagramPost;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileListScan;
+use App\Models\InstagramStoryScan;
 use App\Models\Setting;
 use App\Models\TrackedPerson;
 use App\Models\TrackedPersonInstagramInferredConnection;
@@ -752,6 +753,62 @@ class TrackedPersonDetail extends Component
             $scan->status_level === 'success' ? 'success' : 'partial',
         );
         $this->dispatch('tracked-person-refresh');
+    }
+
+    public function scanInstagramStories(): void
+    {
+        $this->runInstagramStoryContentScan('stories');
+    }
+
+    public function scanInstagramHighlights(): void
+    {
+        $this->runInstagramStoryContentScan('highlights');
+    }
+
+    private function runInstagramStoryContentScan(string $scanType): void
+    {
+        try {
+            @set_time_limit(0);
+            @ignore_user_abort(false);
+
+            $trackedPerson = $this->resolveTrackedPerson()->loadMissing('latestInstagramSnapshot');
+            $label = $scanType === 'highlights' ? 'Instagram-Highlight-Scan' : 'Instagram-Story-Scan';
+
+            if (! $trackedPerson->instagram_username) {
+                $this->setDetailStatus('Fuer diese Person ist kein Instagram-Name hinterlegt.', 'error');
+
+                return;
+            }
+
+            $progress = fn (array $state) => $this->streamInstagramProgress($state);
+            $this->cancelInstagramScanWhenClientDisconnects($trackedPerson->id);
+
+            try {
+                $workflow = app(TrackedPersonInstagramWorkflowService::class);
+                $scan = $scanType === 'highlights'
+                    ? $workflow->runHighlightScan($trackedPerson, $trackedPerson->latestInstagramSnapshot, $progress)
+                    : $workflow->runStoryScan($trackedPerson, $trackedPerson->latestInstagramSnapshot, $progress);
+            } catch (TrackedPersonInstagramScanCancelledException) {
+                $this->markInstagramScanCancelled($trackedPerson, $label.' wurde abgebrochen.');
+                $this->setDetailStatus($label.' wurde beendet.', 'partial');
+
+                return;
+            } catch (\Throwable $exception) {
+                $message = $this->instagramRetryScheduledMessage($label, $exception);
+                $this->markInstagramScanRetryScheduled($trackedPerson, $message);
+                $this->setDetailStatus($message, 'partial');
+
+                return;
+            }
+
+            $this->setDetailStatus(
+                $label.' abgeschlossen: '.number_format($scan->observed_count, 0, ',', '.').' Elemente gespeichert.',
+                $scan->status_level === 'success' ? 'success' : 'partial',
+            );
+            $this->dispatch('tracked-person-refresh');
+        } finally {
+            $this->dispatch('tracked-person-scan-finished');
+        }
     }
 
     private function runInstagramAnalysis(bool $fullScan): void
@@ -1580,6 +1637,42 @@ class TrackedPersonDetail extends Component
         $instagramStatusLevel = $trackedPerson->last_instagram_status_level ?: 'neutral';
         $latestProfileVisibility = data_get($latestSnapshot?->raw_payload, 'extractedProfile.profileVisibility');
         $latestScrapePhases = collect(data_get($latestSnapshot?->raw_payload, 'analysisPolicy.scrapePhases', []));
+        $latestStoryScan = null;
+        $latestHighlightScan = null;
+        $storyContentScan = null;
+        $highlightContentScan = null;
+
+        if (Schema::hasTable('instagram_story_scans') && $trackedPerson->current_instagram_profile_id) {
+            $storyScanQuery = InstagramStoryScan::query()
+                ->where('instagram_profile_id', $trackedPerson->current_instagram_profile_id)
+                ->with('items');
+            $latestStoryScan = (clone $storyScanQuery)
+                ->where('scan_type', 'stories')
+                ->latest('scanned_at')
+                ->latest('id')
+                ->first();
+            $latestHighlightScan = (clone $storyScanQuery)
+                ->where('scan_type', 'highlights')
+                ->latest('scanned_at')
+                ->latest('id')
+                ->first();
+            $storyContentScan = $latestStoryScan && $latestStoryScan->items->isNotEmpty()
+                ? $latestStoryScan
+                : (clone $storyScanQuery)
+                    ->where('scan_type', 'stories')
+                    ->whereHas('items')
+                    ->latest('scanned_at')
+                    ->latest('id')
+                    ->first();
+            $highlightContentScan = $latestHighlightScan && $latestHighlightScan->items->isNotEmpty()
+                ? $latestHighlightScan
+                : (clone $storyScanQuery)
+                    ->where('scan_type', 'highlights')
+                    ->whereHas('items')
+                    ->latest('scanned_at')
+                    ->latest('id')
+                    ->first();
+        }
         $selectedPost = null;
 
         if ($this->showPostEngagementModal && $this->selectedPostId && $trackedPerson->current_instagram_profile_id) {
@@ -1598,6 +1691,21 @@ class TrackedPersonDetail extends Component
                 ])
                 ->first();
         }
+
+        $storyRows = $storyContentScan
+            ? $this->instagramStoryRows($storyContentScan->items)
+            : $this->instagramStoryPayloadRows(
+                data_get(
+                    $latestSnapshot?->raw_payload,
+                    'storyScan.items',
+                    data_get(
+                        $latestSnapshot?->raw_payload,
+                        'profile.storyScan.items',
+                        data_get($latestSnapshot?->raw_payload, 'extractedProfile.story_scan.items', []),
+                    ),
+                ),
+                'stories',
+            );
 
         return [
             'detailStatusClass' => $this->detailStatusClass($this->detailStatusLevel),
@@ -1659,6 +1767,10 @@ class TrackedPersonDetail extends Component
             'latestScrapePhaseRows' => $this->scrapePhaseRows($latestScrapePhases ?? collect()),
             'latestDetectedChangeRows' => $this->detectedChangeRows($latestSnapshot?->detected_changes ?? []),
             'currentInstagramPostRows' => $this->instagramPostRows($trackedPerson->currentInstagramProfile?->posts ?? collect()),
+            'currentInstagramStoryRows' => $storyRows,
+            'currentInstagramHighlightRows' => $this->instagramStoryRows($highlightContentScan?->items ?? collect()),
+            'latestInstagramStoryScan' => $latestStoryScan,
+            'latestInstagramHighlightScan' => $latestHighlightScan,
             'historySnapshotRows' => $this->historySnapshotRows($trackedPerson->instagramSnapshots ?? collect()),
             'resumableInstagramScan' => $this->resumableInstagramScan($trackedPerson),
             'selectedPost' => $selectedPost,
@@ -2185,6 +2297,57 @@ class TrackedPersonDetail extends Component
                     'primaryMedia' => $primaryMedia,
                     'mediaUrl' => $primaryMedia?->media_url,
                     'previewUrl' => $primaryMedia?->preview_media_url ?: $post->thumbnail_storage_url,
+                ];
+            })
+            ->values();
+    }
+
+    private function instagramStoryRows(Collection $items): Collection
+    {
+        return $items
+            ->map(fn ($item) => (object) [
+                'item' => $item,
+                'mediaUrl' => $item->media_url,
+                'previewUrl' => $item->preview_media_url ?: $item->media_url,
+                'title' => $item->highlight_title
+                    ?: ($item->published_at?->timezone(config('app.timezone'))->format('d.m. H:i') ?? 'Story'),
+            ])
+            ->values();
+    }
+
+    private function instagramStoryPayloadRows(mixed $items, string $sourceType): Collection
+    {
+        return collect(is_array($items) ? $items : [])
+            ->filter(fn (mixed $item): bool => is_array($item))
+            ->map(function (array $item, int $index) use ($sourceType) {
+                $publishedAt = null;
+
+                if (filled($item['publishedAt'] ?? null)) {
+                    try {
+                        $publishedAt = \Illuminate\Support\Carbon::parse($item['publishedAt']);
+                    } catch (\Throwable) {
+                        $publishedAt = null;
+                    }
+                }
+
+                $mediaUrl = is_scalar($item['sourceUrl'] ?? null) ? trim((string) $item['sourceUrl']) : null;
+                $previewUrl = is_scalar($item['previewUrl'] ?? null)
+                    ? trim((string) $item['previewUrl'])
+                    : $mediaUrl;
+                $title = is_scalar($item['title'] ?? null) && trim((string) $item['title']) !== ''
+                    ? trim((string) $item['title'])
+                    : ($publishedAt?->timezone(config('app.timezone'))->format('d.m. H:i') ?? 'Story '.($index + 1));
+
+                return (object) [
+                    'item' => (object) [
+                        'source_type' => $sourceType,
+                        'story_url' => is_scalar($item['storyUrl'] ?? null) ? trim((string) $item['storyUrl']) : null,
+                        'media_type' => ($item['mediaType'] ?? null) === 'video' ? 'video' : 'image',
+                        'text' => is_scalar($item['text'] ?? null) ? trim((string) $item['text']) : null,
+                    ],
+                    'mediaUrl' => $mediaUrl,
+                    'previewUrl' => $previewUrl,
+                    'title' => $title,
                 ];
             })
             ->values();

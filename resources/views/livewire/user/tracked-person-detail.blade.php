@@ -14,6 +14,9 @@
         $postCount = $instagramPosts instanceof \Illuminate\Support\Collection
             ? $instagramPosts->count()
             : collect($instagramPosts)->count();
+        $instagramStoryRows = $currentInstagramStoryRows ?? collect();
+        $instagramHighlightRows = $currentInstagramHighlightRows ?? collect();
+        $storyContentCount = $instagramStoryRows->count() + $instagramHighlightRows->count();
         $detailTabs = [];
 
         if ($postCount > 0) {
@@ -21,6 +24,14 @@
                 'label' => 'Posts',
                 'icon' => 'instagram-grid',
                 'count' => $postCount,
+            ];
+        }
+
+        if ($trackedPerson->instagram_username) {
+            $detailTabs['stories'] = [
+                'label' => 'Stories',
+                'icon' => 'fad fa-circle-play',
+                'count' => $storyContentCount,
             ];
         }
 
@@ -43,7 +54,7 @@
     @if($isAdmin)
         <div
             x-show="scanPreviewOpen"
-            wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramRelationshipList,scanInstagramProfileFromList,scanPublicProfileConnections,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts"
+            wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramRelationshipList,scanInstagramProfileFromList,scanPublicProfileConnections,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts,scanInstagramStories,scanInstagramHighlights"
             class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/70 px-4"
         >
             <div class="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg border border-white/20 bg-white p-6 text-center shadow-2xl">
@@ -163,6 +174,7 @@
                                     :disabled="! $trackedPerson->instagram_username"
                                     :profile-url="$trackedPerson->instagram_username ? 'https://www.instagram.com/'.$trackedPerson->instagram_username.'/' : null"
                                     list-action-mode="dispatch"
+                                    :show-story-scans="true"
                                 />
                                 {{--
                                 <button
@@ -639,6 +651,125 @@
                         empty-text="Noch keine Instagram-Beitraege gespeichert."
                         :show-header="false"
                     />
+                </x-ui.accordion.tab-panel>
+            @endif
+
+            @if($trackedPerson->instagram_username)
+                <x-ui.accordion.tab-panel
+                    for="stories"
+                    panel-class="space-y-8 pt-5"
+                >
+                    <section>
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <h3 class="text-lg font-bold text-slate-900">Gespeicherte Storys</h3>
+                                <p class="mt-1 text-sm text-slate-500">
+                                    @if($latestInstagramStoryScan?->scanned_at)
+                                        Zuletzt gescannt {{ $latestInstagramStoryScan->scanned_at->timezone(config('app.timezone'))->diffForHumans() }}
+                                    @else
+                                        Noch kein Story-Scan vorhanden.
+                                    @endif
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                @click="window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
+                                wire:click="scanInstagramStories"
+                                wire:loading.attr="disabled"
+                                wire:target="scanInstagramStories"
+                                class="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:cursor-wait disabled:opacity-60"
+                            >
+                                <span wire:loading.remove wire:target="scanInstagramStories">Storys scannen</span>
+                                <span wire:loading wire:target="scanInstagramStories">Scan laeuft...</span>
+                            </button>
+                        </div>
+
+                        @if($instagramStoryRows->isNotEmpty())
+                            <div class="mt-5 flex gap-5 overflow-x-auto pb-3">
+                                @foreach($instagramStoryRows as $storyRow)
+                                    <a
+                                        href="{{ $storyRow->mediaUrl ?: $storyRow->item->story_url }}"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        class="group w-24 shrink-0 text-center"
+                                        title="{{ $storyRow->item->text ?: $storyRow->title }}"
+                                    >
+                                        <span class="mx-auto block h-20 w-20 rounded-full bg-gradient-to-tr from-amber-400 via-rose-500 to-fuchsia-600 p-[3px] shadow-sm transition group-hover:scale-105">
+                                            <span class="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-2 border-white bg-slate-100">
+                                                @if($storyRow->previewUrl)
+                                                    <img src="{{ $storyRow->previewUrl }}" alt="{{ $storyRow->title }}" class="h-full w-full object-cover">
+                                                @else
+                                                    <i class="fad fa-circle-play text-2xl text-slate-400" aria-hidden="true"></i>
+                                                @endif
+                                            </span>
+                                        </span>
+                                        <span class="mt-2 block truncate text-xs font-semibold text-slate-700">{{ $storyRow->title }}</span>
+                                        @if($storyRow->item->media_type === 'video')
+                                            <span class="mt-0.5 block text-[10px] font-semibold uppercase tracking-wide text-rose-600">Video</span>
+                                        @endif
+                                    </a>
+                                @endforeach
+                            </div>
+                        @else
+                            <div class="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center text-sm text-slate-500">
+                                Keine Story gespeichert. Storys koennen nur waehrend ihrer Laufzeit gescannt und anschliessend archiviert werden.
+                            </div>
+                        @endif
+                    </section>
+
+                    <section class="border-t border-slate-200 pt-7">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <h3 class="text-lg font-bold text-slate-900">Highlights</h3>
+                                <p class="mt-1 text-sm text-slate-500">
+                                    @if($latestInstagramHighlightScan?->scanned_at)
+                                        Zuletzt gescannt {{ $latestInstagramHighlightScan->scanned_at->timezone(config('app.timezone'))->diffForHumans() }}
+                                    @else
+                                        Highlights werden in einem eigenen Scan erfasst.
+                                    @endif
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                @click="window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
+                                wire:click="scanInstagramHighlights"
+                                wire:loading.attr="disabled"
+                                wire:target="scanInstagramHighlights"
+                                class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-100 disabled:cursor-wait disabled:opacity-60"
+                            >
+                                <span wire:loading.remove wire:target="scanInstagramHighlights">Highlights scannen</span>
+                                <span wire:loading wire:target="scanInstagramHighlights">Scan laeuft...</span>
+                            </button>
+                        </div>
+
+                        @if($instagramHighlightRows->isNotEmpty())
+                            <div class="mt-5 flex gap-5 overflow-x-auto pb-3">
+                                @foreach($instagramHighlightRows as $highlightRow)
+                                    <a
+                                        href="{{ $highlightRow->item->story_url ?: $highlightRow->mediaUrl }}"
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        class="group w-24 shrink-0 text-center"
+                                    >
+                                        <span class="mx-auto block h-20 w-20 rounded-full bg-slate-300 p-[2px] shadow-sm transition group-hover:scale-105">
+                                            <span class="flex h-full w-full items-center justify-center overflow-hidden rounded-full border-2 border-white bg-slate-100">
+                                                @if($highlightRow->previewUrl)
+                                                    <img src="{{ $highlightRow->previewUrl }}" alt="{{ $highlightRow->title }}" class="h-full w-full object-cover">
+                                                @else
+                                                    <i class="fad fa-star text-2xl text-amber-500" aria-hidden="true"></i>
+                                                @endif
+                                            </span>
+                                        </span>
+                                        <span class="mt-2 block truncate text-xs font-semibold text-slate-700">{{ $highlightRow->title }}</span>
+                                    </a>
+                                @endforeach
+                            </div>
+                        @else
+                            <div class="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-5 py-8 text-center text-sm text-slate-500">
+                                Noch keine Highlights gespeichert.
+                            </div>
+                        @endif
+                    </section>
                 </x-ui.accordion.tab-panel>
             @endif
 

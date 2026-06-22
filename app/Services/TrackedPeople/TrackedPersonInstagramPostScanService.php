@@ -167,7 +167,11 @@ class TrackedPersonInstagramPostScanService
                 $username,
                 'posts',
                 $scanProgress,
-                $this->withActiveScanControl([]),
+                $this->withActiveScanControl([
+                    'postScanUseDedicatedTabs' => true,
+                    'postScanOpenLikesDialogEnabled' => true,
+                    'postScanOpenCommentsUiEnabled' => true,
+                ]),
             );
 
             return $this->storeScan($trackedPerson, $profile, $snapshot, $payload, $userId, $progressScan);
@@ -827,6 +831,11 @@ class TrackedPersonInstagramPostScanService
                 ->where('instagram_post_id', $post->id)
                 ->where('instagram_comment_id', $comment['instagram_comment_id'])
                 ->first();
+            $commentData = $comment;
+
+            if (($commentData['likes_count'] ?? null) === null && $existing?->likes_count !== null) {
+                unset($commentData['likes_count']);
+            }
 
             InstagramPostComment::updateOrCreate(
                 [
@@ -834,7 +843,7 @@ class TrackedPersonInstagramPostScanService
                     'instagram_comment_id' => $comment['instagram_comment_id'],
                 ],
                 [
-                    ...$comment,
+                    ...$commentData,
                     'parent_comment_id' => null,
                     'instagram_profile_id' => $actorProfileIds[$comment['username'] ?? ''] ?? null,
                     'first_seen_scan_id' => $existing?->first_seen_scan_id ?: $scan->id,

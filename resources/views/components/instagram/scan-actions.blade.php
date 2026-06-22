@@ -4,6 +4,7 @@
     'profileUrl' => null,
     'showListLinks' => true,
     'listActionMode' => 'method',
+    'showStoryScans' => false,
 ])
 
 @php
@@ -84,6 +85,34 @@
     Beitraege scannen
     <span class="mt-0.5 block text-xs font-normal text-violet-500">Ab {{ number_format($postCost, 0, ',', '.') }} Credits</span>
 </button>
+
+@if($showStoryScans)
+    <button
+        type="button"
+        @click="$dispatch('close'); window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
+        wire:click="scanInstagramStories"
+        wire:loading.attr="disabled"
+        wire:target="scanInstagramStories"
+        @disabled($disabled)
+        class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+        Storys scannen
+        <span class="mt-0.5 block text-xs font-normal text-rose-500">Aktive Storys &middot; ab {{ number_format($profileCost, 0, ',', '.') }} Credits</span>
+    </button>
+
+    <button
+        type="button"
+        @click="$dispatch('close'); window.dispatchEvent(new CustomEvent('tracked-person-scan-starting'))"
+        wire:click="scanInstagramHighlights"
+        wire:loading.attr="disabled"
+        wire:target="scanInstagramHighlights"
+        @disabled($disabled)
+        class="w-full rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-amber-700 hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-50"
+    >
+        Highlights scannen
+        <span class="mt-0.5 block text-xs font-normal text-amber-600">Highlight-Cover und Titel &middot; ab {{ number_format($profileCost, 0, ',', '.') }} Credits</span>
+    </button>
+@endif
 
 <button
     type="button"

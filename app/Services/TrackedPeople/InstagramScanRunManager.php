@@ -201,6 +201,14 @@ class InstagramScanRunManager
                 $trackedPerson,
                 $trackedPerson->latestInstagramSnapshot()->first(),
             ),
+            'stories' => $this->workflowService->runStoryScan(
+                $trackedPerson,
+                $trackedPerson->latestInstagramSnapshot()->first(),
+            ),
+            'highlights' => $this->workflowService->runHighlightScan(
+                $trackedPerson,
+                $trackedPerson->latestInstagramSnapshot()->first(),
+            ),
             'public_connections' => $this->publicProfileScanService->scan($trackedPerson),
             'profile_list' => $this->resumeTrackedPersonProfileList($trackedPerson, $run),
             default => $this->workflowService->runAnalysis($trackedPerson, false),

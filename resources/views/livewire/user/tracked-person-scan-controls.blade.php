@@ -22,7 +22,7 @@
 
     <div
         wire:loading.flex
-        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts"
+        wire:target="analyzeInstagram,analyzeInstagramMini,scanInstagramFollowersList,scanInstagramFollowingList,scanInstagramSuggestions,scanInstagramSuggestionDeepSearch,scanInstagramPosts,scanInstagramStories,scanInstagramHighlights"
         class="fixed inset-0 z-[70] hidden items-center justify-center bg-slate-950/70 px-4"
     >
         <div class="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-white/20 bg-white p-5 text-center shadow-2xl">
@@ -177,6 +177,28 @@
                     <span wire:loading wire:target="scanInstagramPosts">Beitragsscan laeuft...</span>
                 </button>
             @endif
+                <button
+                    type="button"
+                    wire:click="scanInstagramStories"
+                    wire:loading.attr="disabled"
+                    wire:target="scanInstagramStories"
+                    @disabled(! $trackedPerson->instagram_username)
+                    class="inline-flex justify-center rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 shadow-sm hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <span wire:loading.remove wire:target="scanInstagramStories">Storys scannen</span>
+                    <span wire:loading wire:target="scanInstagramStories">Story-Scan laeuft...</span>
+                </button>
+                <button
+                    type="button"
+                    wire:click="scanInstagramHighlights"
+                    wire:loading.attr="disabled"
+                    wire:target="scanInstagramHighlights"
+                    @disabled(! $trackedPerson->instagram_username)
+                    class="inline-flex justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700 shadow-sm hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    <span wire:loading.remove wire:target="scanInstagramHighlights">Highlights scannen</span>
+                    <span wire:loading wire:target="scanInstagramHighlights">Highlight-Scan laeuft...</span>
+                </button>
             <button
                 type="button"
                 wire:click="scanInstagramSuggestions"

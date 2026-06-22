@@ -1363,12 +1363,15 @@ class InstagramScraper
             'stories-opening' => 65,
             'stories-item-collected' => $expected > 0 ? min(98, max(65, 65 + (int) floor(($loaded / max(1, $expected)) * 33))) : 80,
             'stories-complete' => 100,
+            'highlights-opening' => 55,
+            'highlights-item-collected' => $expected > 0 ? min(98, max(60, 60 + (int) floor(($loaded / max(1, $expected)) * 38))) : 80,
+            'highlights-complete' => 100,
             'instagram-daily-time-limit' => 100,
             'account-switching' => 8,
             'profile-session-check' => 12,
             'profile-opening' => 25,
             'profile-page-loaded' => 45,
-            'profile-collected' => in_array($operationMode, ['analyze', 'profile', 'stories'], true) ? 55 : 100,
+            'profile-collected' => in_array($operationMode, ['analyze', 'profile', 'stories', 'highlights'], true) ? 55 : 100,
             default => $expected > 0
                 ? min(99, (int) floor(($loaded / max(1, $expected)) * 100))
                 : min(95, (int) floor(($round / $maxRounds) * 100)),
@@ -1508,6 +1511,25 @@ class InstagramScraper
             };
         }
 
+        if ($phase === 'stories') {
+            return match ($stage) {
+                'stories-detected' => 'Aktive Instagram-Story wird geprueft.',
+                'stories-opening' => 'Instagram-Story wird geoeffnet.',
+                'stories-item-collected' => 'Story-Elemente gespeichert: '.number_format($loaded, 0, ',', '.'),
+                'stories-complete' => 'Instagram-Story-Scan abgeschlossen.',
+                default => 'Instagram-Story wird geprueft.',
+            };
+        }
+
+        if ($phase === 'highlights') {
+            return match ($stage) {
+                'highlights-opening' => 'Instagram-Highlights werden gesucht.',
+                'highlights-item-collected' => 'Highlights gespeichert: '.number_format($loaded, 0, ',', '.').' von '.number_format($expected, 0, ',', '.'),
+                'highlights-complete' => 'Instagram-Highlight-Scan abgeschlossen.',
+                default => 'Instagram-Highlights werden geprueft.',
+            };
+        }
+
         return match ($stage) {
             'profile-session-check' => 'Instagram-Session wird geprueft.',
             'profile-opening' => 'Instagram-Profilseite wird geoeffnet.',
@@ -1521,7 +1543,7 @@ class InstagramScraper
     {
         $operationMode = Str::lower(trim($operationMode));
 
-        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'suggestions', 'suggestion-connections', 'posts', 'stories', 'login-session'], true)
+        return in_array($operationMode, ['analyze', 'mini', 'profile', 'followers', 'following', 'suggestions', 'suggestion-connections', 'posts', 'stories', 'highlights', 'login-session'], true)
             ? $operationMode
             : 'analyze';
     }
@@ -1535,6 +1557,7 @@ class InstagramScraper
             'suggestions', 'suggestion-connections' => 'scrape-instagram-suggestions.cjs',
             'posts' => 'scrape-instagram-posts.cjs',
             'stories' => 'scrape-instagram-stories.cjs',
+            'highlights' => 'scrape-instagram-highlights.cjs',
             default => 'scrape-instagram.cjs',
         };
 
