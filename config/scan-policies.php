@@ -3,6 +3,9 @@
 return [
     'defaults' => [
         'global' => [
+            'browser_engine' => env('INSTAGRAM_BROWSER_ENGINE', 'chrome'),
+            'cloak_humanize_enabled' => env('INSTAGRAM_CLOAK_HUMANIZE', false),
+            'cloak_human_preset' => env('INSTAGRAM_CLOAK_HUMAN_PRESET', ''),
             'process_stall_timeout_seconds' => 900,
             'node_watchdog_timeout_seconds' => 900,
             'script_watchdog_enabled' => true,

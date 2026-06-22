@@ -66,6 +66,9 @@ class InstagramScanPolicyService
         $scanType = $this->scanTypeForOperation($operationMode);
         $policy = $policies[$scanType] ?? [];
         $runtime = [
+            'browserEngine' => (string) ($global['browser_engine'] ?? 'chrome'),
+            'cloakHumanizeEnabled' => (bool) ($global['cloak_humanize_enabled'] ?? false),
+            'cloakHumanPreset' => (string) ($global['cloak_human_preset'] ?? ''),
             'scriptWatchdogEnabled' => (bool) ($global['script_watchdog_enabled'] ?? true),
             'scriptStallTimeoutMs' => max(
                 60,

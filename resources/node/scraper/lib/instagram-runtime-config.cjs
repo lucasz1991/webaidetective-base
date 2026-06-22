@@ -104,6 +104,21 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
 
   return {
     ...merged,
+    browserEngine: String(
+      input.browserEngine
+      || input.browser_engine
+      || merged.browserEngine
+      || 'chrome',
+    ).trim().toLowerCase() || 'chrome',
+    cloakHumanizeEnabled:
+      input.cloakHumanizeEnabled === true
+      || input.cloak_humanize_enabled === true,
+    cloakHumanPreset: String(
+      input.cloakHumanPreset
+      || input.cloak_human_preset
+      || merged.cloakHumanPreset
+      || '',
+    ).trim(),
     profileId: normalizeText(String(input.profileId || input.profile_id || merged.profileId || '')),
     profileLabel: normalizeText(String(input.profileLabel || input.profile_label || merged.profileLabel || 'instagram-default')) || 'instagram-default',
     persistentProfileEnabled: isLoginSessionMode && input?.persistentProfileEnabled !== false,

@@ -35,6 +35,12 @@ const {
   buildRelatedScreenshotPath,
   buildScraperProfileBlockPath,
 } = require('./lib/instagram-paths.cjs');
+const {
+  BROWSER_ENGINE_CHROME,
+  isBrowserProfileLockError,
+  launchConfiguredBrowser,
+  resolveBrowserEngine,
+} = require('./lib/browser-launcher.cjs');
 
 const { runtimeTempDirectory } = configureRuntimeEnvironment({
   fallbackTempDirectory: path.resolve(__dirname, '../../../storage/app/tmp'),
@@ -96,6 +102,9 @@ const sharedScraperHelpers = {
   normalizeNumberAtLeast,
 };
 const runtimeConfigDefaults = {
+  browserEngine: 'chrome',
+  cloakHumanizeEnabled: false,
+  cloakHumanPreset: '',
   profileId: '',
   profileLabel: 'instagram-default',
   persistentProfileEnabled: isLoginSessionMode,
@@ -465,6 +474,7 @@ async function closeBrowserSoftly(browser, timeoutMs = 10000) {
 }
 
 let activeScraperProfile = null;
+let activeBrowserEngine = BROWSER_ENGINE_CHROME;
 let activeGracefulStopFilePath = null;
 let gracefulStopProgressLogged = false;
 let lastLivePreviewAt = 0;
@@ -487,6 +497,7 @@ function setActiveScraperProfile(runtimeConfig = {}) {
 
 function activeScraperProfilePayload() {
   return activeScraperProfile ? {
+    browserEngine: activeBrowserEngine,
     scraperProfile: activeScraperProfile,
     scraperProfileLabel: activeScraperProfile.label,
     scraperProfileLoginUsername: activeScraperProfile.loginUsername,
@@ -614,6 +625,7 @@ function initializeRunDebug(mode, currentUsername, runtimeConfig) {
     startedAt: new Date().toISOString(),
     mode,
     username: currentUsername || null,
+    requestedBrowserEngine: resolveBrowserEngine(runtimeConfig),
     profileLabel: runtimeConfig?.profileLabel || null,
     persistentProfileEnabled: Boolean(runtimeConfig?.persistentProfileEnabled),
     browserProfilePath: runtimeConfig?.browserProfilePath || null,
@@ -10865,6 +10877,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
   let cleanupBrowserProfileOnExit = shouldCleanupBrowserProfile(runtimeConfig, browserUserDataDir);
 
   let browser;
+  activeBrowserEngine = resolveBrowserEngine(runtimeConfig);
   let page;
   let initialHtml = '';
   let debugScreenshotPath = null;
@@ -10900,6 +10913,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
     cookieFilePath,
     browserUserDataDir,
     isLoginSessionMode,
+    requestedBrowserEngine: activeBrowserEngine,
   });
   const handleTerminationSignal = async (signal) => {
     if (terminationSignalHandled) {
@@ -10969,13 +10983,28 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
     });
 
     try {
-      browser = await puppeteer.launch(launchOptions);
+      const launchResult = await launchConfiguredBrowser({
+        puppeteer,
+        runtimeConfig,
+        launchOptions,
+      });
+      browser = launchResult.browser;
+      activeBrowserEngine = launchResult.activeEngine;
+      recordRunDebug('browser-launched', {
+        requestedEngine: launchResult.requestedEngine,
+        activeEngine: launchResult.activeEngine,
+        fallbackReason: launchResult.fallbackReason,
+      });
+
+      if (launchResult.fallbackReason) {
+        notes.push(`CloakBrowser konnte nicht gestartet werden; Chrome-Fallback aktiv: ${launchResult.fallbackReason}`);
+      }
     } catch (launchError) {
       const launchErrorMessage = normalizeText(launchError.message || String(launchError));
-      const browserProfileLocked = /already running|processsingleton|userdatadir|user data dir|user data directory/i.test(launchErrorMessage);
+      const browserProfileLocked = isBrowserProfileLockError(launchError);
 
       if (runtimeConfig.persistentProfileEnabled && browserProfileLocked) {
-        notes.push('Das persistente Browser-Profil ist bereits durch Chrome belegt; diese Sitzung nutzt ein temporaeres Profil und speichert die Cookies separat.');
+        notes.push('Das persistente Browser-Profil ist bereits durch einen Browser belegt; diese Sitzung nutzt ein temporaeres Profil und speichert die Cookies separat.');
         activeBrowserUserDataDir = fs.mkdtempSync(
           path.join(runtimeTempDirectory, 'puppeteer-profile-fallback-'),
         );
@@ -10985,20 +11014,34 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
           previousError: launchErrorMessage,
           fallbackUserDataDir: activeBrowserUserDataDir,
         });
-        browser = await puppeteer.launch({
-          ...launchOptions,
-          userDataDir: activeBrowserUserDataDir,
+        const launchResult = await launchConfiguredBrowser({
+          puppeteer,
+          runtimeConfig,
+          launchOptions: {
+            ...launchOptions,
+            userDataDir: activeBrowserUserDataDir,
+          },
+        });
+        browser = launchResult.browser;
+        activeBrowserEngine = launchResult.activeEngine;
+        recordRunDebug('browser-launched', {
+          requestedEngine: launchResult.requestedEngine,
+          activeEngine: launchResult.activeEngine,
+          fallbackReason: launchResult.fallbackReason,
+          temporaryProfileFallback: true,
         });
       } else {
         throw launchError;
       }
     }
 
+    notes.push(`Browser-Engine: ${activeBrowserEngine}`);
+
     scriptWatchdog.browser = browser;
     browser.on('disconnected', () => {
       if (!scriptWatchdog.intentionalBrowserClose && scriptWatchdog.browserDisconnectAbort) {
         requestScriptAbort(
-          'Node-Scraper abgebrochen: Verbindung zu Chrome/Puppeteer wurde getrennt.',
+          `Node-Scraper abgebrochen: Verbindung zu ${activeBrowserEngine}/Puppeteer wurde getrennt.`,
           'BROWSER_DISCONNECTED',
         );
       }
@@ -11093,9 +11136,11 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       'Accept-Language': 'de-DE,de;q=0.9,en;q=0.8',
     });
 
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    );
+    if (activeBrowserEngine === BROWSER_ENGINE_CHROME) {
+      await page.setUserAgent(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      );
+    }
 
     await page.setViewport({
       width: 1280,
@@ -11105,11 +11150,13 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
 
     await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
 
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, 'webdriver', {
-        get: () => false,
+    if (activeBrowserEngine === BROWSER_ENGINE_CHROME) {
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', {
+          get: () => false,
+        });
       });
-    });
+    }
 
     notes.push(`Scraper-Profil: ${runtimeConfig.profileLabel}`);
 
