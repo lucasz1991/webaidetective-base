@@ -3,13 +3,13 @@
 namespace App\Models;
 
 use App\Services\TrackedPeople\TrackedPersonInstagramAnalysisService;
+use App\Support\PublicAssetUrl;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Facades\Storage;
 
 class TrackedPerson extends Model
 {
@@ -203,11 +203,49 @@ class TrackedPerson extends Model
 
     public function getProfileImageUrlAttribute(): ?string
     {
-        if (! $this->profile_image_path) {
-            return null;
+        $instagramProfile = $this->resolvedCurrentInstagramProfile();
+
+        if ($instagramProfile) {
+            return $instagramProfile->profile_image_storage_url;
         }
 
-        return Storage::disk('public')->url($this->profile_image_path);
+        return PublicAssetUrl::storage(
+            $this->getRawOriginal('instagram_profile_image_path')
+                ?: $this->getRawOriginal('profile_image_path'),
+        );
+    }
+
+    public function getInstagramProfileImagePathAttribute($value): ?string
+    {
+        $instagramProfile = $this->resolvedCurrentInstagramProfile();
+
+        return $instagramProfile
+            ? $this->nullableString($instagramProfile->profile_image_path)
+            : $this->nullableString($value);
+    }
+
+    public function getInstagramProfileImageHashAttribute($value): ?string
+    {
+        $instagramProfile = $this->resolvedCurrentInstagramProfile();
+
+        return $instagramProfile
+            ? $this->nullableString($instagramProfile->profile_image_hash)
+            : $this->nullableString($value);
+    }
+
+    public function getInstagramFollowersCountAttribute($value): ?int
+    {
+        return $this->resolvedInstagramMetric('followers_count', $value);
+    }
+
+    public function getInstagramFollowingCountAttribute($value): ?int
+    {
+        return $this->resolvedInstagramMetric('following_count', $value);
+    }
+
+    public function getInstagramPostsCountAttribute($value): ?int
+    {
+        return $this->resolvedInstagramMetric('posts_count', $value);
     }
 
     public function getLastInstagramAnalyzedAtAttribute($value): ?Carbon
@@ -284,5 +322,51 @@ class TrackedPerson extends Model
         $username = preg_replace('/[?#].*$/', '', $username) ?? $username;
 
         return $username !== '' ? $username : null;
+    }
+
+    private function resolvedInstagramMetric(string $attribute, mixed $fallback): ?int
+    {
+        $instagramProfile = $this->resolvedCurrentInstagramProfile();
+
+        if ($instagramProfile) {
+            $profileValue = $instagramProfile->getAttribute($attribute);
+
+            return is_numeric($profileValue) ? (int) $profileValue : null;
+        }
+
+        return is_numeric($fallback) ? (int) $fallback : null;
+    }
+
+    private function resolvedCurrentInstagramProfile(): ?InstagramProfile
+    {
+        if ($this->relationLoaded('currentInstagramProfile')) {
+            $profile = $this->getRelation('currentInstagramProfile');
+        } elseif (! ($this->attributes['current_instagram_profile_id'] ?? null)) {
+            return null;
+        } else {
+            $profile = $this->getRelationValue('currentInstagramProfile');
+        }
+
+        if (! $profile instanceof InstagramProfile) {
+            return null;
+        }
+
+        $trackedUsername = $this->normalizeSocialUsername($this->attributes['instagram_username'] ?? null);
+        $profileUsername = $this->normalizeSocialUsername($profile->username);
+
+        return $trackedUsername !== null && $trackedUsername === $profileUsername
+            ? $profile
+            : null;
+    }
+
+    private function nullableString(mixed $value): ?string
+    {
+        if (! is_scalar($value)) {
+            return null;
+        }
+
+        $value = trim((string) $value);
+
+        return $value !== '' ? $value : null;
     }
 }

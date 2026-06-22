@@ -1514,7 +1514,7 @@ class TrackedPersonDetail extends Component
         $profileImageHistory = $this->loadGlobalInstagramProfileImageHistory($trackedPerson);
         $publicProfileCandidates = Auth::user()
             ->trackedPeople()
-            ->with('latestInstagramSnapshot')
+            ->with(['currentInstagramProfile', 'latestInstagramSnapshot'])
             ->where('id', '!=', $trackedPerson->id)
             ->whereNotNull('instagram_username')
             ->orderBy('instagram_username')

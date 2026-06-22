@@ -48,9 +48,11 @@
     );
     $detailUrl = $profileId > 0 ? route('instagram-profiles.show', $profileId) : null;
     $profileImagePath = data_get($item, 'profileImagePath') ?? data_get($item, 'profile_image_path') ?? $profile?->profile_image_path;
-    $imageUrl = filled($profileImagePath) && \Illuminate\Support\Facades\Storage::disk('public')->exists($profileImagePath)
-        ? \Illuminate\Support\Facades\Storage::disk('public')->url($profileImagePath)
-        : null;
+    $profileImageUrl = data_get($raw, 'profileImageUrl')
+        ?? data_get($item, 'profileImageUrl')
+        ?? data_get($item, 'profile_image_url')
+        ?? $profile?->profile_image_url;
+    $imageUrl = \App\Support\PublicAssetUrl::fromStorageOrRemote($profileImagePath, $profileImageUrl);
     $visibility = strtolower((string) (
         data_get($raw, 'profileVisibility')
         ?? data_get($item, 'profileVisibility')

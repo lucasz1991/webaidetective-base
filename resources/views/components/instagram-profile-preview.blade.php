@@ -21,10 +21,13 @@
         ?? data_get($profile, 'last_scanned_at');
     $profileUrl = data_get($profile, 'profile_url')
         ?: ($username ? 'https://www.instagram.com/'.ltrim($username, '@').'/' : null);
-    $profileImagePath = $currentInstagramProfile?->profile_image_path
-        ?? $trackedPerson?->instagram_profile_image_path
-        ?? $trackedPerson?->profile_image_path
-        ?? data_get($profile, 'profile_image_path');
+    $profileImagePath = $currentInstagramProfile
+        ? $currentInstagramProfile->profile_image_path
+        : ($trackedPerson?->instagram_profile_image_path
+            ?? $trackedPerson?->profile_image_path
+            ?? data_get($profile, 'profile_image_path'));
+    $profileImageUrl = $currentInstagramProfile?->profile_image_url
+        ?? data_get($profile, 'profile_image_url');
     $statusLevel = $trackedPerson?->last_instagram_status_level ?? data_get($profile, 'last_status_level', 'neutral');
     $statusLabel = match ($statusLevel) {
         'success' => 'Aktuell',
@@ -45,6 +48,7 @@
         'profileUrl' => $profileUrl,
         'instagramProfileId' => $instagramProfileId,
         'profileImagePath' => $profileImagePath,
+        'profileImageUrl' => $profileImageUrl,
         'profileVisibility' => $visibility,
         'isPrivate' => $visibility === 'private',
         'postsCount' => $posts,

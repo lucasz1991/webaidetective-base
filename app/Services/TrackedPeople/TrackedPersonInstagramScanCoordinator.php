@@ -54,6 +54,22 @@ class TrackedPersonInstagramScanCoordinator
         $active = $this->active($trackedPersonId);
 
         if ((int) ($active['generation'] ?? 0) === $generation) {
+            $livePids = collect($active['processes'] ?? [])
+                ->map(fn (mixed $process): int => is_array($process) ? (int) ($process['pid'] ?? 0) : 0)
+                ->filter(fn (int $pid): bool => $pid > 0 && $this->processIsRunning($pid))
+                ->unique()
+                ->values();
+
+            if ($livePids->isNotEmpty()) {
+                Log::warning('Instagram-Scan wird abgeschlossen, obwohl noch registrierte Prozesse laufen. Prozessbaeume werden beendet.', [
+                    'tracked_person_id' => $trackedPersonId,
+                    'generation' => $generation,
+                    'pids' => $livePids->all(),
+                ]);
+
+                $livePids->each(fn (int $pid) => $this->terminateProcessTree($pid));
+            }
+
             $this->deleteGracefulStopFile($active);
             Cache::forget($this->activeKey($trackedPersonId));
         }

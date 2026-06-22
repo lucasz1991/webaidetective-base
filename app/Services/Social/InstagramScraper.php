@@ -548,6 +548,27 @@ class InstagramScraper
         $trackedPersonId = (int) ($scanControl['trackedPersonId'] ?? 0);
         $generation = (int) ($scanControl['generation'] ?? 0);
         $pid = (int) ($process->getPid() ?? 0);
+        $processLifecycleFinished = false;
+
+        register_shutdown_function(
+            static function () use (
+                &$processLifecycleFinished,
+                $processCoordinator,
+                $pid,
+            ): void {
+                if ($processLifecycleFinished || $pid <= 0) {
+                    return;
+                }
+
+                try {
+                    if ($processCoordinator->processIsAlive($pid)) {
+                        $processCoordinator->terminateProcessTree($pid);
+                    }
+                } catch (\Throwable) {
+                    // Im PHP-Shutdown kann nicht mehr verlaesslich geloggt werden.
+                }
+            },
+        );
 
         if ($coordinator && $pid > 0) {
             try {
@@ -605,11 +626,7 @@ class InstagramScraper
                 }
 
                 if ($coordinator && $coordinator->shouldCancel($trackedPersonId, $generation)) {
-                    $process->stop(1);
-
-                    if ($pid > 0) {
-                        $coordinator->terminateProcessTree($pid);
-                    }
+                    $this->terminateNodeProcess($process, $processCoordinator, $pid);
 
                     throw new TrackedPersonInstagramScanCancelledException(
                         'Instagram-Scan wurde abgebrochen, weil fuer diese Person ein neuer Scan gestartet wurde.'
@@ -617,11 +634,7 @@ class InstagramScraper
                 }
 
                 if ((microtime(true) - $lastOutputAt) >= $processStallTimeoutSeconds) {
-                    $process->stop(1);
-
-                    if ($pid > 0) {
-                        $processCoordinator->terminateProcessTree($pid);
-                    }
+                    $this->terminateNodeProcess($process, $processCoordinator, $pid);
 
                     throw new \RuntimeException(
                         'Node.js-Scraper wurde beendet, weil seit '.$processStallTimeoutSeconds.' Sekunden kein Output mehr kam.'
@@ -657,6 +670,13 @@ class InstagramScraper
                 'output' => $stdout,
                 'errorOutput' => $stderrTail,
             ];
+        } catch (\Throwable $exception) {
+            // Exceptions aus Progress-Callbacks duerfen den PHP-Scan nicht
+            // beenden, waehrend der zugehoerige Node-/Browser-Prozess
+            // unbeaufsichtigt weiterlaeuft.
+            $this->terminateNodeProcess($process, $processCoordinator, $pid);
+
+            throw $exception;
         } finally {
             if ($coordinator && $pid > 0) {
                 try {
@@ -671,6 +691,25 @@ class InstagramScraper
                     ]);
                 }
             }
+
+            $processLifecycleFinished = true;
+        }
+    }
+
+    private function terminateNodeProcess(
+        SymfonyProcess $process,
+        TrackedPersonInstagramScanCoordinator $processCoordinator,
+        int $pid,
+    ): void {
+        if ($pid > 0) {
+            // Zuerst den gesamten Baum ermitteln und beenden. Wird nur der
+            // Elternprozess gestoppt, koennen Chrome-/Node-Kinder zu PID 1
+            // umgehaengt werden und danach nicht mehr auffindbar sein.
+            $processCoordinator->terminateProcessTree($pid);
+        }
+
+        if ($process->isRunning()) {
+            $process->stop(1);
         }
     }
 

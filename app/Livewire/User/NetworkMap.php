@@ -2192,6 +2192,10 @@ class NetworkMap extends Component
 
     private function profileImageUrlForPerson(TrackedPerson $person): ?string
     {
+        if (filled($person->profile_image_url)) {
+            return $person->profile_image_url;
+        }
+
         if (filled($person->instagram_profile_image_path)) {
             return PublicAssetUrl::storage($person->instagram_profile_image_path);
         }

@@ -740,6 +740,19 @@ class InstagramProfileRelationshipStore
             ->pluck('tracked_person_id')
             ->all();
 
+        if ($linkedTrackedPersonIds !== []) {
+            TrackedPerson::query()
+                ->whereIn('id', $linkedTrackedPersonIds)
+                ->where(function ($query) use ($profile): void {
+                    $query->whereNull('current_instagram_profile_id')
+                        ->orWhere('current_instagram_profile_id', '!=', $profile->id);
+                })
+                ->update([
+                    'current_instagram_profile_id' => $profile->id,
+                    'updated_at' => now(),
+                ]);
+        }
+
         TrackedPerson::query()
             ->where(function ($query) use ($profile, $linkedTrackedPersonIds, $normalizedUsername): void {
                 $query->where('current_instagram_profile_id', $profile->id);

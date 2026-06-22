@@ -2,6 +2,7 @@
 
 namespace App\Services\TrackedPeople;
 
+use App\Exceptions\TrackedPersonInstagramScanCancelledException;
 use App\Models\InstagramProfile;
 use App\Models\InstagramProfileRelationship;
 use App\Models\TrackedPerson;
@@ -112,6 +113,8 @@ class TrackedPersonInstagramSuggestionScanService
             );
 
             return $scan;
+        } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            throw $exception;
         } catch (\Throwable $exception) {
             $this->scanCoordinator->failForRetry(
                 $trackedPerson->id,
@@ -179,6 +182,8 @@ class TrackedPersonInstagramSuggestionScanService
             );
 
             return $scan;
+        } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            throw $exception;
         } catch (\Throwable $exception) {
             $this->scanCoordinator->failForRetry(
                 $scanContextId,
@@ -500,6 +505,8 @@ class TrackedPersonInstagramSuggestionScanService
                     ] : []),
                 ]),
             );
+        } catch (TrackedPersonInstagramScanCancelledException $exception) {
+            throw $exception;
         } catch (\Throwable $exception) {
             $scanLabel = $deepSearch ? 'Vorschlaege DeepSearch' : 'Vorschlaege-Scan';
             $errorMessage = $exception->getMessage();

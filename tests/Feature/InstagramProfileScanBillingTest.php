@@ -115,6 +115,7 @@ class InstagramProfileScanBillingTest extends TestCase
             ->propagateProfileDataToLinkedTrackedPeople($profile);
 
         foreach ([$currentPerson->fresh(), $linkedPerson->fresh()] as $person) {
+            $this->assertSame($profile->id, $person->current_instagram_profile_id);
             $this->assertSame('linked_profile_test', $person->instagram_username);
             $this->assertSame('instagram/profiles/linked.jpg', $person->instagram_profile_image_path);
             $this->assertSame('hash-linked', $person->instagram_profile_image_hash);
@@ -124,6 +125,42 @@ class InstagramProfileScanBillingTest extends TestCase
             $this->assertSame('success', $person->last_instagram_status_level);
             $this->assertSame('Mini scan done.', $person->last_instagram_status_message);
         }
+    }
+
+    public function test_tracked_person_reads_current_instagram_profile_as_source_of_truth(): void
+    {
+        $user = User::factory()->create();
+        $profile = InstagramProfile::create([
+            'username' => 'canonical_profile_test',
+            'profile_image_url' => 'https://example.test/canonical-profile.jpg',
+            'profile_image_hash' => 'canonical-hash',
+            'followers_count' => 4321,
+            'following_count' => 234,
+            'posts_count' => 56,
+        ]);
+        $person = TrackedPerson::create([
+            'user_id' => $user->id,
+            'first_name' => 'Canonical',
+            'last_name' => 'Person',
+            'instagram_username' => $profile->username,
+            'current_instagram_profile_id' => $profile->id,
+            'instagram_profile_image_path' => 'instagram/profiles/stale.jpg',
+            'instagram_profile_image_hash' => 'stale-hash',
+            'instagram_followers_count' => 1,
+            'instagram_following_count' => 2,
+            'instagram_posts_count' => 3,
+        ]);
+
+        $person = $person->fresh()->load('currentInstagramProfile');
+
+        $this->assertSame(4321, $person->instagram_followers_count);
+        $this->assertSame(234, $person->instagram_following_count);
+        $this->assertSame(56, $person->instagram_posts_count);
+        $this->assertNull($person->instagram_profile_image_path);
+        $this->assertSame('canonical-hash', $person->instagram_profile_image_hash);
+        $this->assertSame('https://example.test/canonical-profile.jpg', $person->profile_image_url);
+        $this->assertSame(1, (int) $person->getRawOriginal('instagram_followers_count'));
+        $this->assertSame('stale-hash', $person->getRawOriginal('instagram_profile_image_hash'));
     }
 
     public function test_profile_data_repairs_missing_links_for_matching_observed_people(): void

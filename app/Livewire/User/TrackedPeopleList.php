@@ -119,7 +119,11 @@ class TrackedPeopleList extends Component
         $user = Auth::user();
         $trackedPeople = $user
             ? $user->trackedPeople()
-                ->with(['latestInstagramSnapshot', 'latestChangedInstagramSnapshot'])
+                ->with([
+                    'currentInstagramProfile',
+                    'latestInstagramSnapshot',
+                    'latestChangedInstagramSnapshot',
+                ])
                 ->when($this->search !== '', function (Builder $query): void {
                     $term = '%'.$this->search.'%';
 
