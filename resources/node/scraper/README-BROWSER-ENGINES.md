@@ -42,6 +42,21 @@ npx cloakbrowser install
 ausfuehrenden Betriebssystembenutzers. Der PHP-/Queue-Prozess muss unter einem
 Benutzer laufen, der auf diesen Cache zugreifen kann.
 
+Puppeteers eigener Chrome wird bei `npm install` absichtlich nicht automatisch
+heruntergeladen. Das verhindert unvollstaendige Puppeteer-Caches auf Plesk.
+Falls der normale Chrome-Fallback auf einem neuen Server benoetigt wird, muss
+Chrome dort separat installiert und sein Pfad gesetzt werden:
+
+```dotenv
+PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
+```
+
+Alternativ kann Puppeteers Chrome einmal explizit installiert werden:
+
+```bash
+PUPPETEER_SKIP_DOWNLOAD=false npx puppeteer browsers install chrome
+```
+
 ## Sofort zu Chrome zurueckkehren
 
 ```dotenv
