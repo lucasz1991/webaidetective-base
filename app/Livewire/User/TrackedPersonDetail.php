@@ -403,7 +403,10 @@ class TrackedPersonDetail extends Component
             $this->setDetailStatus($message, $level);
             $this->dispatch('tracked-person-refresh');
         } catch (\Throwable $exception) {
-            $this->setDetailStatus('Scan fuer @'.$profile->username.' fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setDetailStatus(
+                $this->instagramRetryScheduledMessage('Scan fuer @'.$profile->username, $exception),
+                'partial',
+            );
         }
     }
 
@@ -529,16 +532,14 @@ class TrackedPersonDetail extends Component
 
             return;
         } catch (\Throwable $exception) {
-            $trackedPerson->markInstagramScanTerminal(
-                'error',
-                'Public-Profile-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(),
-            );
+            $message = $this->instagramRetryScheduledMessage('Public-Profile-Verbindungsscan', $exception);
+            $this->markInstagramScanRetryScheduled($trackedPerson, $message);
             $this->streamInstagramProgress([
-                'phase' => 'error',
+                'phase' => 'partial',
                 'percent' => 100,
-                'message' => 'Public-Profile-Verbindungsscan fehlgeschlagen.',
+                'message' => $message,
             ]);
-            $this->setDetailStatus('Public-Profile-Verbindungsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setDetailStatus($message, 'partial');
 
             return;
         }
@@ -662,16 +663,14 @@ class TrackedPersonDetail extends Component
 
             return;
         } catch (\Throwable $exception) {
-            $trackedPerson->markInstagramScanTerminal(
-                'error',
-                $scanLabel.' fehlgeschlagen: '.$exception->getMessage(),
-            );
+            $message = $this->instagramRetryScheduledMessage($scanLabel, $exception);
+            $this->markInstagramScanRetryScheduled($trackedPerson, $message);
             $this->streamInstagramProgress([
-                'phase' => 'error',
+                'phase' => 'partial',
                 'percent' => 100,
-                'message' => $scanLabel.' fehlgeschlagen.',
+                'message' => $message,
             ]);
-            $this->setDetailStatus($scanLabel.' fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setDetailStatus($message, 'partial');
 
             return;
         }
@@ -738,11 +737,9 @@ class TrackedPersonDetail extends Component
 
             return;
         } catch (\Throwable $exception) {
-            $trackedPerson->markInstagramScanTerminal(
-                'error',
-                'Instagram-Beitragsscan fehlgeschlagen: '.$exception->getMessage(),
-            );
-            $this->setDetailStatus('Instagram-Beitragsscan fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $message = $this->instagramRetryScheduledMessage('Instagram-Beitragsscan', $exception);
+            $this->markInstagramScanRetryScheduled($trackedPerson, $message);
+            $this->setDetailStatus($message, 'partial');
 
             return;
         }
@@ -808,20 +805,15 @@ class TrackedPersonDetail extends Component
 
             return;
         } catch (\Throwable $exception) {
-            $trackedPerson->markInstagramScanTerminal(
-                'error',
-                ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
-            );
+            $message = $this->instagramRetryScheduledMessage($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan', $exception);
+            $this->markInstagramScanRetryScheduled($trackedPerson, $message);
 
             $this->streamInstagramProgress([
-                'phase' => 'error',
+                'phase' => 'partial',
                 'percent' => 100,
-                'message' => ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' fehlgeschlagen.',
+                'message' => $message,
             ]);
-            $this->setDetailStatus(
-                ($fullScan ? 'Instagram-Analyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
-                'error',
-            );
+            $this->setDetailStatus($message, 'partial');
 
             return;
         }
@@ -879,17 +871,15 @@ class TrackedPersonDetail extends Component
 
             return;
         } catch (\Throwable $exception) {
-            $trackedPerson->markInstagramScanTerminal(
-                'error',
-                $label.'-Scan fehlgeschlagen: '.$exception->getMessage(),
-            );
+            $message = $this->instagramRetryScheduledMessage($label.'-Scan', $exception);
+            $this->markInstagramScanRetryScheduled($trackedPerson, $message);
 
             $this->streamInstagramProgress([
-                'phase' => 'error',
+                'phase' => 'partial',
                 'percent' => 100,
-                'message' => $label.'-Scan fehlgeschlagen.',
+                'message' => $message,
             ]);
-            $this->setDetailStatus($label.'-Scan fehlgeschlagen: '.$exception->getMessage(), 'error');
+            $this->setDetailStatus($message, 'partial');
 
             return;
         }
@@ -1007,6 +997,19 @@ class TrackedPersonDetail extends Component
     private function markInstagramScanCancelled(TrackedPerson $trackedPerson, string $message): void
     {
         $trackedPerson->markInstagramScanTerminal('cancelled', $message);
+    }
+
+    private function markInstagramScanRetryScheduled(TrackedPerson $trackedPerson, string $message): void
+    {
+        $trackedPerson->forceFill([
+            'last_instagram_status_level' => 'partial',
+            'last_instagram_status_message' => $message,
+        ])->save();
+    }
+
+    private function instagramRetryScheduledMessage(string $label, \Throwable $exception): string
+    {
+        return $label.' wurde unterbrochen; automatische Wiederaufnahme in ca. 5 Minuten geplant: '.$exception->getMessage();
     }
 
     private function streamInstagramLivePreview(array $state): void

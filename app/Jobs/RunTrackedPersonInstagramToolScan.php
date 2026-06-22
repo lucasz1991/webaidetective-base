@@ -15,6 +15,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
 class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
@@ -52,7 +53,7 @@ class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
                 app(TrackedPersonInstagramScanCoordinator::class)->touchActiveScan($this->trackedPersonId);
                 $statusStore->progress($this->assistantScanToken, $state);
             }
-            : null;
+        : null;
 
         if ($this->assistantScanToken) {
             $statusStore->progress($this->assistantScanToken, [
@@ -127,11 +128,24 @@ class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
                 'error' => $exception->getMessage(),
             ]);
 
-            $trackedPerson->markInstagramScanTerminal(
-                'error',
-                $this->label().' fehlgeschlagen: '.$exception->getMessage(),
-            );
-            $this->failAssistantScan($this->label().' fehlgeschlagen: '.$exception->getMessage());
+            $message = $this->label().' wurde unterbrochen; automatische Wiederaufnahme in ca. 5 Minuten geplant: '.$exception->getMessage();
+            $trackedPerson->forceFill([
+                'last_instagram_status_level' => 'partial',
+                'last_instagram_status_message' => $message,
+            ])->save();
+
+            if ($this->assistantScanToken) {
+                $statusStore->pause(
+                    $this->assistantScanToken,
+                    $message,
+                    [
+                        'tracked_person_id' => (int) $trackedPerson->id,
+                        'instagram_username' => $trackedPerson->instagram_username,
+                        'status_level' => 'partial',
+                        'status_message' => $message,
+                    ],
+                );
+            }
         }
     }
 
@@ -166,7 +180,7 @@ class RunTrackedPersonInstagramToolScan implements ShouldBeUnique, ShouldQueue
 
     private function resultIsResumable(mixed $result): bool
     {
-        if ($result instanceof \Illuminate\Support\Collection) {
+        if ($result instanceof Collection) {
             return $result->contains(fn (mixed $item): bool => $this->resultIsResumable($item));
         }
 

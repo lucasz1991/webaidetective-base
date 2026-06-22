@@ -48,6 +48,11 @@ class TrackedPersonInstagramAnalysisService
         $scanControl = $this->scanCoordinator->begin(
             $trackedPerson->id,
             $fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan',
+            [
+                'scan_type' => $fullScan ? 'full' : 'mini',
+                'target_username' => $trackedPerson->instagram_username,
+                'user_id' => $trackedPerson->user_id,
+            ],
         );
 
         Cache::lock($this->analysisLockKey($trackedPerson), 3600)->forceRelease();
@@ -61,7 +66,23 @@ class TrackedPersonInstagramAnalysisService
         $this->activeScanControl = $scanControl;
 
         try {
-            return $this->analyzeWithLock($trackedPerson, $progress, $fullScan);
+            $snapshot = $this->analyzeWithLock($trackedPerson, $progress, $fullScan);
+            $this->scanCoordinator->completeFromResult(
+                $trackedPerson->id,
+                (int) $scanControl['generation'],
+                $snapshot,
+                ($fullScan ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' abgeschlossen.',
+            );
+
+            return $snapshot;
+        } catch (\Throwable $exception) {
+            $this->scanCoordinator->failForRetry(
+                $trackedPerson->id,
+                (int) $scanControl['generation'],
+                $exception->getMessage(),
+            );
+
+            throw $exception;
         } finally {
             $lock->release();
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);
@@ -89,6 +110,11 @@ class TrackedPersonInstagramAnalysisService
         $scanControl = $this->scanCoordinator->begin(
             $trackedPerson->id,
             $relationship === 'followers' ? 'Instagram-Followerliste' : 'Instagram-Gefolgt-Liste',
+            [
+                'scan_type' => $relationship,
+                'target_username' => $trackedPerson->instagram_username,
+                'user_id' => $trackedPerson->user_id,
+            ],
         );
 
         Cache::lock($this->analysisLockKey($trackedPerson), 3600)->forceRelease();
@@ -102,7 +128,23 @@ class TrackedPersonInstagramAnalysisService
         $this->activeScanControl = $scanControl;
 
         try {
-            return $this->scanRelationshipListWithLock($trackedPerson, $relationship, $progress);
+            $snapshot = $this->scanRelationshipListWithLock($trackedPerson, $relationship, $progress);
+            $this->scanCoordinator->completeFromResult(
+                $trackedPerson->id,
+                (int) $scanControl['generation'],
+                $snapshot,
+                'Instagram-'.$relationship.'-Scan abgeschlossen.',
+            );
+
+            return $snapshot;
+        } catch (\Throwable $exception) {
+            $this->scanCoordinator->failForRetry(
+                $trackedPerson->id,
+                (int) $scanControl['generation'],
+                $exception->getMessage(),
+            );
+
+            throw $exception;
         } finally {
             $lock->release();
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);

@@ -4702,7 +4702,7 @@ async function collectFollowerEntriesFromDialog(page) {
       'tv',
     ]);
     const dialog = document.querySelector('div[role="dialog"]') || document.body;
-    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge f(?:u|\u00fc)r dich|suggested for you|suggestions for you|suggested)$/i;
+    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorgeschlagen(?: f(?:u|\u00fc)r dich)?|vorschl(?:a|\u00e4)ge(?: f(?:u|\u00fc)r dich)?|(?:a|\u00e4)hnliche konten|weitere konten|suggested for you|suggestions for you|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)$/i;
     const getOwnText = (element) => normalizeElementText(
       Array.from(element.childNodes || [])
         .filter((node) => node.nodeType === Node.TEXT_NODE)
@@ -6678,7 +6678,7 @@ async function scrollToProfileSuggestions(page, maxRounds = 5) {
   for (let round = 0; round < maxRounds; round += 1) {
     const state = await page.evaluate(() => {
       const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
-      const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge f(?:u|\u00fc)r dich|vorschl(?:a|\u00e4)ge|suggested for you|suggestions for you|suggested|suggestions)$/i;
+      const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorgeschlagen(?: f(?:u|\u00fc)r dich)?|vorschl(?:a|\u00e4)ge(?: f(?:u|\u00fc)r dich)?|(?:a|\u00e4)hnliche konten|weitere konten|suggested for you|suggestions for you|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)$/i;
       const isVisible = (element) => {
         if (!element) {
           return false;
@@ -6726,7 +6726,7 @@ async function scrollToProfileSuggestions(page, maxRounds = 5) {
       window.scrollBy(0, Math.max(700, window.innerHeight * 0.9));
       const after = window.scrollY;
       const text = String(document.body?.innerText || document.body?.textContent || '');
-      const suggestionsVisible = /(?:vorschl(?:a|\u00e4)ge|f(?:u|\u00fc)r dich vorgeschlagen|suggested|suggestions)/i.test(text);
+      const suggestionsVisible = /(?:vorschl(?:a|\u00e4)ge|vorgeschlagen|f(?:u|\u00fc)r dich vorgeschlagen|(?:a|\u00e4)hnliche konten|weitere konten|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)/i.test(text);
 
       return {
         before,
@@ -6767,8 +6767,8 @@ async function diagnoseProfileSuggestionsSurface(page, currentUsername) {
       .replace(/^@/, '')
       .replace(/[^a-z0-9._]/gi, '')
       .toLowerCase();
-    const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge|suggested|suggestions)/i;
-    const seeAllPattern = /^(alle ansehen|alle anzeigen|see all|show all)$/i;
+    const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorgeschlagen|vorschl(?:a|\u00e4)ge|(?:a|\u00e4)hnliche konten|weitere konten|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)/i;
+    const seeAllPattern = /^(alle ansehen|alle anzeigen|mehr anzeigen|see all|see more|show all|show more)$/i;
     const reservedPaths = new Set(['accounts', 'direct', 'explore', 'p', 'reel', 'reels', 'stories', 'tv']);
     const isVisible = (element) => {
       if (!element) {
@@ -6938,8 +6938,8 @@ async function clickProfileSuggestionsSeeAll(page) {
 
       return rect.width > 0 && rect.height > 0;
     };
-    const seeAllPattern = /^(alle ansehen|alle anzeigen|see all|show all)$/i;
-    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge f(?:u|\u00fc)r dich|vorschl(?:a|\u00e4)ge|suggested for you|suggestions for you|suggested|suggestions)$/i;
+    const seeAllPattern = /^(alle ansehen|alle anzeigen|mehr anzeigen|see all|see more|show all|show more)$/i;
+    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorgeschlagen(?: f(?:u|\u00fc)r dich)?|vorschl(?:a|\u00e4)ge(?: f(?:u|\u00fc)r dich)?|(?:a|\u00e4)hnliche konten|weitere konten|suggested for you|suggestions for you|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)$/i;
     const discoverMorePattern = /(?:entdecke mehr konten|weitere konten entdecken|discover more accounts|find more accounts)/i;
     const heading = Array.from(document.querySelectorAll('span, div, h1, h2, h3, h4, p'))
       .filter(visible)
@@ -7015,7 +7015,7 @@ async function waitForSuggestionsDialog(page, timeoutMs = 3500) {
   while (Date.now() - startedAt < timeoutMs) {
     const state = await page.evaluate(() => {
       const normalizeElementText = (value = '') => String(value).replace(/\s+/g, ' ').trim();
-      const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge|suggested|suggestions)/i;
+      const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorgeschlagen|vorschl(?:a|\u00e4)ge|(?:a|\u00e4)hnliche konten|weitere konten|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)/i;
       const dialog = document.querySelector('div[role="dialog"]');
 
       if (!dialog) {
@@ -7101,7 +7101,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
       'stories',
       'tv',
     ]);
-    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge f(?:u|\u00fc)r dich|vorschl(?:a|\u00e4)ge|suggested for you|suggestions for you|suggested|suggestions)$/i;
+    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorgeschlagen(?: f(?:u|\u00fc)r dich)?|vorschl(?:a|\u00e4)ge(?: f(?:u|\u00fc)r dich)?|(?:a|\u00e4)hnliche konten|weitere konten|suggested for you|suggestions for you|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)$/i;
     const dialog = document.querySelector('div[role="dialog"]');
     const container = dialog || document.body;
     const isVisible = (element) => {
@@ -7210,7 +7210,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
             ? Boolean(suggestionHeading.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING)
             : false;
           const suggestionText = suggestionHeadingPattern.test(text)
-            || /(?:vorschl(?:a|\u00e4)ge|suggested|suggestions)/i.test(text);
+            || /(?:vorschl(?:a|\u00e4)ge|vorgeschlagen|(?:a|\u00e4)hnliche konten|weitere konten|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)/i.test(text);
           const horizontalList = horizontalOverflow || sameRowProfileAnchors;
           const score = (profileAnchors.length * 8)
             + (horizontalOverflow ? 14 : 0)
@@ -7345,14 +7345,14 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
           };
         })
         .filter((entry) => (
-          /(?:vorschl(?:a|\u00e4)ge|suggested|suggestions|folgen|follow)/i.test(entry.textPreview)
+          /(?:vorschl(?:a|\u00e4)ge|vorgeschlagen|(?:a|\u00e4)hnliche konten|weitere konten|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions|folgen|follow)/i.test(entry.textPreview)
           || entry.profileAnchorCount > 0
           || entry.horizontalOverflow
         ))
         .slice(0, 12);
 
       return {
-        bodyContainsSuggestionText: /(?:vorschl(?:a|\u00e4)ge|f(?:u|\u00fc)r dich vorgeschlagen|suggested|suggestions)/i.test(bodyText),
+        bodyContainsSuggestionText: /(?:vorschl(?:a|\u00e4)ge|vorgeschlagen|f(?:u|\u00fc)r dich vorgeschlagen|(?:a|\u00e4)hnliche konten|weitere konten|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)/i.test(bodyText),
         textSamples,
         anchorSamples,
         scopeSamples,
@@ -7461,7 +7461,7 @@ async function collectProfileSuggestionItems(page, currentUsername, maxItems = 1
     };
     const fallbackSuggestionCardItems = () => {
       const headingRect = suggestionHeading?.getBoundingClientRect?.() || null;
-      const ignoredTokenPattern = /^(folgen|abonniert|entfernen|remove|follow|following|x|alle|ansehen|anzeigen|see|show|all|vorschlage|vorschlge|suggested|suggestions|fur|dich|for|you)$/i;
+      const ignoredTokenPattern = /^(folgen|abonniert|entfernen|remove|follow|following|x|alle|ansehen|anzeigen|mehr|see|show|more|all|vorschlage|vorschlge|vorgeschlagen|ahnliche|konten|suggested|suggestions|similar|accounts|fur|dich|for|you)$/i;
       const followActionPattern = /(?:^|\s)(?:folgen|abonniert|follow|following)(?:\s|$)/i;
       const usernamePattern = /^[a-z0-9._]{3,30}$/;
       const cardSelectors = 'li, article, div[role="button"], button, section > div';
@@ -7667,11 +7667,11 @@ async function advanceProfileSuggestionsViewport(page, options = {}) {
         && style.visibility !== 'hidden'
         && style.display !== 'none';
     };
-    const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge|suggested|suggestions)/i;
-    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorschl(?:a|\u00e4)ge f(?:u|\u00fc)r dich|vorschl(?:a|\u00e4)ge|suggested for you|suggestions for you|suggested|suggestions)$/i;
+    const suggestionPattern = /(?:f(?:u|\u00fc)r dich vorgeschlagen|vorgeschlagen|vorschl(?:a|\u00e4)ge|(?:a|\u00e4)hnliche konten|weitere konten|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)/i;
+    const suggestionHeadingPattern = /^(f(?:u|\u00fc)r dich vorgeschlagen|vorgeschlagen(?: f(?:u|\u00fc)r dich)?|vorschl(?:a|\u00e4)ge(?: f(?:u|\u00fc)r dich)?|(?:a|\u00e4)hnliche konten|weitere konten|suggested for you|suggestions for you|suggested accounts?|similar accounts?|more accounts?|suggested|suggestions)$/i;
     const discoverMorePattern = /(?:entdecke mehr konten|weitere konten entdecken|discover more accounts|find more accounts)/i;
     const reservedPaths = new Set(['accounts', 'direct', 'explore', 'p', 'reel', 'reels', 'stories', 'tv']);
-    const ignoredTextPattern = /^(folgen|abonniert|entfernen|remove|follow|following|x|alle ansehen|alle anzeigen|see all|show all)$/i;
+    const ignoredTextPattern = /^(folgen|abonniert|entfernen|remove|follow|following|x|alle ansehen|alle anzeigen|mehr anzeigen|see all|see more|show all|show more)$/i;
     const usernamePattern = /^[a-z0-9._]{3,30}$/;
     const isDiscoverMoreElement = (element) => discoverMorePattern.test(
       normalizeElementText(element?.innerText || element?.textContent || ''),

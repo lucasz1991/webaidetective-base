@@ -45,6 +45,11 @@ class TrackedPersonInstagramPublicProfileScanService
         $scanControl = $this->scanCoordinator->begin(
             $trackedPerson->id,
             'Public-Profile-Verbindungsscan',
+            [
+                'scan_type' => 'public_connections',
+                'target_username' => $targetUsername,
+                'user_id' => $trackedPerson->user_id,
+            ],
         );
 
         Cache::lock('tracked-person-instagram-public-profile-scan:'.$trackedPerson->id, 3600)->forceRelease();
@@ -58,7 +63,23 @@ class TrackedPersonInstagramPublicProfileScanService
         $this->activeScanControl = $scanControl;
 
         try {
-            return $this->scanWithLock($trackedPerson, $targetUsername, $progress, $onlyPublicProfileId);
+            $scans = $this->scanWithLock($trackedPerson, $targetUsername, $progress, $onlyPublicProfileId);
+            $this->scanCoordinator->completeFromResult(
+                $trackedPerson->id,
+                (int) $scanControl['generation'],
+                $scans,
+                'Public-Profile-Verbindungsscan abgeschlossen.',
+            );
+
+            return $scans;
+        } catch (\Throwable $exception) {
+            $this->scanCoordinator->failForRetry(
+                $trackedPerson->id,
+                (int) $scanControl['generation'],
+                $exception->getMessage(),
+            );
+
+            throw $exception;
         } finally {
             $lock->release();
             $this->scanCoordinator->finish($trackedPerson->id, (int) $scanControl['generation']);

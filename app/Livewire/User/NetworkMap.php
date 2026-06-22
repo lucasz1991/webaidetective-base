@@ -20,7 +20,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Livewire\Component;
- 
+
 class NetworkMap extends Component
 {
     private const GRAPH_NODE_CHUNK_SIZE = 300;
@@ -186,7 +186,7 @@ class NetworkMap extends Component
         });
 
         $this->forgetGraphCache((int) $user->id);
- 
+
         $this->primaryTrackedPersonId = $trackedPersonId;
         $this->graphToken = null;
         $this->graphStats = $this->emptyGraphStats($user->trackedPeople()->count());
@@ -2931,12 +2931,13 @@ class NetworkMap extends Component
                 message: $result['statusMessage'],
             );
         } catch (\Throwable $e) {
+            $message = 'Profil-Vollanalyse wurde unterbrochen; automatische Wiederaufnahme in ca. 5 Minuten geplant: '.$e->getMessage();
             $this->streamNetworkMapScanProgress([
-                'phase' => 'error',
+                'phase' => 'partial',
                 'percent' => 100,
-                'message' => 'Profil-Vollanalyse fehlgeschlagen.',
+                'message' => $message,
             ]);
-            $this->dispatch('notification', type: 'error', message: 'Profil-Vollanalyse fehlgeschlagen: '.$e->getMessage());
+            $this->dispatch('notification', type: 'warning', message: $message);
         }
     }
 

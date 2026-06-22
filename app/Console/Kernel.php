@@ -16,6 +16,11 @@ class Kernel extends ConsoleKernel
             ->command('tracked-people:run-monitoring')
             ->everyMinute()
             ->withoutOverlapping();
+
+        $schedule
+            ->command('instagram:scan-manager --once')
+            ->everyMinute()
+            ->withoutOverlapping();
     }
 
     /**
@@ -27,4 +32,4 @@ class Kernel extends ConsoleKernel
 
         require base_path('routes/console.php');
     }
-} 
+}

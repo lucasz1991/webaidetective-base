@@ -16,7 +16,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Log;
 
-class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
+class MonitorTrackedPersonInstagram implements ShouldBeUnique, ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
@@ -29,8 +29,7 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
         public readonly bool $force = false,
         public readonly bool $sendNotifications = true,
         public readonly bool $fullScan = false,
-    ) {
-    }
+    ) {}
 
     public function handle(): void
     {
@@ -97,10 +96,11 @@ class MonitorTrackedPersonInstagram implements ShouldQueue, ShouldBeUnique
                 'error' => $exception->getMessage(),
             ]);
 
-            $trackedPerson->markInstagramScanTerminal(
-                'error',
-                ($this->isFullScan() ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan').' fehlgeschlagen: '.$exception->getMessage(),
-            );
+            $trackedPerson->forceFill([
+                'last_instagram_status_level' => 'partial',
+                'last_instagram_status_message' => ($this->isFullScan() ? 'Instagram-Vollanalyse' : 'Instagram-Mini-Scan')
+                    .' wurde unterbrochen; automatische Wiederaufnahme in ca. 5 Minuten geplant: '.$exception->getMessage(),
+            ])->save();
 
             return;
         }

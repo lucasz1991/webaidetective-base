@@ -21,7 +21,7 @@
         'violet' => 'text-violet-700',
         default => 'text-slate-500',
     };
-    $baseClass = 'min-w-0 px-3 py-3 text-left';
+    $baseClass = 'min-w-0 px-3 py-3 text-left  first:rounded-l-3xl last:rounded-r-3xl';
     $mutedClass = $muted ? ' opacity-60 grayscale-[50%]' : '';
 @endphp
 

@@ -48,7 +48,9 @@
 </nav>
 @else
 <div
-    wire:poll.15000ms="refreshNavigationData"
+    @unless($showMessagePreviewModal)
+        wire:poll.15000ms="refreshNavigationData"
+    @endunless
     x-data="{
         isMobileMenuOpen: false,
         navHeight: $persist(113).using(sessionStorage),
@@ -205,6 +207,7 @@
                                                   wire:click="showMessagePreview({{ $message->id }})"
                                                   wire:loading.attr="disabled"
                                                   wire:target="showMessagePreview({{ $message->id }})"
+                                                  wire:key="user-nav-message-preview-trigger-{{ $message->id }}"
                                                   class="flex w-full items-center p-4 text-left transition hover:bg-slate-50 @if($message->status == 1) bg-blue-50 @endif">
                                                  <div class="block h-10 w-10 size-4 flex-none rounded-full">
                                                      <x-application-mark class="h-10 w-10" />
@@ -231,33 +234,6 @@
                                          </div>
                                          </x-slot>
                                       </x-ui.dropdown.anchor-dropdown>
-                                      <!-- Modal -->
-                                      <x-modal wire:model="showMessagePreviewModal" maxWidth="2xl">
-                                          <div class="border border-gray-300 rounded-lg p-4 relative">
-                                              <button type="button" x-on:click="$dispatch('close')" wire:click="closeMessagePreview" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
-                                                  <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                                                  </svg>
-                                              </button>
-                                              <div class="flex">
-                                                  <span class="inline-block text-xs font-medium text-gray-700 mb-2 bg-green-100 px-2 py-1 rounded-full">
-                                                      {{ $selectedMessagePreview['created_at'] ?? '' }}
-                                                  </span>
-                                              </div>
-                                              <h3 class="text-xl font-semibold mb-4 border-b pb-2">
-                                                  {{ $selectedMessagePreview['subject'] ?? '' }}
-                                              </h3>
-                                              <div class="my-6">
-                                                  <p class="text-gray-800">{!! $selectedMessagePreview['body'] ?? '' !!}</p>
-                                              </div>
-                                          </div>
-
-                                          <div class="flex justify-end mt-4 mb-2">
-                                              <button type="button" x-on:click="$dispatch('close')" wire:click="closeMessagePreview" class="transition-all duration-100 py-2.5 px-5 text-sm font-medium text-gray-900 focus:outline-none bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-4 focus:ring-gray-100">
-                                                  Schließen
-                                              </button>
-                                          </div>
-                                      </x-modal>
                                  </div>
                                 @endif
 
@@ -580,6 +556,36 @@
                 </div>
     </nav>
     <div :style="'height: ' + navHeight + 'px'" class="min-h-12 transition-all duration-300 ease-in-out md:min-h-[4rem]"></div>
+    @if (Auth::check() && $currentUrl !== url('/messages'))
+        <div wire:key="user-nav-message-preview-modal-{{ $selectedMessagePreviewId ?? 'empty' }}">
+            <x-modal wire:model="showMessagePreviewModal" maxWidth="2xl">
+                <div class="border border-gray-300 rounded-lg p-4 relative">
+                    <button type="button" x-on:click="$dispatch('close')" wire:click="closeMessagePreview" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                    <div class="flex">
+                        <span class="inline-block text-xs font-medium text-gray-700 mb-2 bg-green-100 px-2 py-1 rounded-full">
+                            {{ $selectedMessagePreview['created_at'] ?? '' }}
+                        </span>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-4 border-b pb-2">
+                        {{ $selectedMessagePreview['subject'] ?? '' }}
+                    </h3>
+                    <div class="my-6">
+                        <p class="text-gray-800">{!! $selectedMessagePreview['body'] ?? '' !!}</p>
+                    </div>
+                </div>
+
+                <div class="flex justify-end mt-4 mb-2">
+                    <button type="button" x-on:click="$dispatch('close')" wire:click="closeMessagePreview" class="transition-all duration-100 py-2.5 px-5 text-sm font-medium text-gray-900 focus:outline-none bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-4 focus:ring-gray-100">
+                        Schließen
+                    </button>
+                </div>
+            </x-modal>
+        </div>
+    @endif
     <div id="megamenu" class="transition-all duration-200 ease-in-out"></div>
 </div>
 @endguest

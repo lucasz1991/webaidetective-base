@@ -132,17 +132,16 @@ class ScanInstagramProfileJob implements ShouldQueue
                 'error' => $exception->getMessage(),
             ]);
 
+            $message = 'Profil-Vollanalyse wurde unterbrochen; automatische Wiederaufnahme in ca. 5 Minuten geplant: '.$exception->getMessage();
             $profile->forceFill([
-                'last_status_level' => 'error',
-                'last_status_message' => 'Profil-Vollanalyse fehlgeschlagen: '.$exception->getMessage(),
+                'last_status_level' => 'partial',
+                'last_status_message' => $message,
             ])->save();
-            $this->failAssistantScan('Profil-Vollanalyse fehlgeschlagen: '.$exception->getMessage());
+            $this->pauseAssistantScan($message, $profile);
             NetworkMap::forgetGraphCacheForUser($this->userId);
             if ($trackedPerson) {
                 NetworkMap::forgetGraphCacheForUser($this->userId, $trackedPerson->id);
             }
-
-            throw $exception;
         }
     }
 
@@ -153,5 +152,24 @@ class ScanInstagramProfileJob implements ShouldQueue
         }
 
         app(InvestigationAssistantScanStatusStore::class)->fail($this->assistantScanToken, $message);
+    }
+
+    private function pauseAssistantScan(string $message, InstagramProfile $profile): void
+    {
+        if (! $this->assistantScanToken) {
+            return;
+        }
+
+        app(InvestigationAssistantScanStatusStore::class)->pause(
+            $this->assistantScanToken,
+            $message,
+            [
+                'tracked_person_id' => $this->trackedPersonId,
+                'instagram_profile_id' => (int) $profile->id,
+                'instagram_username' => $profile->username,
+                'status_level' => 'partial',
+                'status_message' => $message,
+            ],
+        );
     }
 }

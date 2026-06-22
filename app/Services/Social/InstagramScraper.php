@@ -566,6 +566,10 @@ class InstagramScraper
                 $generation,
                 $pid,
                 trim(($scanControl['label'] ?? 'Instagram-Scan').' '.$label),
+                [
+                    'script' => $command[1] ?? null,
+                    'command' => $command,
+                ],
             );
         }
 

@@ -421,10 +421,20 @@ async function runProfileSuggestionConnectionScan(
       skipped: false,
       matched: false,
     }));
-    const statusLevel = rateLimited ? 'partial' : 'success';
-    const statusMessage = rateLimited
-      ? 'Vorschlaege-Scan wurde wegen Instagram-Rate-Limit pausiert.'
-      : `Vorschlaege-Scan abgeschlossen: ${observedSuggestions.length} Vorschlaege gefunden.`;
+    const visibleSuggestionSurface = Boolean(
+      targetSurfaceDebug?.bodyContainsSuggestionText
+      || targetSuggestions.available
+      || Number(targetSuggestions.profileLinkCandidatesSeen || 0) > 0,
+    );
+    const collectionIncomplete = !rateLimited && visibleSuggestionSurface && observedSuggestions.length === 0;
+    const statusLevel = rateLimited || collectionIncomplete ? 'partial' : 'success';
+    let statusMessage = `Vorschlaege-Scan abgeschlossen: ${observedSuggestions.length} Vorschlaege gefunden.`;
+
+    if (rateLimited) {
+      statusMessage = 'Vorschlaege-Scan wurde wegen Instagram-Rate-Limit pausiert.';
+    } else if (collectionIncomplete) {
+      statusMessage = 'Vorschlaege-Scan teilweise abgeschlossen: Instagram zeigte einen Vorschlagsbereich, aber es konnten keine Profilnamen extrahiert werden.';
+    }
 
     progressLog(rateLimited ? 'suggestions-rate-limited' : 'suggestions-complete', {
       relationship: 'suggestions',
@@ -442,16 +452,20 @@ async function runProfileSuggestionConnectionScan(
       ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
     });
 
-    notes.push(`Vorschlaege-Scan: ${observedSuggestions.length} Vorschlaege fuer @${targetUsername} gefunden.`);
+    if (collectionIncomplete) {
+      notes.push('Vorschlaege-Scan: Vorschlagsbereich sichtbar, aber keine Profilnamen extrahiert.');
+    } else {
+      notes.push(`Vorschlaege-Scan: ${observedSuggestions.length} Vorschlaege fuer @${targetUsername} gefunden.`);
+    }
 
     return {
-      ok: !rateLimited,
+      ok: !rateLimited && !collectionIncomplete,
       statusLevel,
       statusMessage,
       scanType: 'suggestions',
       targetUsername,
       attempted: true,
-      available: Boolean(targetSuggestions.available),
+      available: visibleSuggestionSurface,
       seeAllClicked: targetSeeAllClicked,
       observedCount: observedSuggestions.length,
       collectionRounds: targetSuggestions.rounds || 0,
@@ -472,6 +486,7 @@ async function runProfileSuggestionConnectionScan(
       candidateErrorCount: 0,
       rateLimited,
       rateLimitText,
+      collectionIncomplete,
       gracefullyStopped: false,
       suggestions: candidates,
       candidatesToCheck: [],
@@ -1245,15 +1260,31 @@ async function runProfileSuggestionConnectionScan(
     || Number(candidate.previousNoMatchChecks || 0) > 0
   )).length;
   const statusLevel = gracefullyStopped || rateLimited || candidateErrorCount > 0 ? 'partial' : 'success';
-  const statusMessage = gracefullyStopped
-    ? 'Vorschlaege DeepSearch wurde beendet; bisherige Treffer wurden gespeichert.'
-    : (rateLimited
-      ? 'Vorschlaege DeepSearch wurde wegen Instagram-Rate-Limit pausiert.'
-      : (candidateErrorCount > 0
-        ? `Vorschlaege DeepSearch abgeschlossen; ${candidateErrorCount} Kandidaten wurden wegen Fehlern uebersprungen.`
-        : (matchedCandidates.length === 0 && observedSuggestions.length > 0 && checkedCandidates.length === 0 && knownOrSkippedObservedCount === observedSuggestions.length
-          ? `Vorschlaege DeepSearch abgeschlossen; keine neuen Verbindungen, weil alle ${observedSuggestions.length} gefundenen Vorschlaege bereits bekannt waren.`
-          : 'Vorschlaege DeepSearch abgeschlossen.')));
+  const visibleSuggestionSurface = Boolean(
+    targetSurfaceDebug?.bodyContainsSuggestionText
+    || targetSuggestions.available
+    || Number(targetSuggestions.profileLinkCandidatesSeen || 0) > 0,
+  );
+  const collectionIncomplete = !rateLimited && visibleSuggestionSurface && observedSuggestions.length === 0;
+  const resolvedStatusLevel = statusLevel === 'success' && collectionIncomplete ? 'partial' : statusLevel;
+  let statusMessage = 'Vorschlaege DeepSearch abgeschlossen.';
+
+  if (gracefullyStopped) {
+    statusMessage = 'Vorschlaege DeepSearch wurde beendet; bisherige Treffer wurden gespeichert.';
+  } else if (rateLimited) {
+    statusMessage = 'Vorschlaege DeepSearch wurde wegen Instagram-Rate-Limit pausiert.';
+  } else if (candidateErrorCount > 0) {
+    statusMessage = `Vorschlaege DeepSearch abgeschlossen; ${candidateErrorCount} Kandidaten wurden wegen Fehlern uebersprungen.`;
+  } else if (collectionIncomplete) {
+    statusMessage = 'Vorschlaege DeepSearch teilweise abgeschlossen: Instagram zeigte einen Vorschlagsbereich, aber es konnten keine Profilnamen extrahiert werden.';
+  } else if (
+    matchedCandidates.length === 0
+    && observedSuggestions.length > 0
+    && checkedCandidates.length === 0
+    && knownOrSkippedObservedCount === observedSuggestions.length
+  ) {
+    statusMessage = `Vorschlaege DeepSearch abgeschlossen; keine neuen Verbindungen, weil alle ${observedSuggestions.length} gefundenen Vorschlaege bereits bekannt waren.`;
+  }
 
   progressLog('suggestions-complete', {
     relationship: 'suggestions',
@@ -1281,6 +1312,8 @@ async function runProfileSuggestionConnectionScan(
 
   if (observedSuggestions.length > 0) {
     notes.push(`${observedSuggestions.length} Vorschlaege wurden in der sichtbaren Vorschlagsliste erkannt.`);
+  } else if (collectionIncomplete) {
+    notes.push('Vorschlaege DeepSearch: Vorschlagsbereich sichtbar, aber keine Profilnamen extrahiert.');
   }
 
   if (dismissedCount > 0) {
@@ -1292,13 +1325,13 @@ async function runProfileSuggestionConnectionScan(
   }
 
   return {
-    ok: !rateLimited,
-    statusLevel,
+    ok: !rateLimited && !collectionIncomplete,
+    statusLevel: resolvedStatusLevel,
     statusMessage,
     scanType: 'suggestion-deepsearch',
     targetUsername,
     attempted: true,
-    available: Boolean(targetSuggestions.available),
+    available: visibleSuggestionSurface,
     seeAllClicked: targetSeeAllClicked,
     observedCount: observedSuggestions.length,
     collectionRounds: targetSuggestions.rounds || 0,
@@ -1319,6 +1352,7 @@ async function runProfileSuggestionConnectionScan(
     candidateErrorCount,
     rateLimited,
     rateLimitText,
+    collectionIncomplete,
     gracefullyStopped,
     suggestions: candidates,
     candidatesToCheck,
