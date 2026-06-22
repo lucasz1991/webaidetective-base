@@ -1040,7 +1040,7 @@ function deriveScrapeOutcome({ title, finalUrl, profile, warnings, cookieDiagnos
 
   const redirectedToLogin = (finalUrl || '').includes('/accounts/login');
   const autoLoginFailed = Boolean(loginDiagnostics?.attempted && !loginDiagnostics?.success);
-  const hasUsefulMetadata = Boolean(profile?.ogTitle || profile?.description || profile?.ogImage);
+  const hasUsefulMetadata = Boolean(profile?.ogTitle || profile?.description || profile?.ogImage || profile?.profileImageUrl);
   const hasRenderedProfileContent =
     Boolean(profile?.usernameSeen) &&
     (profile?.imageCount ?? 0) > 0 &&
@@ -1232,6 +1232,99 @@ async function collectProfileInfo(page, username) {
     .$eval('meta[property="og:image"]', (element) => element.content)
     .catch(() => null);
 
+  const domProfileImageUrl = await page.evaluate((targetUsername) => {
+    const username = String(targetUsername || '').trim().replace(/^@/, '').toLowerCase();
+    const candidates = [];
+    const normalizeUrl = (value) => {
+      const url = String(value || '').trim();
+
+      if (!/^https?:\/\//i.test(url)) {
+        return null;
+      }
+
+      const lowerUrl = url.toLowerCase();
+
+      if (
+        lowerUrl.includes('/static/images/ico/')
+        || lowerUrl.includes('/static/images/web/')
+        || lowerUrl.includes('instagram_logo')
+        || lowerUrl.includes('glyph-logo')
+        || lowerUrl.includes('default_profile')
+        || lowerUrl.includes('anonymoususer')
+        || lowerUrl.includes('profile_anonymous_user')
+      ) {
+        return null;
+      }
+
+      return url.replace(/&amp;/g, '&');
+    };
+    const addCandidate = (url, score) => {
+      const normalizedUrl = normalizeUrl(url);
+
+      if (!normalizedUrl) {
+        return;
+      }
+
+      candidates.push({ url: normalizedUrl, score });
+    };
+    const bestSrcsetUrl = (srcset) => String(srcset || '')
+      .split(',')
+      .map((entry) => {
+        const [url, descriptor] = entry.trim().split(/\s+/, 2);
+        const width = Number.parseInt(String(descriptor || '').replace(/[^\d]/g, ''), 10);
+
+        return { url, width: Number.isFinite(width) ? width : 0 };
+      })
+      .filter((entry) => entry.url)
+      .sort((left, right) => right.width - left.width)
+      .shift()?.url || null;
+
+    document.querySelectorAll('meta[property="og:image"], meta[name="twitter:image"], meta[property="twitter:image"], meta[itemprop="image"]').forEach((element) => {
+      addCandidate(element.getAttribute('content'), 70);
+    });
+    document.querySelectorAll('link[rel~="image_src"]').forEach((element) => {
+      addCandidate(element.getAttribute('href'), 65);
+    });
+
+    Array.from(document.images || []).forEach((image, index) => {
+      const alt = String(image.getAttribute('alt') || '').toLowerCase();
+      const url = image.currentSrc
+        || image.src
+        || image.getAttribute('src')
+        || bestSrcsetUrl(image.getAttribute('srcset'));
+      let score = 0;
+
+      if (/(profile picture|profilbild|avatar)/i.test(alt)) {
+        score += 120;
+      }
+
+      if (username && alt.includes(username)) {
+        score += 60;
+      }
+
+      if (image.closest('header')) {
+        score += 40;
+      } else if (image.closest('main, article')) {
+        score += 20;
+      }
+
+      if ((image.naturalWidth || 0) >= 50 && (image.naturalHeight || 0) >= 50) {
+        score += 20;
+      }
+
+      if (/(scontent|cdninstagram|fbcdn)/i.test(String(url || ''))) {
+        score += 15;
+      }
+
+      score -= Math.min(index, 20);
+      addCandidate(url, score);
+    });
+
+    candidates.sort((left, right) => right.score - left.score);
+
+    return candidates[0]?.url || null;
+  }, username).catch(() => null);
+
   const ogTitle = await page
     .$eval('meta[property="og:title"]', (element) => element.content)
     .catch(() => null);
@@ -1259,7 +1352,7 @@ async function collectProfileInfo(page, username) {
     imageCount,
     isPrivate,
     ogImage,
-    profileImageUrl: ogImage,
+    profileImageUrl: domProfileImageUrl || ogImage,
     ogTitle,
     requiresLogin,
     usernameSeen,
@@ -10998,8 +11091,9 @@ async function renderProfileSnapshot(browser, screenshotPath, username, profileU
         'Instagram hat fuer dieses Profil aktuell nur eingeschraenkte Daten geliefert.',
     );
 
-    const avatarMarkup = profile.ogImage
-      ? `<img src="${escapeHtml(profile.ogImage)}" alt="Profilbild von ${escapeHtml(username)}">`
+    const profileImageUrl = profile.profileImageUrl || profile.ogImage;
+    const avatarMarkup = profileImageUrl
+      ? `<img src="${escapeHtml(profileImageUrl)}" alt="Profilbild von ${escapeHtml(username)}">`
       : '<div class="avatar-fallback">@</div>';
 
     await snapshotPage.setContent(
@@ -11435,6 +11529,7 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
     imageCount: 0,
     isPrivate: false,
     ogImage: null,
+    profileImageUrl: null,
     ogTitle: null,
     requiresLogin: false,
     usernameSeen: false,

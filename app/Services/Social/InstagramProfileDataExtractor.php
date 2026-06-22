@@ -13,7 +13,16 @@ class InstagramProfileDataExtractor
         $description = (string) data_get($payload, 'profile.description', '');
         $ogTitle = (string) data_get($payload, 'profile.ogTitle', '');
         $bodyTextPreview = (string) data_get($payload, 'profile.bodyTextPreview', '');
-        $profileImageUrl = data_get($payload, 'profile.ogImage');
+        $profileImageUrl = $this->firstFilledPayloadValue($payload, [
+            'profile.profileImageUrl',
+            'profile.profile_image_url',
+            'profile.imageUrl',
+            'profile.avatarUrl',
+            'profile.ogImage',
+            'profileImageUrl',
+            'profile_image_url',
+            'ogImage',
+        ]);
         $operationMode = Str::lower((string) ($payload['operationMode'] ?? ''));
         $counts = $this->extractCounts([
             'body_text_preview' => $bodyTextPreview,
@@ -164,6 +173,19 @@ class InstagramProfileDataExtractor
         }
 
         return (string) ($payload['htmlPreview'] ?? '');
+    }
+
+    private function firstFilledPayloadValue(array $payload, array $keys): ?string
+    {
+        foreach ($keys as $key) {
+            $value = data_get($payload, $key);
+
+            if (is_scalar($value) && trim((string) $value) !== '') {
+                return trim((string) $value);
+            }
+        }
+
+        return null;
     }
 
     private function extractCounts(array $texts, bool $allowFallbackCounts = false): array

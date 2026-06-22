@@ -6,6 +6,12 @@ function buildMiniProfile(profile = {}) {
   const counts = profile && typeof profile.counts === 'object' && profile.counts !== null
     ? profile.counts
     : {};
+  const profileImageUrl = profile.profileImageUrl
+    || profile.profile_image_url
+    || profile.imageUrl
+    || profile.avatarUrl
+    || profile.ogImage
+    || null;
 
   return {
     bodyTextPreview: typeof profile.bodyTextPreview === 'string' ? profile.bodyTextPreview : '',
@@ -24,7 +30,7 @@ function buildMiniProfile(profile = {}) {
     description: profile.description ?? null,
     biography: profile.description ?? null,
     ogImage: profile.ogImage ?? null,
-    profileImageUrl: profile.ogImage ?? null,
+    profileImageUrl,
     ogTitle: profile.ogTitle ?? null,
     fullName: profile.ogTitle ?? null,
     isPrivate: typeof profile.isPrivate === 'boolean' ? profile.isPrivate : null,
