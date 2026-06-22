@@ -20,6 +20,8 @@ class UserNavigationMenu extends Component
 
     public bool $showMessagePreviewModal = false;
 
+    public ?int $selectedMessagePreviewId = null;
+
     public array $subscriptionSummary = [];
 
     protected $listeners = [
@@ -94,6 +96,7 @@ class UserNavigationMenu extends Component
     {
         if (! auth()->check()) {
             $this->selectedMessagePreview = null;
+            $this->selectedMessagePreviewId = null;
             $this->showMessagePreviewModal = false;
 
             return;
@@ -105,36 +108,51 @@ class UserNavigationMenu extends Component
 
         if (! $message) {
             $this->selectedMessagePreview = null;
+            $this->selectedMessagePreviewId = null;
             $this->showMessagePreviewModal = false;
             $this->refreshNavigationData();
 
             return;
         }
 
+        $wasUnread = (int) $message->status === 1;
+
         $message->update([
             'status' => 2,
         ]);
 
+        $this->receivedMessages
+            ?->firstWhere('id', $message->id)
+            ?->setAttribute('status', 2);
+
+        if ($wasUnread) {
+            $this->unreadMessagesCount = max(0, ((int) $this->unreadMessagesCount) - 1);
+            $this->previousUnreadMessagesCount = $this->unreadMessagesCount;
+        }
+
+        $this->selectedMessagePreviewId = $message->id;
         $this->selectedMessagePreview = [
             'created_at' => $message->created_at?->diffForHumans() ?? '',
             'subject' => $message->subject ?? '',
             'body' => $message->message ?? '',
         ];
         $this->showMessagePreviewModal = true;
-
-        $this->refreshNavigationData();
     }
 
     public function closeMessagePreview(): void
     {
         $this->selectedMessagePreview = null;
+        $this->selectedMessagePreviewId = null;
         $this->showMessagePreviewModal = false;
+
+        $this->refreshNavigationData();
     }
 
     public function updatedShowMessagePreviewModal($value): void
     {
         if (! $value) {
             $this->selectedMessagePreview = null;
+            $this->selectedMessagePreviewId = null;
         }
     }
 

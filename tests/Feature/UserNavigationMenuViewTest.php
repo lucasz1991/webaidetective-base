@@ -27,7 +27,8 @@ class UserNavigationMenuViewTest extends TestCase
         $this->assertStringNotContainsString('<x-dropdown ', $view);
         $this->assertStringNotContainsString('x-data="{ open: false, closeTimer:', $view);
         $this->assertStringNotContainsString('class="absolute right-0 mt-2 w-80', $view);
-        $this->assertStringContainsString('x-show="modalOpen"', $view);
+        $this->assertStringContainsString('<x-modal wire:model="showMessagePreviewModal"', $view);
+        $this->assertStringContainsString('wire:key="user-nav-message-preview-modal-', $view);
         $this->assertStringContainsString('x-show="isMobileMenuOpen || !isMobile"', $view);
         $this->assertStringContainsString('overlay-classes="fixed inset-0 z-40 bg-black/40 md:hidden"', $view);
         $this->assertStringContainsString('@dropdown-open.window=', $component);
