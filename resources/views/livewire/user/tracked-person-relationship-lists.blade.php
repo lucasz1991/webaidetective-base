@@ -281,7 +281,7 @@
                     </div>
 
                     @if($listData['addedItems']->isNotEmpty() || $listData['scanRemovedItems']->isNotEmpty())
-                        <div class="mb-4 grid gap-3 md:grid-cols-2">
+                        <div class="mb-4 grid gap-3 ">
                             @if($listData['addedItems']->isNotEmpty())
                                 <details x-bind:open="search !== '' || showAdded" class="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
                                     <summary class="cursor-pointer font-semibold">
