@@ -34,6 +34,7 @@ return [
             'partition_threshold' => 250,
             'search_queries_per_dialog' => 8,
             'search_partition_max_items' => 250,
+            'search_max_depth' => 3,
             'progress_checkpoint_size' => 250,
             'search_target_max_items' => 0,
             'search_target_max_scroll_rounds' => 60,

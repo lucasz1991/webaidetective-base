@@ -147,6 +147,16 @@ function normalizeRuntimeConfigShape(config = {}, defaults = {}, helpers = {}, o
         merged.relationshipSearchPartitionMaxItems || 250,
       ) || 250,
     ),
+    relationshipSearchMaxDepth: Math.min(
+      4,
+      Math.max(
+        1,
+        normalizeOptionalPositiveInteger(
+          input?.relationshipSearchMaxDepth || input?.relationship_search_max_depth,
+          merged.relationshipSearchMaxDepth || 3,
+        ) || 3,
+      ),
+    ),
     relationshipProgressCheckpointSize: Math.max(
       25,
       normalizeOptionalPositiveInteger(

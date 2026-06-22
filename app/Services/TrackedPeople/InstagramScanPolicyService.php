@@ -89,6 +89,7 @@ class InstagramScanPolicyService
                 'relationshipPartitionThreshold' => max(1, (int) ($policy['partition_threshold'] ?? 250)),
                 'relationshipSearchQueriesPerDialog' => max(1, min(100, (int) ($policy['search_queries_per_dialog'] ?? 8))),
                 'relationshipSearchPartitionMaxItems' => max(25, (int) ($policy['search_partition_max_items'] ?? 250)),
+                'relationshipSearchMaxDepth' => max(1, min(4, (int) ($policy['search_max_depth'] ?? 3))),
                 'relationshipProgressCheckpointSize' => max(25, (int) ($policy['progress_checkpoint_size'] ?? 250)),
                 'relationshipSearchTargetMaxItems' => max(0, (int) ($policy['search_target_max_items'] ?? 0)),
                 'relationshipSearchTargetMaxScrollRounds' => max(1, (int) ($policy['search_target_max_scroll_rounds'] ?? 60)),
