@@ -97,6 +97,8 @@ class TrackedPersonInstagramAnalysisService
         string $relationship,
         ?callable $progress = null,
     ): TrackedPersonInstagramSnapshot {
+        DatabaseKeepAlive::ensureConnected();
+
         $relationship = Str::lower(trim($relationship));
 
         if (! in_array($relationship, ['followers', 'following'], true)) {
@@ -210,7 +212,7 @@ class TrackedPersonInstagramAnalysisService
         ]);
         $this->assertActiveScanCurrent();
 
-        DatabaseKeepAlive::ping(0);
+        DatabaseKeepAlive::ensureConnected();
 
         $snapshot = DatabaseKeepAlive::transaction(function () use (
             $trackedPerson,
@@ -486,7 +488,7 @@ class TrackedPersonInstagramAnalysisService
         ]);
         $this->assertActiveScanCurrent();
 
-        DatabaseKeepAlive::ping(0);
+        DatabaseKeepAlive::ensureConnected();
 
         $snapshot = DatabaseKeepAlive::transaction(function () use (
             $trackedPerson,
@@ -622,22 +624,42 @@ class TrackedPersonInstagramAnalysisService
             'Instagram-'.$label.' @'.$trackedPerson->instagram_username,
         );
 
-        $this->scanEvents->finished(
-            'tracked_person_instagram_snapshot',
-            $snapshot,
-            $trackedPerson->instagram_username,
-            $trackedPerson->id,
-            (int) $trackedPerson->user_id,
-            $snapshot->status_message ?: $label.'-Scan abgeschlossen.',
-            [
-                'statusLevel' => $snapshot->status_level,
-                'phase' => 'done',
-            ],
+        try {
+            DatabaseKeepAlive::run(fn () => $this->scanEvents->finished(
+                'tracked_person_instagram_snapshot',
+                $snapshot,
+                $trackedPerson->instagram_username,
+                $trackedPerson->id,
+                (int) $trackedPerson->user_id,
+                $snapshot->status_message ?: $label.'-Scan abgeschlossen.',
+                [
+                    'statusLevel' => $snapshot->status_level,
+                    'phase' => 'done',
+                ],
+            ));
+        } catch (\Throwable $exception) {
+            Log::warning('Instagram-Listen-Scan wurde gespeichert, aber das Abschlussereignis konnte nicht geschrieben werden.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'snapshot_id' => $snapshot->id,
+                'relationship' => $relationship,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        try {
+            DatabaseKeepAlive::run(fn () => $this->discardActiveProgressSnapshot($snapshot->id));
+        } catch (\Throwable $exception) {
+            Log::warning('Temporärer Instagram-Listen-Fortschritt konnte nicht bereinigt werden.', [
+                'tracked_person_id' => $trackedPerson->id,
+                'snapshot_id' => $snapshot->id,
+                'relationship' => $relationship,
+                'error' => $exception->getMessage(),
+            ]);
+        }
+
+        return DatabaseKeepAlive::run(
+            fn (): TrackedPersonInstagramSnapshot => $snapshot->fresh('media') ?: $snapshot,
         );
-
-        $this->discardActiveProgressSnapshot($snapshot->id);
-
-        return $snapshot->fresh('media');
     }
 
     private function createTrackedPersonProgressCallback(
@@ -667,7 +689,16 @@ class TrackedPersonInstagramAnalysisService
             }
 
             if ($progress) {
-                $progress($state);
+                try {
+                    DatabaseKeepAlive::run(fn () => $progress($state));
+                } catch (\Throwable $exception) {
+                    Log::warning('Externer Instagram-Scan-Fortschritt konnte nicht gespeichert werden.', [
+                        'tracked_person_id' => $trackedPerson->id,
+                        'phase' => $state['phase'] ?? null,
+                        'stage' => $state['stage'] ?? null,
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
             }
         };
     }
@@ -903,7 +934,7 @@ class TrackedPersonInstagramAnalysisService
 
     private function refreshDatabaseConnection(): void
     {
-        DatabaseKeepAlive::reconnect();
+        DatabaseKeepAlive::ensureConnected();
     }
 
     private function normalizeProgressRelationshipItems(mixed $items): array

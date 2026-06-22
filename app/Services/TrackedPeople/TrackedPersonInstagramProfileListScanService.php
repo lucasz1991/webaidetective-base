@@ -35,6 +35,8 @@ class TrackedPersonInstagramProfileListScanService
         array $relationships = ['followers', 'following'],
         ?int $userId = null,
     ): Collection {
+        DatabaseKeepAlive::ensureConnected();
+
         $username = $this->scraper->normalizeInstagramUsername($profile->username);
 
         if ($username === null) {
@@ -127,16 +129,18 @@ class TrackedPersonInstagramProfileListScanService
         ]);
 
         $scans = collect();
-        $profile = $this->profileRelationshipStore->ensureProfile($username, [
-            'display_name' => $profile->display_name,
-            'full_name' => $profile->full_name,
-            'profile_image_url' => $profile->profile_image_url,
-            'profile_image_path' => $profile->profile_image_path,
-            'profile_visibility' => $profile->profile_visibility,
-            'followers_count' => $profile->followers_count,
-            'following_count' => $profile->following_count,
-            'posts_count' => $profile->posts_count,
-        ]) ?: $profile;
+        $profile = DatabaseKeepAlive::run(
+            fn (): ?InstagramProfile => $this->profileRelationshipStore->ensureProfile($username, [
+                'display_name' => $profile->display_name,
+                'full_name' => $profile->full_name,
+                'profile_image_url' => $profile->profile_image_url,
+                'profile_image_path' => $profile->profile_image_path,
+                'profile_visibility' => $profile->profile_visibility,
+                'followers_count' => $profile->followers_count,
+                'following_count' => $profile->following_count,
+                'posts_count' => $profile->posts_count,
+            ]),
+        ) ?: $profile;
         $observedFollowers = 0;
         $observedFollowing = 0;
 
@@ -152,15 +156,19 @@ class TrackedPersonInstagramProfileListScanService
             $label = $relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste';
             $expectedOverride = $relationship === 'followers' ? 'expectedFollowerCount' : 'expectedFollowingCount';
             $expectedCount = $relationship === 'followers' ? $profile->followers_count : $profile->following_count;
-            $previousActiveItems = $this->activeRelationshipItems($profile, $relationship);
-            $progressScan = $this->profileRelationshipStore->startDirectRelationshipListScan(
-                $profile,
-                $contextPerson,
-                $relationship,
-                'network_map_profile_list',
-                $userId,
-                $expectedCount !== null ? max(0, (int) $expectedCount) : null,
-                $label.' von @'.$username.' wird gestartet; Fortschritt wird gespeichert.',
+            $previousActiveItems = DatabaseKeepAlive::run(
+                fn (): array => $this->activeRelationshipItems($profile, $relationship),
+            );
+            $progressScan = DatabaseKeepAlive::run(
+                fn (): ?InstagramProfileListScan => $this->profileRelationshipStore->startDirectRelationshipListScan(
+                    $profile,
+                    $contextPerson,
+                    $relationship,
+                    'network_map_profile_list',
+                    $userId,
+                    $expectedCount !== null ? max(0, (int) $expectedCount) : null,
+                    $label.' von @'.$username.' wird gestartet; Fortschritt wird gespeichert.',
+                ),
             );
             $scanProgress = $this->createScanEventProgressCallback(
                 $progress,
@@ -189,7 +197,9 @@ class TrackedPersonInstagramProfileListScanService
             // Resume-Entscheidung: Fuer grosse Listen (>= 250) und unvollstaendigen letzten Lauf direkt die alphabetische Suche nutzen
             $shouldResumeViaSearch = false;
             if ((int) $expectedCount >= 250) {
-                $lastListScan = $this->lastListScanFor($profile, $relationship);
+                $lastListScan = DatabaseKeepAlive::run(
+                    fn (): ?InstagramProfileListScan => $this->lastListScanFor($profile, $relationship),
+                );
                 if ($lastListScan) {
                     $shouldResumeViaSearch = $this->lastScanSuggestsResume($lastListScan, (int) $expectedCount);
                 }
@@ -277,17 +287,24 @@ class TrackedPersonInstagramProfileListScanService
                 unset($profileAttributes['is_private'], $profileAttributes['profile_visibility']);
             }
 
-            $profile = $this->profileRelationshipStore->ensureProfile($username, $profileAttributes) ?: $profile;
+            $profile = DatabaseKeepAlive::run(
+                fn (): ?InstagramProfile => $this->profileRelationshipStore->ensureProfile(
+                    $username,
+                    $profileAttributes,
+                ),
+            ) ?: $profile;
 
-            $scan = $this->profileRelationshipStore->storeDirectRelationshipListScan(
-                $profile,
-                $contextPerson,
-                $relationship,
-                $relationshipList,
-                $payload,
-                'network_map_profile_list',
-                $userId,
-                $progressScan,
+            $scan = DatabaseKeepAlive::run(
+                fn (): ?InstagramProfileListScan => $this->profileRelationshipStore->storeDirectRelationshipListScan(
+                    $profile,
+                    $contextPerson,
+                    $relationship,
+                    $relationshipList,
+                    $payload,
+                    'network_map_profile_list',
+                    $userId,
+                    $progressScan,
+                ),
             );
 
             if ($scan instanceof InstagramProfileListScan) {
@@ -370,7 +387,11 @@ class TrackedPersonInstagramProfileListScanService
             }
 
             if ($progress) {
-                $progress($state);
+                try {
+                    DatabaseKeepAlive::run(fn () => $progress($state));
+                } catch (\Throwable) {
+                    // Externer Live-Fortschritt darf den Listen-Scan nicht abbrechen.
+                }
             }
         };
     }
@@ -387,34 +408,43 @@ class TrackedPersonInstagramProfileListScanService
             return;
         }
 
-        $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
-        $message = ($relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' fehlgeschlagen: '.$exception->getMessage();
-
-        $scan->forceFill([
-            'status_level' => 'error',
-            'status_message' => $message,
-            'raw_payload' => [
-                ...$payload,
-                'ok' => false,
-                'progressStatus' => 'failed',
-                'error' => $exception->getMessage(),
-                'failedAt' => now('UTC')->toIso8601String(),
-            ],
-            'scanned_at' => now('UTC'),
-        ])->save();
-
-        $this->scanEvents->failed(
-            'instagram_profile_list_scan',
+        DatabaseKeepAlive::run(function () use (
             $scan,
             $username,
             $trackedPersonId,
             $userId,
-            $message,
-            [
-                'phase' => $relationship,
-                'statusLevel' => 'error',
-            ],
-        );
+            $relationship,
+            $exception,
+        ): void {
+            $payload = is_array($scan->raw_payload) ? $scan->raw_payload : [];
+            $message = ($relationship === 'followers' ? 'Followerliste' : 'Gefolgt-Liste').' fehlgeschlagen: '.$exception->getMessage();
+
+            $scan->forceFill([
+                'status_level' => 'error',
+                'status_message' => $message,
+                'raw_payload' => [
+                    ...$payload,
+                    'ok' => false,
+                    'progressStatus' => 'failed',
+                    'error' => $exception->getMessage(),
+                    'failedAt' => now('UTC')->toIso8601String(),
+                ],
+                'scanned_at' => now('UTC'),
+            ])->save();
+
+            $this->scanEvents->failed(
+                'instagram_profile_list_scan',
+                $scan,
+                $username,
+                $trackedPersonId,
+                $userId,
+                $message,
+                [
+                    'phase' => $relationship,
+                    'statusLevel' => 'error',
+                ],
+            );
+        });
     }
 
     private function lastListScanFor(InstagramProfile $profile, string $relationship): ?InstagramProfileListScan
@@ -513,7 +543,7 @@ class TrackedPersonInstagramProfileListScanService
 
     private function refreshDatabaseConnection(): void
     {
-        DatabaseKeepAlive::reconnect();
+        DatabaseKeepAlive::ensureConnected();
     }
 
     private function lastScanSuggestsResume(InstagramProfileListScan $lastScan, int $expectedCount): bool
@@ -583,7 +613,11 @@ class TrackedPersonInstagramProfileListScanService
             }
 
             if ($progress) {
-                $progress($state);
+                try {
+                    DatabaseKeepAlive::run(fn () => $progress($state));
+                } catch (\Throwable) {
+                    // Externer Live-Fortschritt darf den Listen-Scan nicht abbrechen.
+                }
             }
         };
     }
@@ -613,19 +647,21 @@ class TrackedPersonInstagramProfileListScanService
             return;
         }
 
-        $profile = $this->profileRelationshipStore->ensureProfile($profile->username, [
-            'display_name' => $profile->display_name,
-            'full_name' => $profile->full_name,
-            'profile_image_url' => $profile->profile_image_url,
-            'profile_image_path' => $profile->profile_image_path,
-            'profile_visibility' => $profile->profile_visibility,
-            'followers_count' => $profile->followers_count,
-            'following_count' => $profile->following_count,
-            'posts_count' => $profile->posts_count,
-            'last_status_level' => 'partial',
-            'last_status_message' => (string) ($state['message'] ?? 'Profil-Listen-Scan laeuft.'),
-            'last_scanned_at' => now('UTC'),
-        ]) ?: $profile;
+        $profile = DatabaseKeepAlive::run(
+            fn (): ?InstagramProfile => $this->profileRelationshipStore->ensureProfile($profile->username, [
+                'display_name' => $profile->display_name,
+                'full_name' => $profile->full_name,
+                'profile_image_url' => $profile->profile_image_url,
+                'profile_image_path' => $profile->profile_image_path,
+                'profile_visibility' => $profile->profile_visibility,
+                'followers_count' => $profile->followers_count,
+                'following_count' => $profile->following_count,
+                'posts_count' => $profile->posts_count,
+                'last_status_level' => 'partial',
+                'last_status_message' => (string) ($state['message'] ?? 'Profil-Listen-Scan laeuft.'),
+                'last_scanned_at' => now('UTC'),
+            ]),
+        ) ?: $profile;
 
         $evidence = [
             'source' => $deltaItems !== [] ? 'profile_list_live_delta' : 'profile_list_live_preview',
@@ -634,24 +670,35 @@ class TrackedPersonInstagramProfileListScanService
             'expected' => is_numeric($state['expected'] ?? null) ? (int) $state['expected'] : null,
         ];
 
-        $this->profileRelationshipStore->syncObservedRelationshipPreview(
+        DatabaseKeepAlive::run(function () use (
             $profile,
             $contextPerson,
             $phase,
             $items,
-            now('UTC'),
-            $evidence,
-        );
-
-        $this->profileRelationshipStore->syncLiveRelationshipListScan(
-            $profile,
-            $contextPerson,
-            $phase,
-            $items,
-            now('UTC'),
             $evidence,
             $userId,
-        );
+        ): void {
+            $observedAt = now('UTC');
+
+            $this->profileRelationshipStore->syncObservedRelationshipPreview(
+                $profile,
+                $contextPerson,
+                $phase,
+                $items,
+                $observedAt,
+                $evidence,
+            );
+
+            $this->profileRelationshipStore->syncLiveRelationshipListScan(
+                $profile,
+                $contextPerson,
+                $phase,
+                $items,
+                $observedAt,
+                $evidence,
+                $userId,
+            );
+        });
     }
 
     private function payloadCanUpdateProfileVisibility(array $payload, array $relationshipList): bool

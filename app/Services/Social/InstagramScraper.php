@@ -11,6 +11,7 @@ use App\Services\TrackedPeople\TrackedPersonInstagramScanCoordinator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process as SymfonyProcess;
@@ -549,6 +550,8 @@ class InstagramScraper
         string $label,
         callable $onOutput,
     ): array {
+        DatabaseKeepAlive::ensureConnected();
+
         $process = new SymfonyProcess($command, base_path());
         $process->setTimeout(null);
         $process->setIdleTimeout(null);
@@ -561,16 +564,24 @@ class InstagramScraper
         $pid = (int) ($process->getPid() ?? 0);
 
         if ($coordinator && $pid > 0) {
-            $coordinator->registerProcess(
-                $trackedPersonId,
-                $generation,
-                $pid,
-                trim(($scanControl['label'] ?? 'Instagram-Scan').' '.$label),
-                [
-                    'script' => $command[1] ?? null,
-                    'command' => $command,
-                ],
-            );
+            try {
+                DatabaseKeepAlive::run(fn () => $coordinator->registerProcess(
+                    $trackedPersonId,
+                    $generation,
+                    $pid,
+                    trim(($scanControl['label'] ?? 'Instagram-Scan').' '.$label),
+                    [
+                        'script' => $command[1] ?? null,
+                        'command' => $command,
+                    ],
+                ));
+            } catch (\Throwable $exception) {
+                Log::warning('Instagram-Node-Prozess konnte nicht persistent registriert werden.', [
+                    'pid' => $pid,
+                    'label' => $label,
+                    'error' => $exception->getMessage(),
+                ]);
+            }
         }
 
         $stdout = '';
@@ -583,6 +594,11 @@ class InstagramScraper
 
         try {
             while ($process->isRunning()) {
+                // Unabhaengig von parsebaren Progress-Zeilen die langlebige
+                // Worker-Verbindung aktiv halten. Ein temporaerer DB-Ausfall
+                // darf den weiterlaufenden Node-Scraper nicht beenden.
+                DatabaseKeepAlive::ping(10);
+
                 $stdoutChunk = $process->getIncrementalOutput();
                 $stderrChunk = $process->getIncrementalErrorOutput();
 
@@ -644,6 +660,8 @@ class InstagramScraper
                 $coordinator->assertCurrent($trackedPersonId, $generation);
             }
 
+            DatabaseKeepAlive::ensureConnected();
+
             return [
                 'successful' => $process->isSuccessful(),
                 'output' => $stdout !== '' ? $stdout : $process->getOutput(),
@@ -651,7 +669,17 @@ class InstagramScraper
             ];
         } finally {
             if ($coordinator && $pid > 0) {
-                $coordinator->unregisterProcess($trackedPersonId, $generation, $pid);
+                try {
+                    DatabaseKeepAlive::run(
+                        fn () => $coordinator->unregisterProcess($trackedPersonId, $generation, $pid),
+                    );
+                } catch (\Throwable $exception) {
+                    Log::warning('Instagram-Node-Prozess konnte nicht persistent abgemeldet werden.', [
+                        'pid' => $pid,
+                        'label' => $label,
+                        'error' => $exception->getMessage(),
+                    ]);
+                }
             }
         }
     }
