@@ -6515,7 +6515,10 @@ async function runProfileSuggestionConnectionScan(page, runtimeState, notes, tar
     markGracefulStopIfRequested,
     navigateWithSoftTimeout,
     normalizeInstagramUsername,
-    normalizeSuggestionCandidateHistory,
+    normalizeSuggestionCandidateHistory: (value = {}) => normalizeSuggestionCandidateHistory(
+      value,
+      { normalizeInstagramUsername },
+    ),
     progressLog,
     scrollToProfileSuggestions,
     switchScraperAccountAfterRateLimit,
