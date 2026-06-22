@@ -10677,6 +10677,123 @@ async function captureDebugPageScreenshot(page, screenshotPath, notes) {
   }
 }
 
+function resolveSuggestionScanAbortDetails(result = null, error = null) {
+  const resultObject = result && typeof result === 'object' ? result : {};
+
+  if (error) {
+    const errorMessage = normalizeText(error?.message || String(error)) || 'Unbekannter technischer Fehler.';
+    const errorCode = normalizeText(String(error?.code || '')).toLowerCase();
+
+    return {
+      aborted: true,
+      code: errorCode || 'suggestion-scan-error',
+      reason: errorMessage,
+    };
+  }
+
+  if (resultObject.gracefullyStopped) {
+    return {
+      aborted: true,
+      code: 'ui-stop-requested',
+      reason: normalizeText(resultObject.statusMessage)
+        || 'Der Vorschlaege-Scan wurde durch den Benutzer beendet.',
+    };
+  }
+
+  if (resultObject.rateLimited) {
+    const rateLimitText = normalizeText(resultObject.rateLimitText);
+
+    return {
+      aborted: true,
+      code: 'instagram-rate-limit',
+      reason: rateLimitText
+        ? `Instagram-Rate-Limit: ${rateLimitText}`
+        : (normalizeText(resultObject.statusMessage) || 'Instagram hat den Vorschlaege-Scan per Rate-Limit blockiert.'),
+    };
+  }
+
+  if (resultObject.collectionIncomplete) {
+    return {
+      aborted: false,
+      code: 'suggestion-collection-incomplete',
+      reason: normalizeText(resultObject.statusMessage)
+        || 'Instagram zeigte Vorschlaege, aber es konnten keine Profilnamen extrahiert werden.',
+    };
+  }
+
+  const statusLevel = normalizeText(String(resultObject.statusLevel || '')).toLowerCase();
+  const candidateErrorCount = Math.max(0, Number(resultObject.candidateErrorCount || 0));
+
+  if (statusLevel === 'error' || resultObject.ok === false) {
+    return {
+      aborted: true,
+      code: 'suggestion-scan-failed',
+      reason: normalizeText(resultObject.statusMessage) || 'Der Vorschlaege-Scan ist fehlgeschlagen.',
+    };
+  }
+
+  if (statusLevel === 'partial' || candidateErrorCount > 0) {
+    return {
+      aborted: false,
+      code: candidateErrorCount > 0 ? 'suggestion-candidate-errors' : 'suggestion-scan-partial',
+      reason: normalizeText(resultObject.statusMessage)
+        || `Der Vorschlaege-Scan wurde nur teilweise abgeschlossen (${candidateErrorCount} Kandidatenfehler).`,
+    };
+  }
+
+  return null;
+}
+
+async function captureSuggestionScanAbortEvidence(page, baseScreenshotPath, notes, details = {}) {
+  const code = normalizeText(String(details.code || 'suggestion-scan-stopped'))
+    .replace(/[^a-z0-9._-]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 70) || 'suggestion-scan-stopped';
+  const screenshotPath = baseScreenshotPath
+    ? buildRelatedScreenshotPath(
+      baseScreenshotPath,
+      `suggestions-final-${code}`,
+      pathHelperOptions,
+    )
+    : null;
+  const capturedPath = await captureDebugPageScreenshot(page, screenshotPath, notes);
+  const pageUrl = page && typeof page.url === 'function'
+    ? normalizeText(page.url())
+    : '';
+  const pageTitle = page && typeof page.title === 'function'
+    ? await page.title().catch(() => null)
+    : null;
+  const reason = normalizeText(details.reason) || 'Unbekannter Abbruchgrund.';
+
+  if (Array.isArray(notes)) {
+    notes.push(
+      capturedPath
+        ? `Vorschlaege-Abschlussdiagnose: ${reason} Screenshot: ${capturedPath}`
+        : `Vorschlaege-Abschlussdiagnose: ${reason} Ein Screenshot war nicht mehr moeglich.`,
+    );
+  }
+
+  recordRunDebug('suggestions-abort-evidence', {
+    aborted: Boolean(details.aborted),
+    abortCode: code,
+    abortReason: reason,
+    abortScreenshotPath: capturedPath,
+    abortScreenshotCaptured: Boolean(capturedPath),
+    finalUrl: pageUrl || null,
+    title: pageTitle,
+  });
+
+  return {
+    aborted: Boolean(details.aborted),
+    abortCode: code,
+    abortReason: reason,
+    abortScreenshotPath: capturedPath,
+    abortScreenshotCaptured: Boolean(capturedPath),
+    abortFinalUrl: pageUrl || null,
+    abortPageTitle: pageTitle,
+  };
+}
+
 async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = false) {
   const livePreviewPath = normalizeText(String(runtimeConfig.livePreviewPath || ''));
 
@@ -11244,14 +11361,96 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
         notes.push('Instagram-Scan wurde ueber die Oberflaeche nach den Grunddaten beendet.');
       }
 
-      if (isSuggestionsMode && !gracefullyStopped) {
-        suggestionScanResult = await runProfileSuggestionConnectionScan(
+      if (isSuggestionsMode && gracefullyStopped) {
+        const abortEvidence = await captureSuggestionScanAbortEvidence(
           page,
-          runtimeState,
+          artifacts.screenshotPath,
           notes,
-          username,
-          profileUrl,
+          {
+            aborted: true,
+            code: 'ui-stop-requested',
+            reason: 'Der Vorschlaege-Scan wurde vor der Vorschlagssuche durch den Benutzer beendet.',
+          },
         );
+
+        suggestionScanResult = {
+          ok: false,
+          statusLevel: 'partial',
+          statusMessage: abortEvidence.abortReason,
+          scanType: operationMode === 'suggestion-connections'
+            ? 'suggestion-deepsearch'
+            : 'suggestions',
+          targetUsername: username,
+          attempted: false,
+          available: false,
+          observedCount: 0,
+          checkedCount: 0,
+          matchCount: 0,
+          gracefullyStopped: true,
+          ...abortEvidence,
+          suggestions: [],
+          candidatesToCheck: [],
+          skippedCandidates: [],
+          dismissedCandidates: [],
+          checkedCandidates: [],
+          matches: [],
+        };
+        initialProfile.suggestionScan = suggestionScanResult;
+      }
+
+      if (isSuggestionsMode && !gracefullyStopped) {
+        try {
+          suggestionScanResult = await runProfileSuggestionConnectionScan(
+            page,
+            runtimeState,
+            notes,
+            username,
+            profileUrl,
+          );
+
+          const abortDetails = resolveSuggestionScanAbortDetails(suggestionScanResult);
+
+          if (abortDetails) {
+            const abortEvidence = await captureSuggestionScanAbortEvidence(
+              page,
+              artifacts.screenshotPath,
+              notes,
+              abortDetails,
+            );
+
+            suggestionScanResult = {
+              ...suggestionScanResult,
+              ...abortEvidence,
+            };
+
+            progressLog('suggestions-abort-diagnosed', {
+              relationship: 'suggestions',
+              loaded: Number(suggestionScanResult.checkedCount || 0),
+              expectedCount: Number(suggestionScanResult.candidatesToCheck?.length || 0),
+              abortCode: abortEvidence.abortCode,
+              abortReason: abortEvidence.abortReason,
+              abortScreenshotPath: abortEvidence.abortScreenshotPath,
+              abortScreenshotCaptured: abortEvidence.abortScreenshotCaptured,
+              message: abortEvidence.abortReason,
+            });
+          }
+        } catch (error) {
+          const abortDetails = resolveSuggestionScanAbortDetails(null, error);
+          const abortEvidence = await captureSuggestionScanAbortEvidence(
+            page,
+            artifacts.screenshotPath,
+            notes,
+            abortDetails,
+          );
+
+          error.suggestionAbortCode = abortEvidence.abortCode;
+          error.suggestionAbortReason = abortEvidence.abortReason;
+          error.suggestionAbortScreenshotPath = abortEvidence.abortScreenshotPath;
+          error.suggestionAbortScreenshotCaptured = abortEvidence.abortScreenshotCaptured;
+          error.suggestionAbortFinalUrl = abortEvidence.abortFinalUrl;
+          throw error;
+        }
+
         initialProfile.suggestionScan = suggestionScanResult;
         initialHtml = await page.content().catch(() => initialHtml);
         title = await page.title().catch(() => title);
@@ -11392,6 +11591,9 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       suggestionConnections: Array.isArray(suggestionScanResult?.matches)
         ? suggestionScanResult.matches
         : [],
+      abortCode: suggestionScanResult?.abortCode || null,
+      abortReason: suggestionScanResult?.abortReason || null,
+      abortScreenshotPath: suggestionScanResult?.abortScreenshotPath || null,
       gracefullyStopped,
       profileUrl,
       screenshotPath: debugScreenshotPath,
@@ -11408,31 +11610,88 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
     console.log(JSON.stringify(responsePayload));
   } catch (error) {
     const aborted = error instanceof ScraperAbortError || error?.name === 'ScraperAbortError';
+    const suggestionAbortReason = isSuggestionsMode
+      ? normalizeText(error?.suggestionAbortReason || error?.message || String(error))
+      : null;
+    const suggestionAbortCode = isSuggestionsMode
+      ? normalizeText(error?.suggestionAbortCode || error?.code || 'suggestion-scan-error')
+      : null;
+    const suggestionAbortScreenshotPath = isSuggestionsMode
+      ? normalizeText(error?.suggestionAbortScreenshotPath || '')
+      : null;
+    const errorStatusMessage = isSuggestionsMode
+      ? `Vorschlaege-Scan abgebrochen: ${suggestionAbortReason || 'Unbekannter Fehler.'}`
+      : (aborted ? error.message : 'Instagram-Scrape fehlgeschlagen.');
 
     if (initialHtml && !runtimeConfig.skipDebugArtifacts) {
       fs.writeFileSync(artifacts.htmlPath, initialHtml, 'utf8');
     }
 
-    debugScreenshotPath = await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
-    progressLog('scraper-error', {
+    debugScreenshotPath = suggestionAbortScreenshotPath
+      || await captureDebugPageScreenshot(page, artifacts.screenshotPath, notes);
+    const errorProgressPayload = {
       relationship: isSuggestionsMode ? 'suggestions' : null,
       loaded: 0,
       expectedCount: 0,
       error: normalizeText(error?.message || String(error)),
-      message: aborted
-        ? error.message
-        : 'Instagram-Scrape fehlgeschlagen.',
+      abortCode: suggestionAbortCode,
+      abortReason: suggestionAbortReason,
+      abortScreenshotPath: suggestionAbortScreenshotPath || debugScreenshotPath,
+      message: errorStatusMessage,
       ...(await captureLivePreviewScreenshot(page, runtimeConfig, true)),
-    });
+    };
+
+    if (aborted) {
+      process.stderr.write(`[SCRAPER PROGRESS] ${JSON.stringify({
+        at: new Date().toISOString(),
+        mode: operationMode,
+        stage: 'scraper-error',
+        ...activeScraperProfilePayload(),
+        ...errorProgressPayload,
+      })}\n`);
+      recordRunDebug('scraper-error', errorProgressPayload);
+    } else {
+      progressLog('scraper-error', errorProgressPayload);
+    }
+
+    const failedSuggestionScan = isSuggestionsMode ? {
+      ok: false,
+      statusLevel: 'error',
+      statusMessage: errorStatusMessage,
+      scanType: operationMode === 'suggestion-connections'
+        ? 'suggestion-deepsearch'
+        : 'suggestions',
+      targetUsername: username,
+      attempted: true,
+      available: false,
+      observedCount: 0,
+      checkedCount: 0,
+      matchCount: 0,
+      gracefullyStopped: aborted,
+      aborted: true,
+      abortCode: suggestionAbortCode,
+      abortReason: suggestionAbortReason,
+      abortScreenshotPath: suggestionAbortScreenshotPath || debugScreenshotPath,
+      abortScreenshotCaptured: Boolean(suggestionAbortScreenshotPath || debugScreenshotPath),
+      abortFinalUrl: error?.suggestionAbortFinalUrl || page?.url?.() || finalUrl,
+      error: normalizeText(error?.message || String(error)),
+      suggestions: [],
+      candidatesToCheck: [],
+      skippedCandidates: [],
+      dismissedCandidates: [],
+      checkedCandidates: [],
+      matches: [],
+    } : null;
 
     const responsePayload = attachScanBilling({
       ok: false,
       statusLevel: 'error',
-      statusMessage: aborted
-        ? error.message
-        : 'Instagram-Scrape fehlgeschlagen.',
+      statusMessage: errorStatusMessage,
       username,
       error: normalizeText(error.message),
+      abortCode: suggestionAbortCode,
+      abortReason: suggestionAbortReason,
+      abortScreenshotPath: suggestionAbortScreenshotPath || debugScreenshotPath,
       candidateUsername: error.candidateUsername || null,
       candidateErrorScreenshots: Array.isArray(error.candidateDebugScreenshots)
         ? error.candidateDebugScreenshots
@@ -11442,6 +11701,8 @@ async function captureLivePreviewScreenshot(page, runtimeConfig = {}, force = fa
       notes: dedupe(notes),
       screenshotPath: debugScreenshotPath,
       screenshotMode: debugScreenshotPath ? 'page' : null,
+      suggestionScan: failedSuggestionScan,
+      suggestionConnections: [],
       warnings: dedupe(consoleMessages),
       durationMs: Date.now() - startedAt,
       operationMode,

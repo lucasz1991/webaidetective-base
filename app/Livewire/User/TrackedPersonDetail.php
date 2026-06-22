@@ -2038,6 +2038,11 @@ class TrackedPersonDetail extends Component
                     ->values();
                 $lastDebug = $debugEvents->last();
                 $lastScroll = $scrollEvents->last();
+                $abortScreenshotPath = data_get(
+                    $scanPayload,
+                    'abortScreenshotPath',
+                    data_get($rawPayload, 'abortScreenshotPath'),
+                );
 
                 return (object) [
                     'scan' => $suggestionScan,
@@ -2057,6 +2062,12 @@ class TrackedPersonDetail extends Component
                         ->values(),
                     'lastDebug' => $lastDebug,
                     'lastScroll' => $lastScroll,
+                    'abortCode' => data_get($scanPayload, 'abortCode', data_get($rawPayload, 'abortCode')),
+                    'abortReason' => data_get($scanPayload, 'abortReason', data_get($rawPayload, 'abortReason')),
+                    'abortScreenshotPath' => $abortScreenshotPath,
+                    'abortScreenshotUrl' => is_string($abortScreenshotPath) && $abortScreenshotPath !== ''
+                        ? $this->screenshotUrl($abortScreenshotPath)
+                        : null,
                     'textSamples' => collect(data_get($lastDebug, 'textSamples', []))->take(20),
                     'anchorSamples' => collect(data_get($lastDebug, 'anchorSamples', []))->take(20),
                     'scopeSamples' => collect(data_get($lastDebug, 'scopeSamples', []))->take(8),

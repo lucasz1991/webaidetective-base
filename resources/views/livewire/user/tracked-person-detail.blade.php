@@ -1017,6 +1017,16 @@
                                         @if($suggestionScanRow->scan->status_message)
                                             <div class="mt-1 text-slate-500">{{ $suggestionScanRow->scan->status_message }}</div>
                                         @endif
+                                        @if($suggestionScanRow->abortReason)
+                                            <div class="mt-1 font-semibold text-rose-700">
+                                                Abbruchgrund: {{ $suggestionScanRow->abortReason }}
+                                            </div>
+                                        @endif
+                                        @if($suggestionScanRow->abortScreenshotUrl)
+                                            <a href="{{ $suggestionScanRow->abortScreenshotUrl }}" target="_blank" class="mt-1 inline-flex text-[11px] font-semibold text-indigo-600 hover:text-indigo-800">
+                                                letzten Abbruch-Screenshot oeffnen
+                                            </a>
+                                        @endif
                                     </div>
                                     <div class="text-right text-slate-500">
                                         <div>{{ $suggestionScanRow->scan->analyzed_at ? $suggestionScanRow->scan->analyzed_at->timezone(config('app.timezone'))->format('d.m.Y H:i') : '-' }}</div>

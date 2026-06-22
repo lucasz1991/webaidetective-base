@@ -2237,7 +2237,7 @@ class TrackedPersonInstagramSuggestionScanService
 
     private function normalizePayloadScreenshotPaths(array $payload): array
     {
-        foreach (['screenshotPath'] as $key) {
+        foreach (['screenshotPath', 'abortScreenshotPath'] as $key) {
             if (! is_scalar($payload[$key] ?? null)) {
                 continue;
             }
@@ -2247,6 +2247,28 @@ class TrackedPersonInstagramSuggestionScanService
             if ($resolved !== null) {
                 $payload[$key] = $resolved;
             }
+        }
+
+        foreach (['suggestionScan', 'profile.suggestionScan'] as $payloadPath) {
+            $scanPayload = data_get($payload, $payloadPath);
+
+            if (! is_array($scanPayload)) {
+                continue;
+            }
+
+            foreach (['abortScreenshotPath'] as $key) {
+                if (! is_scalar($scanPayload[$key] ?? null)) {
+                    continue;
+                }
+
+                $resolved = $this->scraper->resolvePublicStoragePath((string) $scanPayload[$key]);
+
+                if ($resolved !== null) {
+                    $scanPayload[$key] = $resolved;
+                }
+            }
+
+            data_set($payload, $payloadPath, $scanPayload);
         }
 
         return $payload;
